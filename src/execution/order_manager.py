@@ -1,0 +1,275 @@
+"""Order lifecycle management: create, monitor, cancel, retry."""
+
+from __future__ import annotations
+
+import uuid
+from datetime import datetime, timezone
+from decimal import Decimal
+from typing import Literal
+
+import structlog
+
+from src.config import BotSettings
+from src.data.kalshi_client import KalshiAPIError, KalshiRestClient
+from src.data.models import OrderRequest, OrderResponse, TradeSignal
+
+logger = structlog.get_logger()
+
+
+class OrderState:
+    """Internal order tracking state."""
+
+    def __init__(
+        self,
+        order_id: str,
+        client_order_id: str,
+        signal: TradeSignal,
+        requested_count: int,
+    ):
+        self.order_id = order_id
+        self.client_order_id = client_order_id
+        self.signal = signal
+        self.requested_count = requested_count
+        self.filled_count = 0
+        self.status: Literal[
+            "pending", "active", "partially_filled", "filled", "canceled", "error"
+        ] = "pending"
+        self.created_at = datetime.now(timezone.utc)
+        self.last_updated = self.created_at
+        self.response: OrderResponse | None = None
+
+    @property
+    def is_terminal(self) -> bool:
+        return self.status in ("filled", "canceled", "error")
+
+
+class OrderManager:
+    """Manages the full lifecycle of orders on Kalshi.
+
+    Handles:
+    - Order submission with idempotent client_order_id
+    - Paper mode simulation
+    - Order cancellation
+    - State tracking
+    """
+
+    def __init__(
+        self,
+        kalshi_client: KalshiRestClient,
+        settings: BotSettings,
+    ):
+        self._client = kalshi_client
+        self._settings = settings
+        self._paper_mode = settings.mode == "paper"
+        self._pending_orders: dict[str, OrderState] = {}
+        self._paper_order_counter = 0
+
+    async def submit(self, signal: TradeSignal, count: int) -> str | None:
+        """Submit a trade signal as an order.
+
+        Returns order_id on success, None on failure.
+        """
+        if count <= 0:
+            return None
+
+        client_order_id = str(uuid.uuid4())
+
+        order_req = OrderRequest(
+            ticker=signal.market_ticker,
+            side=signal.side,
+            action=signal.action,
+            count=count,
+            client_order_id=client_order_id,
+            post_only=signal.signal_type == "market_making",
+        )
+
+        # Set price based on side
+        if signal.side == "yes":
+            order_req.yes_price_dollars = signal.suggested_price_dollars
+        else:
+            order_req.no_price_dollars = signal.suggested_price_dollars
+
+        if self._paper_mode:
+            return await self._submit_paper(signal, order_req, count)
+
+        return await self._submit_live(signal, order_req, count)
+
+    async def _submit_paper(
+        self,
+        signal: TradeSignal,
+        order_req: OrderRequest,
+        count: int,
+    ) -> str:
+        """Simulate order fill in paper mode."""
+        self._paper_order_counter += 1
+        order_id = f"paper-{self._paper_order_counter}"
+
+        state = OrderState(
+            order_id=order_id,
+            client_order_id=order_req.client_order_id,
+            signal=signal,
+            requested_count=count,
+        )
+        state.filled_count = count
+        state.status = "filled"
+        state.response = OrderResponse(
+            order_id=order_id,
+            client_order_id=order_req.client_order_id,
+            ticker=signal.market_ticker,
+            status="filled",
+            side=signal.side,
+            action=signal.action,
+            yes_price_dollars=(
+                Decimal(signal.suggested_price_dollars) if signal.side == "yes" else None
+            ),
+            no_price_dollars=(
+                Decimal(signal.suggested_price_dollars) if signal.side == "no" else None
+            ),
+            count=count,
+            fill_count=count,
+            remaining_count=0,
+            created_time=datetime.now(timezone.utc),
+        )
+        self._pending_orders[order_id] = state
+
+        logger.info(
+            "paper_order_filled",
+            order_id=order_id,
+            ticker=signal.market_ticker,
+            side=signal.side,
+            price=signal.suggested_price_dollars,
+            count=count,
+            signal_type=signal.signal_type,
+            edge=signal.net_edge,
+        )
+
+        return order_id
+
+    async def _submit_live(
+        self,
+        signal: TradeSignal,
+        order_req: OrderRequest,
+        count: int,
+    ) -> str | None:
+        """Submit a real order to Kalshi."""
+        state = OrderState(
+            order_id="",
+            client_order_id=order_req.client_order_id,
+            signal=signal,
+            requested_count=count,
+        )
+
+        try:
+            response = await self._client.create_order(order_req)
+            state.order_id = response.order_id
+            state.response = response
+            state.status = (
+                "filled"
+                if response.remaining_count == 0
+                else "partially_filled"
+                if response.fill_count > 0
+                else "active"
+            )
+            state.filled_count = response.fill_count
+            self._pending_orders[response.order_id] = state
+
+            logger.info(
+                "live_order_submitted",
+                order_id=response.order_id,
+                ticker=signal.market_ticker,
+                side=signal.side,
+                price=signal.suggested_price_dollars,
+                count=count,
+                filled=response.fill_count,
+                status=response.status,
+            )
+
+            return response.order_id
+
+        except KalshiAPIError as e:
+            if e.status == 409:
+                # Duplicate client_order_id — treat as success
+                logger.warning(
+                    "order_duplicate",
+                    client_order_id=order_req.client_order_id,
+                )
+                return None
+            logger.error(
+                "order_submit_error",
+                error=str(e),
+                status=e.status,
+                ticker=signal.market_ticker,
+            )
+            return None
+        except Exception:
+            logger.exception("order_submit_unexpected_error")
+            return None
+
+    async def cancel(self, order_id: str) -> bool:
+        """Cancel an active order. Returns True if successful."""
+        if self._paper_mode:
+            state = self._pending_orders.get(order_id)
+            if state and not state.is_terminal:
+                state.status = "canceled"
+                logger.info("paper_order_canceled", order_id=order_id)
+                return True
+            return False
+
+        try:
+            await self._client.cancel_order(order_id)
+            state = self._pending_orders.get(order_id)
+            if state:
+                state.status = "canceled"
+            logger.info("order_canceled", order_id=order_id)
+            return True
+        except KalshiAPIError as e:
+            logger.warning(
+                "order_cancel_error",
+                order_id=order_id,
+                error=str(e),
+            )
+            return False
+
+    async def cancel_all(self, market_ticker: str | None = None) -> int:
+        """Cancel all active orders, optionally filtered by market."""
+        canceled = 0
+        for order_id, state in list(self._pending_orders.items()):
+            if state.is_terminal:
+                continue
+            if market_ticker and state.signal.market_ticker != market_ticker:
+                continue
+            if await self.cancel(order_id):
+                canceled += 1
+        return canceled
+
+    def get_active_orders(
+        self, market_ticker: str | None = None
+    ) -> list[OrderState]:
+        """Get all active (non-terminal) orders."""
+        result = []
+        for state in self._pending_orders.values():
+            if state.is_terminal:
+                continue
+            if market_ticker and state.signal.market_ticker != market_ticker:
+                continue
+            result.append(state)
+        return result
+
+    def get_order(self, order_id: str) -> OrderState | None:
+        """Get order state by ID."""
+        return self._pending_orders.get(order_id)
+
+    def cleanup_terminal_orders(self, max_age_seconds: float = 3600) -> int:
+        """Remove old terminal orders from memory."""
+        now = datetime.now(timezone.utc)
+        to_remove = []
+        for order_id, state in self._pending_orders.items():
+            if state.is_terminal:
+                age = (now - state.created_at).total_seconds()
+                if age > max_age_seconds:
+                    to_remove.append(order_id)
+
+        for order_id in to_remove:
+            del self._pending_orders[order_id]
+
+        return len(to_remove)
