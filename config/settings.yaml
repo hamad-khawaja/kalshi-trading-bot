@@ -1,0 +1,49 @@
+mode: paper  # paper | live
+
+kalshi:
+  environment: demo  # demo | prod
+  api_key_id: ""     # Override via KALSHI_API_KEY_ID env var
+  private_key_path: ""  # Override via KALSHI_PRIVATE_KEY_PATH env var
+  series_ticker: "KXBTC15M"
+  rate_limit_ms: 100
+
+binance:
+  ws_url: "wss://stream.binance.com:9443/ws/btcusdt@trade"
+  symbol: "BTCUSDT"
+
+coinglass:
+  api_key: ""  # Override via COINGLASS_API_KEY env var
+  base_url: "https://open-api-v3.coinglass.com/api"
+
+strategy:
+  poll_interval_seconds: 4
+  min_edge_threshold: 0.03      # 3% minimum edge after fees
+  max_edge_threshold: 0.25      # Reject if edge seems too good (stale data)
+  confidence_weight: 0.7
+  use_market_maker: true
+  mm_min_spread: 0.05           # Minimum spread ($) for market-making
+
+risk:
+  max_position_per_market: 50   # Max contracts per single market
+  max_total_exposure_dollars: 500.0
+  max_daily_loss_dollars: 100.0
+  max_concurrent_positions: 5
+  kelly_fraction: 0.25          # Quarter-Kelly for safety
+  min_balance_dollars: 50.0     # Emergency stop
+  max_trades_per_day: 100
+  cooldown_after_streak_minutes: 30
+  max_consecutive_losses: 5
+
+features:
+  lookback_seconds: 900         # 15 minutes of tick data
+  momentum_windows: [15, 60, 180, 600]  # seconds
+  volatility_window: 300        # 5 minutes
+  orderbook_depth: 10
+
+logging:
+  level: INFO
+  file: logs/bot.log
+  format: json
+
+database:
+  path: data/bot.db
