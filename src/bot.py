@@ -450,7 +450,7 @@ def configure_logging(settings: BotSettings) -> None:
     Path(log_file).parent.mkdir(parents=True, exist_ok=True)
 
     if settings.logging.format == "json":
-        renderer = structlog.JSONRenderer()
+        renderer = structlog.processors.JSONRenderer()
     else:
         renderer = structlog.dev.ConsoleRenderer()
 
@@ -464,7 +464,7 @@ def configure_logging(settings: BotSettings) -> None:
             renderer,
         ],
         wrapper_class=structlog.make_filtering_bound_logger(
-            structlog.get_level_from_name(log_level)
+            structlog._log_levels.NAME_TO_LEVEL[log_level.lower()]
         ),
         context_class=dict,
         logger_factory=structlog.PrintLoggerFactory(),

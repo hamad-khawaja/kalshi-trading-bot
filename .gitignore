@@ -1,3 +1,7 @@
+# Private keys
+*.pem
+config/paper_key.pem
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

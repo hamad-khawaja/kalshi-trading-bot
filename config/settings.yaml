@@ -1,15 +1,15 @@
-mode: paper  # paper | live
+mode: live  # paper | live
 
 kalshi:
-  environment: demo  # demo | prod
+  environment: prod  # demo | prod
   api_key_id: ""     # Override via KALSHI_API_KEY_ID env var
   private_key_path: ""  # Override via KALSHI_PRIVATE_KEY_PATH env var
   series_ticker: "KXBTC15M"
   rate_limit_ms: 100
 
 binance:
-  ws_url: "wss://stream.binance.com:9443/ws/btcusdt@trade"
-  symbol: "BTCUSDT"
+  ws_url: "wss://ws-feed.exchange.coinbase.com"
+  symbol: "BTC-USD"
 
 coinglass:
   api_key: ""  # Override via COINGLASS_API_KEY env var

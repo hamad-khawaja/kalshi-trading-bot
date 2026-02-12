@@ -27,7 +27,7 @@ class KalshiConfig(BaseModel):
     def ws_url(self) -> str:
         if self.environment == "demo":
             return "wss://demo-api.kalshi.co/trade-api/ws/v2"
-        return "wss://trading-api.kalshi.com/trade-api/ws/v2"
+        return "wss://api.elections.kalshi.com/trade-api/ws/v2"
 
 
 class BinanceConfig(BaseModel):

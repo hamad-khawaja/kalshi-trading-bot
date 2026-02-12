@@ -45,13 +45,20 @@ class DataHub:
         self._ws_subscribed_tickers: set[str] = set()
 
     async def start(self) -> None:
-        """Connect all data sources."""
-        await asyncio.gather(
-            self._kalshi_rest.connect(),
-            self._kalshi_ws.connect(),
-            self._binance.connect(),
-            self._coinglass.connect(),
-        )
+        """Connect all data sources. Kalshi/Coinglass failures are non-fatal."""
+        # Binance is critical (BTC price), others are best-effort
+        await self._binance.connect()
+
+        for name, coro in [
+            ("kalshi_rest", self._kalshi_rest.connect()),
+            ("kalshi_ws", self._kalshi_ws.connect()),
+            ("coinglass", self._coinglass.connect()),
+        ]:
+            try:
+                await coro
+            except Exception:
+                logger.warning("data_source_connect_failed", source=name)
+
         logger.info("data_hub_started")
 
     async def stop(self) -> None:
@@ -122,11 +129,12 @@ class DataHub:
         time_to_expiry = 0.0
         volume = 0
         if market:
-            if market.expiration_time:
-                expiry = market.expiration_time
-                if expiry.tzinfo is None:
-                    expiry = expiry.replace(tzinfo=timezone.utc)
-                time_to_expiry = max(0.0, (expiry - now).total_seconds())
+            # Use close_time (actual trading deadline), not expiration_time
+            close = market.close_time or market.expected_expiration_time or market.expiration_time
+            if close:
+                if close.tzinfo is None:
+                    close = close.replace(tzinfo=timezone.utc)
+                time_to_expiry = max(0.0, (close - now).total_seconds())
             volume = market.volume
 
         # Coinglass data (cached, non-blocking)

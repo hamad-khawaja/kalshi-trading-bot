@@ -87,10 +87,13 @@ class KalshiRestClient:
         await self._rate_limit()
 
         url = f"{self._base_url}{path}"
-        query_path = path
+        # Signature must include the full API path (e.g. /trade-api/v2/markets)
+        base_path = "/trade-api/v2"
+        full_path = f"{base_path}{path}"
+        query_path = full_path
         if params:
             query_str = "&".join(f"{k}={v}" for k, v in params.items())
-            query_path = f"{path}?{query_str}"
+            query_path = f"{full_path}?{query_str}"
 
         for attempt in range(self.MAX_RETRIES):
             auth_headers = self._auth.get_headers(method.upper(), query_path)
@@ -181,52 +184,44 @@ class KalshiRestClient:
         yes_levels = []
         no_levels = []
 
-        # Parse dollar-denominated orderbook (orderbook_fp)
-        ob_fp = ob.get("orderbook_fp", ob)
-
-        for price_str, qty_str in zip(
-            ob_fp.get("yes_dollars", []),
-            ob_fp.get("yes_counts", ob_fp.get("yes", [])),
-        ):
-            yes_levels.append(
-                OrderbookLevel(
-                    price_dollars=Decimal(str(price_str)),
-                    quantity=int(qty_str) if qty_str else 0,
+        # Parse orderbook levels.
+        # API returns two formats:
+        #   - Dollar: "yes_dollars" / "no_dollars" as [[price_str, qty], ...]
+        #   - Cent: "yes" / "no" as [[price_cents, qty], ...]
+        for entry in ob.get("yes_dollars", []):
+            if isinstance(entry, list) and len(entry) >= 2:
+                yes_levels.append(
+                    OrderbookLevel(
+                        price_dollars=Decimal(str(entry[0])),
+                        quantity=int(entry[1]),
+                    )
                 )
-            )
 
-        for price_str, qty_str in zip(
-            ob_fp.get("no_dollars", []),
-            ob_fp.get("no_counts", ob_fp.get("no", [])),
-        ):
-            no_levels.append(
-                OrderbookLevel(
-                    price_dollars=Decimal(str(price_str)),
-                    quantity=int(qty_str) if qty_str else 0,
+        for entry in ob.get("no_dollars", []):
+            if isinstance(entry, list) and len(entry) >= 2:
+                no_levels.append(
+                    OrderbookLevel(
+                        price_dollars=Decimal(str(entry[0])),
+                        quantity=int(entry[1]),
+                    )
                 )
-            )
 
-        # Fallback: parse legacy cent-based fields if dollar fields are empty
+        # Fallback: parse cent-based fields
         if not yes_levels and not no_levels:
             for entry in ob.get("yes", []):
-                if isinstance(entry, dict):
-                    price_cents = entry.get("price", 0)
-                    qty = entry.get("quantity", entry.get("count", 0))
+                if isinstance(entry, list) and len(entry) >= 2:
                     yes_levels.append(
                         OrderbookLevel(
-                            price_dollars=Decimal(str(price_cents)) / 100,
-                            quantity=int(qty),
+                            price_dollars=Decimal(str(entry[0])) / 100,
+                            quantity=int(entry[1]),
                         )
                     )
-
             for entry in ob.get("no", []):
-                if isinstance(entry, dict):
-                    price_cents = entry.get("price", 0)
-                    qty = entry.get("quantity", entry.get("count", 0))
+                if isinstance(entry, list) and len(entry) >= 2:
                     no_levels.append(
                         OrderbookLevel(
-                            price_dollars=Decimal(str(price_cents)) / 100,
-                            quantity=int(qty),
+                            price_dollars=Decimal(str(entry[0])) / 100,
+                            quantity=int(entry[1]),
                         )
                     )
 
@@ -372,4 +367,5 @@ class KalshiRestClient:
             open_time=_parse_dt(m.get("open_time")),
             close_time=_parse_dt(m.get("close_time")),
             expiration_time=_parse_dt(m.get("expiration_time")),
+            expected_expiration_time=_parse_dt(m.get("expected_expiration_time")),
         )

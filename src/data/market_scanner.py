@@ -19,9 +19,9 @@ MONTH_MAP = {
     "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
 }
 
-# Pattern: kxbtc15m-26feb121345  (YYmonDDHHMM)
+# Pattern: KXBTC15M-26FEB121345-45  (YYmonDDHHMM with optional suffix)
 TICKER_PATTERN = re.compile(
-    r"^[a-z0-9]+-(\d{2})([a-z]{3})(\d{2})(\d{4})$", re.IGNORECASE
+    r"^[a-z0-9]+-(\d{2})([a-z]{3})(\d{2})(\d{4})(?:-\w+)?$", re.IGNORECASE
 )
 
 
@@ -33,7 +33,20 @@ class MarketScanner:
     """
 
     MIN_TIME_TO_EXPIRY_SECONDS = 60  # Don't trade if < 60s to expiry
-    MAX_TIME_TO_EXPIRY_SECONDS = 3600  # Only look at markets expiring within 1 hour
+    MAX_TIME_TO_EXPIRY_SECONDS = 24 * 3600  # Look up to 24 hours ahead
+
+    @staticmethod
+    def _effective_close(market: Market) -> datetime | None:
+        """Get the actual close/settlement time for a market.
+
+        Kalshi BTC 15-min markets have:
+        - close_time: when the market stops trading (the real deadline)
+        - expected_expiration_time: when the market actually settles
+        - expiration_time: the latest possible expiry (up to 7 days out)
+
+        We use close_time for filtering since that's when trading ends.
+        """
+        return market.close_time or market.expected_expiration_time or market.expiration_time
 
     def __init__(self, client: KalshiRestClient, config: KalshiConfig):
         self._client = client
@@ -50,7 +63,6 @@ class MarketScanner:
         try:
             markets = await self._client.get_markets(
                 series_ticker=self._config.series_ticker,
-                status="open",
                 limit=50,
             )
         except Exception:
@@ -61,38 +73,42 @@ class MarketScanner:
         active = []
 
         for market in markets:
-            expiry = market.expiration_time
-            if not expiry:
-                # Try parsing from ticker
-                expiry = self.parse_ticker_expiry(market.ticker)
-                if expiry:
-                    market.expiration_time = expiry
+            # Only include tradeable markets
+            if market.status not in ("active", "open", "initialized"):
+                continue
 
-            if not expiry:
+            close = self._effective_close(market)
+            if not close:
+                # Fallback: try parsing from ticker
+                close = self.parse_ticker_expiry(market.ticker)
+                if close:
+                    market.close_time = close
+
+            if not close:
                 continue
 
             # Ensure timezone-aware
-            if expiry.tzinfo is None:
-                expiry = expiry.replace(tzinfo=timezone.utc)
+            if close.tzinfo is None:
+                close = close.replace(tzinfo=timezone.utc)
 
-            seconds_to_expiry = (expiry - now).total_seconds()
+            seconds_to_close = (close - now).total_seconds()
 
             if (
-                seconds_to_expiry > self.MIN_TIME_TO_EXPIRY_SECONDS
-                and seconds_to_expiry <= self.MAX_TIME_TO_EXPIRY_SECONDS
+                seconds_to_close > self.MIN_TIME_TO_EXPIRY_SECONDS
+                and seconds_to_close <= self.MAX_TIME_TO_EXPIRY_SECONDS
             ):
                 active.append(market)
                 self._active_markets[market.ticker] = market
 
-        # Remove expired markets
+        # Remove closed markets
         expired = [
             ticker
             for ticker, m in self._active_markets.items()
-            if m.expiration_time
+            if self._effective_close(m)
             and (
-                m.expiration_time.replace(tzinfo=timezone.utc)
-                if m.expiration_time.tzinfo is None
-                else m.expiration_time
+                self._effective_close(m).replace(tzinfo=timezone.utc)
+                if self._effective_close(m).tzinfo is None
+                else self._effective_close(m)
             )
             <= now
         ]
@@ -110,25 +126,25 @@ class MarketScanner:
         return active
 
     def get_current_market(self) -> Market | None:
-        """Return the market closest to expiry that still has time to trade."""
+        """Return the market closest to close that still has time to trade."""
         now = datetime.now(timezone.utc)
         best: Market | None = None
-        best_expiry: datetime | None = None
+        best_close: datetime | None = None
 
         for market in self._active_markets.values():
-            expiry = market.expiration_time
-            if not expiry:
+            close = self._effective_close(market)
+            if not close:
                 continue
-            if expiry.tzinfo is None:
-                expiry = expiry.replace(tzinfo=timezone.utc)
+            if close.tzinfo is None:
+                close = close.replace(tzinfo=timezone.utc)
 
-            seconds_left = (expiry - now).total_seconds()
+            seconds_left = (close - now).total_seconds()
             if seconds_left < self.MIN_TIME_TO_EXPIRY_SECONDS:
                 continue
 
-            if best_expiry is None or expiry < best_expiry:
+            if best_close is None or close < best_close:
                 best = market
-                best_expiry = expiry
+                best_close = close
 
         return best
 
@@ -140,24 +156,24 @@ class MarketScanner:
 
         now = datetime.now(timezone.utc)
         best: Market | None = None
-        best_expiry: datetime | None = None
+        best_close: datetime | None = None
 
         for market in self._active_markets.values():
             if market.ticker == current.ticker:
                 continue
-            expiry = market.expiration_time
-            if not expiry:
+            close = self._effective_close(market)
+            if not close:
                 continue
-            if expiry.tzinfo is None:
-                expiry = expiry.replace(tzinfo=timezone.utc)
+            if close.tzinfo is None:
+                close = close.replace(tzinfo=timezone.utc)
 
-            seconds_left = (expiry - now).total_seconds()
+            seconds_left = (close - now).total_seconds()
             if seconds_left < self.MIN_TIME_TO_EXPIRY_SECONDS:
                 continue
 
-            if best_expiry is None or expiry < best_expiry:
+            if best_close is None or close < best_close:
                 best = market
-                best_expiry = expiry
+                best_close = close
 
         return best
 

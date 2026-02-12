@@ -101,6 +101,7 @@ class Market(BaseModel):
     open_time: datetime | None = None
     close_time: datetime | None = None
     expiration_time: datetime | None = None
+    expected_expiration_time: datetime | None = None
 
 
 class OrderRequest(BaseModel):

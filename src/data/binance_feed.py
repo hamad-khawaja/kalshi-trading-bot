@@ -1,4 +1,7 @@
-"""Real-time BTC price feed from Binance WebSocket."""
+"""Real-time BTC price feed from exchange WebSockets.
+
+Supports Coinbase (default, US-accessible) and Binance WebSocket formats.
+"""
 
 from __future__ import annotations
 
@@ -20,10 +23,10 @@ logger = structlog.get_logger()
 
 
 class BinanceFeed:
-    """Streams real-time BTC/USDT trades from Binance WebSocket.
+    """Streams real-time BTC price ticks from an exchange WebSocket.
 
+    Supports both Coinbase and Binance message formats, auto-detected from URL.
     Maintains a ring buffer of recent price ticks for feature computation.
-    No authentication required for public trade streams.
     """
 
     MAX_BUFFER_SIZE = 50_000
@@ -31,6 +34,8 @@ class BinanceFeed:
 
     def __init__(self, config: BinanceConfig):
         self._url = config.ws_url
+        self._symbol = config.symbol
+        self._is_coinbase = "coinbase" in self._url.lower()
         self._ws: websockets.WebSocketClientProtocol | None = None
         self._price_buffer: deque[PriceTick] = deque(maxlen=self.MAX_BUFFER_SIZE)
         self._callbacks: list[Callable[[PriceTick], None]] = []
@@ -70,10 +75,10 @@ class BinanceFeed:
         self._callbacks.append(callback)
 
     async def connect(self) -> None:
-        """Connect to Binance trade stream and start message loop."""
+        """Connect to trade stream and start message loop."""
         self._running = True
         self._task = asyncio.create_task(self._run_loop())
-        logger.info("binance_feed_started", url=self._url)
+        logger.info("btc_feed_started", url=self._url, provider="coinbase" if self._is_coinbase else "binance")
 
     async def _run_loop(self) -> None:
         """Main loop with reconnection logic."""
@@ -89,7 +94,11 @@ class BinanceFeed:
                 ) as ws:
                     self._ws = ws
                     reconnect_attempt = 0
-                    logger.info("binance_ws_connected")
+                    logger.info("btc_ws_connected")
+
+                    # Coinbase requires a subscribe message after connecting
+                    if self._is_coinbase:
+                        await self._coinbase_subscribe(ws)
 
                     async for raw_msg in ws:
                         if not self._running:
@@ -97,39 +106,44 @@ class BinanceFeed:
                         try:
                             self._handle_message(raw_msg)
                         except Exception:
-                            logger.exception("binance_message_error")
+                            logger.exception("btc_feed_message_error")
 
             except ConnectionClosed as e:
-                logger.warning("binance_ws_disconnected", code=e.code)
+                logger.warning("btc_ws_disconnected", code=e.code)
                 self._ws = None
             except Exception:
-                logger.exception("binance_ws_error")
+                logger.exception("btc_ws_error")
                 self._ws = None
 
             if self._running:
                 delay = self.RECONNECT_DELAYS[
                     min(reconnect_attempt, len(self.RECONNECT_DELAYS) - 1)
                 ]
-                logger.info("binance_ws_reconnecting", delay=delay)
+                logger.info("btc_ws_reconnecting", delay=delay)
                 await asyncio.sleep(delay)
                 reconnect_attempt += 1
 
+    async def _coinbase_subscribe(self, ws: websockets.WebSocketClientProtocol) -> None:
+        """Send Coinbase subscription message for ticker channel."""
+        product_id = "BTC-USD"
+        sub_msg = json.dumps({
+            "type": "subscribe",
+            "channels": [{"name": "ticker", "product_ids": [product_id]}],
+        })
+        await ws.send(sub_msg)
+        logger.info("coinbase_subscribed", product_id=product_id)
+
     def _handle_message(self, raw_msg: str | bytes) -> None:
-        """Parse a Binance trade message and store/dispatch."""
+        """Parse an exchange message and store/dispatch."""
         data = json.loads(raw_msg)
 
-        # Binance trade stream fields:
-        # p = price, q = quantity, T = trade time in ms, m = is buyer maker
-        if "p" not in data:
-            return
+        if self._is_coinbase:
+            tick = self._parse_coinbase(data)
+        else:
+            tick = self._parse_binance(data)
 
-        tick = PriceTick(
-            price=Decimal(data["p"]),
-            volume=Decimal(data["q"]),
-            timestamp=datetime.fromtimestamp(
-                data["T"] / 1000, tz=timezone.utc
-            ),
-        )
+        if tick is None:
+            return
 
         self._price_buffer.append(tick)
 
@@ -137,7 +151,42 @@ class BinanceFeed:
             try:
                 cb(tick)
             except Exception:
-                logger.exception("binance_callback_error")
+                logger.exception("btc_feed_callback_error")
+
+    @staticmethod
+    def _parse_coinbase(data: dict) -> PriceTick | None:
+        """Parse a Coinbase ticker message."""
+        if data.get("type") != "ticker":
+            return None
+        price = data.get("price")
+        size = data.get("last_size", "0")
+        time_str = data.get("time")
+        if not price:
+            return None
+        ts = datetime.now(timezone.utc)
+        if time_str:
+            try:
+                ts = datetime.fromisoformat(time_str.replace("Z", "+00:00"))
+            except (ValueError, TypeError):
+                pass
+        return PriceTick(
+            price=Decimal(str(price)),
+            volume=Decimal(str(size)),
+            timestamp=ts,
+        )
+
+    @staticmethod
+    def _parse_binance(data: dict) -> PriceTick | None:
+        """Parse a Binance trade message."""
+        if "p" not in data:
+            return None
+        return PriceTick(
+            price=Decimal(data["p"]),
+            volume=Decimal(data["q"]),
+            timestamp=datetime.fromtimestamp(
+                data["T"] / 1000, tz=timezone.utc
+            ),
+        )
 
     async def close(self) -> None:
         """Gracefully close the connection."""
@@ -151,4 +200,4 @@ class BinanceFeed:
         if self._ws:
             await self._ws.close()
             self._ws = None
-        logger.info("binance_feed_closed")
+        logger.info("btc_feed_closed")
