@@ -46,6 +46,10 @@ class RiskManager:
         self._trades_today = 0
         self._trades_today_date: date | None = None
         self._consecutive_losses = 0
+        self._consecutive_wins = 0
+        self._total_wins = 0
+        self._total_settled = 0
+        self._last_pnl: Decimal | None = None
         self._cooldown_until: datetime | None = None
 
     def check(
@@ -143,9 +147,12 @@ class RiskManager:
 
         self._daily_pnl += pnl
         self._trades_today += 1
+        self._total_settled += 1
+        self._last_pnl = pnl
 
         if pnl < 0:
             self._consecutive_losses += 1
+            self._consecutive_wins = 0
             if self._consecutive_losses >= self._config.max_consecutive_losses:
                 from datetime import timedelta
 
@@ -159,6 +166,8 @@ class RiskManager:
                 )
         else:
             self._consecutive_losses = 0
+            self._consecutive_wins += 1
+            self._total_wins += 1
 
         logger.info(
             "risk_trade_recorded",
@@ -199,3 +208,21 @@ class RiskManager:
     @property
     def consecutive_losses(self) -> int:
         return self._consecutive_losses
+
+    @property
+    def consecutive_wins(self) -> int:
+        return self._consecutive_wins
+
+    @property
+    def win_rate(self) -> float:
+        if self._total_settled == 0:
+            return 0.0
+        return self._total_wins / self._total_settled
+
+    @property
+    def total_settled(self) -> int:
+        return self._total_settled
+
+    @property
+    def last_pnl(self) -> Decimal | None:
+        return self._last_pnl

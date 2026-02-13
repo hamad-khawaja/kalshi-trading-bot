@@ -423,4 +423,4 @@ class TestFeatureEngine:
         arr = sample_feature_vector.to_array()
         names = sample_feature_vector.feature_names()
         assert len(arr) == len(names)
-        assert len(arr) == 22
+        assert len(arr) == 27

@@ -233,6 +233,19 @@ class KalshiRestClient:
             timestamp=now,
         )
 
+    async def get_market_result(self, ticker: str) -> str | None:
+        """Get the settlement result for a market ('yes', 'no', or None if not settled)."""
+        try:
+            market = await self.get_market(ticker)
+            if market.status == "settled":
+                # The result is in the raw API data
+                data = await self._request("GET", f"/markets/{ticker}")
+                m = data.get("market", data)
+                return m.get("result", None)
+        except Exception:
+            pass
+        return None
+
     async def get_trades(self, ticker: str, limit: int = 100) -> list[dict]:
         """Get recent trades for a market."""
         params = {"ticker": ticker, "limit": str(limit)}
@@ -310,6 +323,11 @@ class KalshiRestClient:
                 )
             )
         return positions
+
+    async def get_order(self, order_id: str) -> dict:
+        """Get a single order by ID."""
+        data = await self._request("GET", f"/portfolio/orders/{order_id}")
+        return data.get("order", data)
 
     async def get_orders(
         self,

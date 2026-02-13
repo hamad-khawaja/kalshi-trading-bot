@@ -10,7 +10,7 @@ import aiohttp
 import structlog
 
 from src.config import CoinglassConfig
-from src.data.models import FundingRate, LongShortRatio, OpenInterest
+from src.data.models import FundingRate, LiquidationData, LongShortRatio, OpenInterest
 
 logger = structlog.get_logger()
 
@@ -178,11 +178,42 @@ class CoinglassClient:
         self._cache_set(f"lsr_{symbol}", result)
         return result
 
+    async def get_liquidation_data(self, symbol: str = "BTC") -> LiquidationData:
+        """Get recent aggregated BTC liquidation data (last 5-minute interval)."""
+        cached = self._cache_get(f"liq_{symbol}")
+        if cached:
+            return cached  # type: ignore
+
+        data = await self._request(
+            "/futures/liquidation/aggregated-history",
+            params={"symbol": symbol, "interval": "5m", "limit": 3},
+        )
+        now = datetime.now(timezone.utc)
+
+        long_usd = 0.0
+        short_usd = 0.0
+        result_data = data.get("data", [])
+        if isinstance(result_data, list) and result_data:
+            # Sum the most recent intervals for a rolling view
+            for item in result_data:
+                long_usd += float(item.get("longLiquidationUsd", item.get("long_liquidation_usd", 0)))
+                short_usd += float(item.get("shortLiquidationUsd", item.get("short_liquidation_usd", 0)))
+
+        result = LiquidationData(
+            long_usd=long_usd,
+            short_usd=short_usd,
+            total_usd=long_usd + short_usd,
+            timestamp=now,
+        )
+        self._cache_set(f"liq_{symbol}", result)
+        return result
+
     async def refresh_all(self, symbol: str = "BTC") -> None:
         """Refresh all data points concurrently."""
         await asyncio.gather(
             self.get_funding_rate(symbol),
             self.get_open_interest(symbol),
             self.get_long_short_ratio(symbol),
+            self.get_liquidation_data(symbol),
             return_exceptions=True,
         )

@@ -12,7 +12,7 @@ from pathlib import Path
 
 import structlog
 
-from src.config import BotSettings, load_settings
+from src.config import BinanceConfig, BotSettings, load_settings
 from src.data.binance_feed import BinanceFeed
 from src.data.time_profile import TimeProfiler
 from src.data.coinglass_client import CoinglassClient
@@ -60,6 +60,14 @@ class TradingBot:
         self._kalshi_rest = KalshiRestClient(settings.kalshi, self._auth)
         self._kalshi_ws = KalshiWebSocket(settings.kalshi, self._auth)
         self._binance = BinanceFeed(settings.binance)
+        self._secondary_feed: BinanceFeed | None = None
+        if settings.secondary_feed.enabled:
+            self._secondary_feed = BinanceFeed(
+                BinanceConfig(
+                    ws_url=settings.secondary_feed.ws_url,
+                    symbol=settings.secondary_feed.symbol,
+                )
+            )
         self._coinglass = CoinglassClient(settings.coinglass)
         self._scanner = MarketScanner(self._kalshi_rest, settings.kalshi)
         self._data_hub = DataHub(
@@ -68,6 +76,7 @@ class TradingBot:
             self._binance,
             self._coinglass,
             self._scanner,
+            secondary_feed=self._secondary_feed,
         )
         self._db = Database(settings.database.path)
 
@@ -228,6 +237,15 @@ class TradingBot:
             "btc_price": float(snapshot.btc_price),
             "implied_prob": float(snapshot.implied_yes_prob) if snapshot.implied_yes_prob else None,
             "time_to_expiry": snapshot.time_to_expiry_seconds,
+            "strike_price": float(snapshot.strike_price) if snapshot.strike_price else None,
+            "statistical_fair_value": snapshot.statistical_fair_value,
+            "binance_btc_price": float(snapshot.binance_btc_price) if snapshot.binance_btc_price else None,
+            "cross_exchange_spread": snapshot.cross_exchange_spread,
+            "cross_exchange_lead": snapshot.cross_exchange_lead,
+            "liquidation_long_usd": snapshot.liquidation_long_usd,
+            "liquidation_short_usd": snapshot.liquidation_short_usd,
+            "taker_buy_volume": snapshot.taker_buy_volume,
+            "taker_sell_volume": snapshot.taker_sell_volume,
             "orderbook": {
                 "best_yes_bid": str(ob.best_yes_bid) if ob.best_yes_bid else None,
                 "best_no_bid": str(ob.best_no_bid) if ob.best_no_bid else None,
@@ -268,6 +286,9 @@ class TradingBot:
                 "flow": prediction.features_used.get("flow_signal", 0),
                 "mean_reversion": prediction.features_used.get("mr_signal", 0),
                 "funding": prediction.features_used.get("funding_signal", 0),
+                "cross_exchange": prediction.features_used.get("cross_exchange_signal", 0),
+                "liquidation": prediction.features_used.get("liquidation_signal", 0),
+                "taker_flow": prediction.features_used.get("taker_signal", 0),
                 "time_decay": prediction.features_used.get("time_decay_signal", 0),
             },
         }
@@ -340,10 +361,12 @@ class TradingBot:
             )
 
             if count <= 0:
-                ds.add_decision(
-                    self._cycle_count, "reject",
-                    f"Position sizer returned 0 for {signal_item.side}",
-                )
+                max_pos = self._settings.risk.max_position_per_market
+                if effective_position >= max_pos:
+                    reason = f"MAX POSITION: {effective_position}/{max_pos} contracts in {signal_item.side.upper()}"
+                else:
+                    reason = f"Size=0 for {signal_item.side} (pos={effective_position}, bal=${float(balance):.0f})"
+                ds.add_decision(self._cycle_count, "reject", reason)
                 continue
 
             ds.sizing = {"count": count, "side": signal_item.side, "price": signal_item.suggested_price_dollars}
@@ -477,27 +500,62 @@ class TradingBot:
                     for exit_ticker in exits:
                         pos = self._position_tracker.get_position(exit_ticker)
                         if pos:
-                            # Binary option settlement: YES pays $1 if correct, $0 otherwise.
-                            # In paper mode we don't know the outcome, estimate breakeven.
-                            # The position cost is avg_entry_price * count.
                             cost = pos.avg_entry_price * pos.count
-                            # For paper mode: assume implied prob at close ≈ settlement value
-                            snap = snapshots.get(exit_ticker)
-                            if snap and snap.implied_yes_prob is not None:
-                                settle = float(snap.implied_yes_prob) if pos.side == "yes" else (1.0 - float(snap.implied_yes_prob))
-                                pnl = Decimal(str(settle)) * pos.count - cost
+
+                            # Try to get actual settlement result from exchange
+                            settlement_result = None
+                            if not self._settings.mode == "paper":
+                                try:
+                                    settlement_result = await self._kalshi_rest.get_market_result(exit_ticker)
+                                except Exception:
+                                    pass
+
+                            if settlement_result is not None:
+                                # Actual settlement: YES pays $1/contract, NO pays $0
+                                won = (settlement_result == pos.side)
+                                payout = Decimal(str(pos.count)) if won else Decimal("0")
+                                pnl = payout - cost
+                                logger.info(
+                                    "position_settled_actual",
+                                    ticker=exit_ticker,
+                                    side=pos.side,
+                                    result=settlement_result,
+                                    won=won,
+                                    count=pos.count,
+                                    entry_price=float(pos.avg_entry_price),
+                                    pnl=float(pnl),
+                                )
                             else:
-                                pnl = -cost  # Worst case estimate
+                                # Paper mode or result not available: estimate from implied prob
+                                snap = snapshots.get(exit_ticker)
+                                if snap and snap.implied_yes_prob is not None:
+                                    settle = float(snap.implied_yes_prob) if pos.side == "yes" else (1.0 - float(snap.implied_yes_prob))
+                                    pnl = Decimal(str(settle)) * pos.count - cost
+                                else:
+                                    pnl = -cost  # Worst case estimate
+                                logger.info(
+                                    "position_settled_estimated",
+                                    ticker=exit_ticker,
+                                    side=pos.side,
+                                    count=pos.count,
+                                    entry_price=float(pos.avg_entry_price),
+                                    pnl=float(pnl),
+                                )
                             self._risk_manager.record_trade(pnl)
-                            logger.info(
-                                "position_settled",
-                                ticker=exit_ticker,
-                                side=pos.side,
-                                count=pos.count,
-                                entry_price=float(pos.avg_entry_price),
-                                pnl=float(pnl),
-                            )
                     self._position_tracker.remove_expired_positions(exits)
+                    self._update_dashboard_positions()
+
+                # Check for fills on resting orders (live mode only)
+                newly_filled = await self._order_manager.check_resting_fills()
+                for filled_state in newly_filled:
+                    self._position_tracker.update_on_fill(filled_state)
+                    self._risk_manager._trades_today += 1
+                    logger.info(
+                        "resting_order_fill_detected",
+                        ticker=filled_state.signal.market_ticker,
+                        side=filled_state.signal.side,
+                        filled=filled_state.filled_count,
+                    )
                     self._update_dashboard_positions()
 
                 # Cancel stale resting orders (older than 90s)
@@ -575,6 +633,10 @@ class TradingBot:
                     "daily_pnl": float(self._risk_manager.daily_pnl),
                     "trades_today": self._risk_manager.trades_today,
                     "consecutive_losses": self._risk_manager.consecutive_losses,
+                    "consecutive_wins": self._risk_manager.consecutive_wins,
+                    "win_rate": self._risk_manager.win_rate,
+                    "total_settled": self._risk_manager.total_settled,
+                    "last_pnl": float(self._risk_manager.last_pnl) if self._risk_manager.last_pnl is not None else None,
                     "vol_regime": self._vol_tracker.current_regime,
                     "exposure": float(self._position_tracker.total_exposure_dollars),
                 }
@@ -623,6 +685,10 @@ class TradingBot:
             "daily_pnl": float(self._risk_manager.daily_pnl),
             "trades_today": self._risk_manager.trades_today,
             "consecutive_losses": self._risk_manager.consecutive_losses,
+            "consecutive_wins": self._risk_manager.consecutive_wins,
+            "win_rate": self._risk_manager.win_rate,
+            "total_settled": self._risk_manager.total_settled,
+            "last_pnl": float(self._risk_manager.last_pnl) if self._risk_manager.last_pnl is not None else None,
             "vol_regime": self._vol_tracker.current_regime,
             "exposure": float(self._position_tracker.total_exposure_dollars),
         }

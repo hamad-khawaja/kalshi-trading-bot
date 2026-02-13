@@ -44,12 +44,15 @@ class HeuristicModel(ProbabilityModel):
     """
 
     # Signal weights — rebalanced for trend awareness + technical depth
-    MOMENTUM_WEIGHT = 0.15
-    TECHNICAL_WEIGHT = 0.15  # BB, MACD, ROC, vol-mom composite
-    ORDERFLOW_WEIGHT = 0.20
-    MEAN_REVERSION_WEIGHT = 0.20
-    FUNDING_WEIGHT = 0.10  # Re-enabled with retry backoff
-    TIME_DECAY_WEIGHT = 0.20
+    MOMENTUM_WEIGHT = 0.12
+    TECHNICAL_WEIGHT = 0.10  # BB, MACD, ROC, vol-mom composite
+    ORDERFLOW_WEIGHT = 0.15
+    MEAN_REVERSION_WEIGHT = 0.13
+    FUNDING_WEIGHT = 0.06
+    TIME_DECAY_WEIGHT = 0.14
+    CROSS_EXCHANGE_WEIGHT = 0.10  # Binance lead-lag signal
+    LIQUIDATION_WEIGHT = 0.10  # Liquidation cascade + taker flow
+    TAKER_FLOW_WEIGHT = 0.10  # Net aggressive buying/selling
 
     # Maximum adjustment from 0.50 base
     MAX_ADJUSTMENT = 0.20
@@ -132,7 +135,36 @@ class HeuristicModel(ProbabilityModel):
                 # Extreme funding: contrarian signal
                 funding_signal = -math.copysign(0.3, fr)
 
-        # --- 6. Time decay signal ---
+        # --- 6. Cross-exchange lead-lag signal ---
+        # Binance typically leads Coinbase by 100-500ms.
+        # If Binance is moving up faster than Coinbase, price will follow.
+        cross_exchange_signal = 0.0
+        if features.cross_exchange_lead != 0:
+            # Scale: typical lead is 0.0001 to 0.001 (1-10 bps over 15s)
+            cross_exchange_signal = math.tanh(features.cross_exchange_lead / 0.0003)
+        # Also factor in persistent spread (premium/discount)
+        if features.cross_exchange_spread != 0:
+            # If Binance trades at a premium, that's bullish for BTC
+            spread_signal = math.tanh(features.cross_exchange_spread / 0.0005)
+            cross_exchange_signal = 0.7 * cross_exchange_signal + 0.3 * spread_signal
+
+        # --- 7. Liquidation cascade signal ---
+        # Large short liquidations = shorts getting squeezed = bullish
+        # Large long liquidations = longs getting liquidated = bearish
+        liquidation_signal = 0.0
+        if features.liquidation_intensity > 0.01:
+            # Imbalance drives direction, intensity scales magnitude
+            liquidation_signal = (
+                features.liquidation_imbalance * features.liquidation_intensity
+            )
+            # Clamp to [-1, 1]
+            liquidation_signal = max(-1.0, min(1.0, liquidation_signal))
+
+        # --- 8. Taker flow signal ---
+        # Net aggressive buying (taker buys > sells) is bullish
+        taker_signal = features.taker_buy_sell_ratio  # Already [-1, 1]
+
+        # --- 9. Time decay signal ---
         # Reduced weight: dampen signals near expiry but don't negate them
         time_decay_signal = 0.0
         if features.time_to_expiry_normalized < 0.3:
@@ -153,6 +185,9 @@ class HeuristicModel(ProbabilityModel):
         mr_w = self.MEAN_REVERSION_WEIGHT * m.get("mean_reversion", 1.0)
         fund_w = self.FUNDING_WEIGHT * m.get("funding", 1.0)
         td_w = self.TIME_DECAY_WEIGHT * m.get("time_decay", 1.0)
+        cx_w = self.CROSS_EXCHANGE_WEIGHT * m.get("cross_exchange", 1.0)
+        liq_w = self.LIQUIDATION_WEIGHT * m.get("liquidation", 1.0)
+        tk_w = self.TAKER_FLOW_WEIGHT * m.get("taker_flow", 1.0)
 
         # Re-normalize so weights sum to the original total
         original_total = (
@@ -162,8 +197,11 @@ class HeuristicModel(ProbabilityModel):
             + self.MEAN_REVERSION_WEIGHT
             + self.FUNDING_WEIGHT
             + self.TIME_DECAY_WEIGHT
+            + self.CROSS_EXCHANGE_WEIGHT
+            + self.LIQUIDATION_WEIGHT
+            + self.TAKER_FLOW_WEIGHT
         )
-        adjusted_total = mom_w + tech_w + flow_w + mr_w + fund_w + td_w
+        adjusted_total = mom_w + tech_w + flow_w + mr_w + fund_w + td_w + cx_w + liq_w + tk_w
         if adjusted_total > 0:
             scale = original_total / adjusted_total
             mom_w *= scale
@@ -172,6 +210,9 @@ class HeuristicModel(ProbabilityModel):
             mr_w *= scale
             fund_w *= scale
             td_w *= scale
+            cx_w *= scale
+            liq_w *= scale
+            tk_w *= scale
 
         # --- Combine signals ---
         raw_adjustment = (
@@ -180,6 +221,9 @@ class HeuristicModel(ProbabilityModel):
             + flow_w * flow_signal
             + mr_w * mr_signal
             + fund_w * funding_signal
+            + cx_w * cross_exchange_signal
+            + liq_w * liquidation_signal
+            + tk_w * taker_signal
             + td_w * time_decay_signal
         )
 
@@ -212,6 +256,9 @@ class HeuristicModel(ProbabilityModel):
             "flow_signal": round(flow_signal, 4),
             "funding_signal": round(funding_signal, 4),
             "mr_signal": round(mr_signal, 4),
+            "cross_exchange_signal": round(cross_exchange_signal, 4),
+            "liquidation_signal": round(liquidation_signal, 4),
+            "taker_signal": round(taker_signal, 4),
             "time_decay_signal": round(time_decay_signal, 4),
             "consistency": round(consistency, 4),
             "raw_adjustment": round(raw_adjustment, 4),
