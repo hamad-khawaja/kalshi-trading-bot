@@ -89,6 +89,7 @@ class Market(BaseModel):
     event_ticker: str = ""
     title: str = ""
     subtitle: str = ""
+    yes_sub_title: str = ""
     status: str = ""
     yes_bid: Decimal | None = None
     yes_ask: Decimal | None = None
@@ -269,6 +270,11 @@ class FeatureVector(BaseModel):
     long_short_ratio: float | None = None
     kalshi_volume: int = 0
     implied_probability: float = 0.5
+    bollinger_position: float = 0.0
+    macd_histogram: float = 0.0
+    roc_acceleration: float = 0.0
+    volume_weighted_momentum: float = 0.0
+    orderbook_depth_imbalance: float = 0.0
 
     def to_array(self) -> list[float]:
         """Convert to flat list for model input, replacing None with 0."""
@@ -290,6 +296,11 @@ class FeatureVector(BaseModel):
             self.long_short_ratio or 0.0,
             float(self.kalshi_volume),
             self.implied_probability,
+            self.bollinger_position,
+            self.macd_histogram,
+            self.roc_acceleration,
+            self.volume_weighted_momentum,
+            self.orderbook_depth_imbalance,
         ]
 
     @staticmethod
@@ -313,6 +324,11 @@ class FeatureVector(BaseModel):
             "long_short_ratio",
             "kalshi_volume",
             "implied_probability",
+            "bollinger_position",
+            "macd_histogram",
+            "roc_acceleration",
+            "volume_weighted_momentum",
+            "orderbook_depth_imbalance",
         ]
 
 

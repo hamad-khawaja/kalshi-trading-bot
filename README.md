@@ -65,29 +65,51 @@ Start with `mode: paper` and `environment: demo` until you're comfortable.
 ### 6. Run the bot
 
 ```bash
-# Using the installed command
+# Paper mode on demo (safe default from config)
 kalshi-bot
 
-# Or via Python directly
-python -m src.bot
+# Dry run — forces paper mode + demo environment
+kalshi-bot --dry-run
+
+# With verbose logging
+kalshi-bot --dry-run --log-level DEBUG
 
 # With a custom config file
-kalshi-bot path/to/settings.yaml
+kalshi-bot --config path/to/settings.yaml
+
+# Or via Python directly
+.venv/bin/python -m src.bot --dry-run
 ```
 
 The bot will start logging to the terminal. You'll see it scanning for active markets, pulling BTC prices, and evaluating trades every ~4 seconds.
 
-### Going live
+### Running in production
 
-When you're ready to trade with real money, change two values in `config/settings.yaml`:
-
-```yaml
-mode: live
-kalshi:
-  environment: prod
+```bash
+kalshi-bot --mode live --env prod
 ```
 
-Review the risk limits in the same file before going live — especially `max_daily_loss_dollars` and `max_total_exposure_dollars`.
+You can also override risk limits from the command line:
+
+```bash
+kalshi-bot --mode live --env prod --max-exposure 1000 --max-daily-loss 200
+```
+
+Review the risk limits in `config/settings.yaml` before going live — especially `max_daily_loss_dollars` and `max_total_exposure_dollars`. CLI flags override config file values.
+
+### CLI Reference
+
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--config PATH` | `-c` | Path to settings YAML (default: `config/settings.yaml`) |
+| `--mode {paper,live}` | `-m` | Trading mode — overrides config |
+| `--env {demo,prod}` | `-e` | Kalshi environment — overrides config |
+| `--log-level {DEBUG,INFO,WARNING,ERROR}` | `-l` | Log verbosity — overrides config |
+| `--max-exposure DOLLARS` | | Max total exposure — overrides config |
+| `--max-daily-loss DOLLARS` | | Max daily loss — overrides config |
+| `--dry-run` | | Shortcut for `--mode paper --env demo` |
+| `--version` | `-v` | Print version and exit |
+| `--help` | `-h` | Show help and exit |
 
 ---
 
@@ -237,6 +259,9 @@ pip install -e ".[dev]"
 
 ```bash
 pytest tests/ -v
+
+# Using the venv Python explicitly
+.venv/bin/python -m pytest tests/ -v
 
 # With coverage
 pytest tests/ --cov=src --cov-report=term-missing

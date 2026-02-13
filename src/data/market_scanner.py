@@ -61,8 +61,11 @@ class MarketScanner:
     async def scan(self) -> list[Market]:
         """Fetch open markets for the configured series and filter by time."""
         try:
+            # Query for active/open markets first (the default query returns
+            # newest-first which can be all "initialized" future markets).
             markets = await self._client.get_markets(
                 series_ticker=self._config.series_ticker,
+                status="open",
                 limit=50,
             )
         except Exception:
@@ -73,9 +76,17 @@ class MarketScanner:
         active = []
 
         for market in markets:
-            # Only include tradeable markets
-            if market.status not in ("active", "open", "initialized"):
+            # Only include markets that are actually open for trading
+            if market.status not in ("active", "open"):
                 continue
+
+            # Skip markets that haven't opened yet
+            if market.open_time:
+                open_time = market.open_time
+                if open_time.tzinfo is None:
+                    open_time = open_time.replace(tzinfo=timezone.utc)
+                if open_time > now:
+                    continue
 
             close = self._effective_close(market)
             if not close:

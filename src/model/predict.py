@@ -6,6 +6,8 @@ import math
 from abc import ABC, abstractmethod
 from pathlib import Path
 
+import numpy as np
+
 from src.data.models import FeatureVector, PredictionResult
 
 
@@ -41,12 +43,13 @@ class HeuristicModel(ProbabilityModel):
     5. Time to expiry (affects confidence)
     """
 
-    # Signal weights — favor longer-term signals over short-term noise
-    MOMENTUM_WEIGHT = 0.10
+    # Signal weights — rebalanced for trend awareness + technical depth
+    MOMENTUM_WEIGHT = 0.15
+    TECHNICAL_WEIGHT = 0.15  # BB, MACD, ROC, vol-mom composite
     ORDERFLOW_WEIGHT = 0.20
-    FUNDING_WEIGHT = 0.0  # Coinglass returning 500s
-    MEAN_REVERSION_WEIGHT = 0.30
-    TIME_DECAY_WEIGHT = 0.40
+    MEAN_REVERSION_WEIGHT = 0.20
+    FUNDING_WEIGHT = 0.10  # Re-enabled with retry backoff
+    TIME_DECAY_WEIGHT = 0.20
 
     # Maximum adjustment from 0.50 base
     MAX_ADJUSTMENT = 0.20
@@ -57,8 +60,13 @@ class HeuristicModel(ProbabilityModel):
     # EMA smoothing alpha (0 = fully smooth, 1 = no smoothing)
     EMA_ALPHA = 0.3
 
-    def __init__(self) -> None:
+    def __init__(self, weight_multipliers: dict[str, float] | None = None) -> None:
         self._prev_probability: float | None = None
+        self._weight_multipliers: dict[str, float] = weight_multipliers or {}
+
+    def set_weight_multipliers(self, multipliers: dict[str, float]) -> None:
+        """Update session-based weight multipliers at runtime."""
+        self._weight_multipliers = multipliers
 
     def name(self) -> str:
         return "heuristic_v2"
@@ -90,11 +98,29 @@ class HeuristicModel(ProbabilityModel):
             consistency = 0.5
         mom_signal *= consistency
 
-        # --- 2. Order flow signal ---
+        # --- 2. Technical composite signal ---
+        # Combine Bollinger, MACD histogram, ROC acceleration, volume-weighted
+        # momentum into a single normalized signal
+        bb_signal = features.bollinger_position  # already [-1, 1]
+        macd_sig = float(np.clip(features.macd_histogram * 100, -1.0, 1.0))
+        roc_sig = float(np.clip(features.roc_acceleration * 1000, -1.0, 1.0))
+        vwm_sig = float(np.clip(features.volume_weighted_momentum * 100, -1.0, 1.0))
+        tech_signal = (bb_signal + macd_sig + roc_sig + vwm_sig) / 4.0
+
+        # --- 3. Order flow signal ---
         # Positive imbalance = more YES bids = bullish pressure
         flow_signal = features.order_flow_imbalance * 0.5  # Scale to [-0.5, 0.5]
 
-        # --- 3. Funding rate signal ---
+        # --- 4. Mean reversion component ---
+        # RSI-based: overbought/oversold with graduated response
+        rsi_norm = (features.rsi_14 - 50) / 50  # [-1, 1]
+        mr_signal = 0.0
+        if abs(rsi_norm) > 0.25:
+            mr_signal = -rsi_norm * 0.3  # Moderate contrarian
+        if abs(rsi_norm) > 0.5:
+            mr_signal += -rsi_norm * 0.2  # Additional push at extremes
+
+        # --- 5. Funding rate signal ---
         funding_signal = 0.0
         if features.funding_rate is not None:
             # Positive funding = longs paying shorts = bullish sentiment
@@ -106,37 +132,55 @@ class HeuristicModel(ProbabilityModel):
                 # Extreme funding: contrarian signal
                 funding_signal = -math.copysign(0.3, fr)
 
-        # --- 4. Mean reversion component ---
-        # RSI-based: overbought/oversold
-        rsi_norm = (features.rsi_14 - 50) / 50  # [-1, 1]
-        # When RSI is extreme, bet on reversion
-        if abs(rsi_norm) > 0.4:
-            mr_signal = -rsi_norm * 0.5  # Contrarian
-        else:
-            mr_signal = 0.0  # Neutral zone, no signal
-
-        # --- 5. Time decay signal ---
-        # As market approaches expiry, pull toward implied market price
-        # (reduces unnecessary trades near expiry)
+        # --- 6. Time decay signal ---
+        # Reduced weight: dampen signals near expiry but don't negate them
         time_decay_signal = 0.0
         if features.time_to_expiry_normalized < 0.3:
-            # Pull toward 0.0 adjustment (i.e., toward 0.50 base)
             decay_strength = 1.0 - (features.time_to_expiry_normalized / 0.3)
-            # Counteract other signals proportionally
+            # Mild dampening rather than full counteraction
             other_adjustment = (
                 self.MOMENTUM_WEIGHT * mom_signal
                 + self.ORDERFLOW_WEIGHT * flow_signal
                 + self.MEAN_REVERSION_WEIGHT * mr_signal
             )
-            time_decay_signal = -other_adjustment * decay_strength
+            time_decay_signal = -other_adjustment * decay_strength * 0.5
+
+        # --- Apply session weight multipliers ---
+        m = self._weight_multipliers
+        mom_w = self.MOMENTUM_WEIGHT * m.get("momentum", 1.0)
+        tech_w = self.TECHNICAL_WEIGHT * m.get("technical", 1.0)
+        flow_w = self.ORDERFLOW_WEIGHT * m.get("orderflow", 1.0)
+        mr_w = self.MEAN_REVERSION_WEIGHT * m.get("mean_reversion", 1.0)
+        fund_w = self.FUNDING_WEIGHT * m.get("funding", 1.0)
+        td_w = self.TIME_DECAY_WEIGHT * m.get("time_decay", 1.0)
+
+        # Re-normalize so weights sum to the original total
+        original_total = (
+            self.MOMENTUM_WEIGHT
+            + self.TECHNICAL_WEIGHT
+            + self.ORDERFLOW_WEIGHT
+            + self.MEAN_REVERSION_WEIGHT
+            + self.FUNDING_WEIGHT
+            + self.TIME_DECAY_WEIGHT
+        )
+        adjusted_total = mom_w + tech_w + flow_w + mr_w + fund_w + td_w
+        if adjusted_total > 0:
+            scale = original_total / adjusted_total
+            mom_w *= scale
+            tech_w *= scale
+            flow_w *= scale
+            mr_w *= scale
+            fund_w *= scale
+            td_w *= scale
 
         # --- Combine signals ---
         raw_adjustment = (
-            self.MOMENTUM_WEIGHT * mom_signal
-            + self.ORDERFLOW_WEIGHT * flow_signal
-            + self.FUNDING_WEIGHT * funding_signal
-            + self.MEAN_REVERSION_WEIGHT * mr_signal
-            + self.TIME_DECAY_WEIGHT * time_decay_signal
+            mom_w * mom_signal
+            + tech_w * tech_signal
+            + flow_w * flow_signal
+            + mr_w * mr_signal
+            + fund_w * funding_signal
+            + td_w * time_decay_signal
         )
 
         # Clamp adjustment
@@ -164,6 +208,7 @@ class HeuristicModel(ProbabilityModel):
         # Features used for explainability
         features_used = {
             "mom_signal": round(mom_signal, 4),
+            "tech_signal": round(tech_signal, 4),
             "flow_signal": round(flow_signal, 4),
             "funding_signal": round(funding_signal, 4),
             "mr_signal": round(mr_signal, 4),
@@ -197,6 +242,7 @@ class HeuristicModel(ProbabilityModel):
         - Spread is tight (liquid market)
         - Volatility is moderate (not extreme)
         - Sufficient time to expiry
+        - Orderbook depth agrees with signal direction
         """
         conf = 0.5  # Base confidence
 
@@ -224,11 +270,30 @@ class HeuristicModel(ProbabilityModel):
         elif features.time_to_expiry_normalized > 0.5:
             conf += 0.05
 
+        # Time decay confidence penalty: reduce confidence near expiry
+        # instead of negating probability in signal combination
+        if features.time_to_expiry_normalized < 0.3:
+            time_norm = features.time_to_expiry_normalized
+            conf -= (1.0 - time_norm / 0.3) * 0.25
+
         # Volume bonus: higher volume = more reliable orderbook
         if features.kalshi_volume > 100:
             conf += 0.05
         elif features.kalshi_volume < 10:
             conf -= 0.10
+
+        # Orderbook depth imbalance: strong depth agreeing with signal
+        # direction boosts confidence, opposing depth reduces it
+        depth_imb = features.orderbook_depth_imbalance
+        if abs(depth_imb) > 0.3:
+            # Determine if depth agrees with overall signal direction
+            # (positive imbalance = YES-side depth dominance)
+            # Use order flow as proxy for signal direction
+            signal_dir = features.order_flow_imbalance
+            if depth_imb * signal_dir > 0:
+                conf += 0.05  # Depth agrees with signal
+            else:
+                conf -= 0.05  # Depth opposes signal
 
         return max(0.0, min(1.0, conf))
 

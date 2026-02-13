@@ -178,3 +178,149 @@ def momentum_divergence(
     Negative = short-term lagging (momentum decelerating / reversal).
     """
     return short_momentum - long_momentum
+
+
+def bollinger_band_position(
+    prices: np.ndarray, window: int = 20, num_std: float = 2.0
+) -> float:
+    """Position within Bollinger Bands as [-1, 1].
+
+    -1 = at lower band, 0 = at middle (SMA), +1 = at upper band.
+    Combines volatility context with mean-reversion zone info.
+    """
+    if len(prices) < window:
+        return 0.0
+
+    data = prices[-window:].astype(float)
+    sma = float(np.mean(data))
+    std = float(np.std(data))
+
+    if std == 0:
+        return 0.0
+
+    band_width = num_std * std
+    position = (float(prices[-1]) - sma) / band_width
+    return float(np.clip(position, -1.0, 1.0))
+
+
+def macd_signal(
+    prices: np.ndarray,
+    fast: int = 60,
+    slow: int = 130,
+    signal_period: int = 45,
+) -> tuple[float, float, float]:
+    """MACD indicator returning (macd_line, signal_line, histogram).
+
+    Default periods are scaled for tick data (fast=60, slow=130, signal=45).
+    Provides trend confirmation less noisy than raw momentum.
+    """
+    if len(prices) < slow + signal_period:
+        return (0.0, 0.0, 0.0)
+
+    data = prices.astype(float)
+
+    # EMA helper
+    def _ema(arr: np.ndarray, span: int) -> np.ndarray:
+        alpha = 2.0 / (span + 1)
+        result = np.empty_like(arr)
+        result[0] = arr[0]
+        for i in range(1, len(arr)):
+            result[i] = alpha * arr[i] + (1 - alpha) * result[i - 1]
+        return result
+
+    fast_ema = _ema(data, fast)
+    slow_ema = _ema(data, slow)
+    macd_line = fast_ema - slow_ema
+
+    signal_line = _ema(macd_line, signal_period)
+    histogram = macd_line - signal_line
+
+    return (float(macd_line[-1]), float(signal_line[-1]), float(histogram[-1]))
+
+
+def rate_of_change_acceleration(prices: np.ndarray, window: int = 30) -> float:
+    """2nd derivative of price: is momentum increasing or decreasing?
+
+    Computes (ROC_now - ROC_prev) / window where ROC = price change over window.
+    Catches inflection points before raw momentum does.
+    """
+    if len(prices) < 2 * window + 1:
+        return 0.0
+
+    data = prices.astype(float)
+    current = data[-1]
+    mid = data[-window - 1]
+    prev = data[-2 * window - 1]
+
+    if mid == 0 or prev == 0:
+        return 0.0
+
+    roc_now = (current - mid) / mid
+    roc_prev = (mid - prev) / prev
+
+    return (roc_now - roc_prev) / window
+
+
+def volume_weighted_momentum(
+    prices: np.ndarray, volumes: np.ndarray, window: int = 60
+) -> float:
+    """Momentum weighted by trade volume.
+
+    Big-volume moves produce a stronger signal; low-volume drift is weaker.
+    Returns a volume-weighted sum of per-tick returns.
+    """
+    if len(prices) < 2 or len(volumes) < 2:
+        return 0.0
+
+    min_len = min(len(prices), len(volumes))
+    p = prices[-min_len:].astype(float)
+    v = volumes[-min_len:].astype(float)
+
+    # Use the last `window` ticks
+    if len(p) > window:
+        p = p[-window:]
+        v = v[-window:]
+
+    if len(p) < 2:
+        return 0.0
+
+    returns = np.diff(p) / p[:-1]
+    vol_weights = v[1:]  # align volumes with returns
+
+    total_vol = np.sum(vol_weights)
+    if total_vol == 0:
+        return 0.0
+
+    return float(np.sum(returns * vol_weights) / total_vol)
+
+
+def orderbook_depth_imbalance(
+    yes_levels: list, no_levels: list, max_depth: int = 5
+) -> float:
+    """Weight-decayed imbalance across multiple orderbook levels.
+
+    Top of book weighted 3x, 2nd level 2x, deeper levels 1x.
+    Returns value in [-1, 1].
+    """
+    # Weight schedule: level 0 -> 3x, level 1 -> 2x, level 2+ -> 1x
+    def _weighted_depth(levels: list, depth: int) -> float:
+        total = 0.0
+        for i, level in enumerate(levels[:depth]):
+            qty = level.quantity if hasattr(level, "quantity") else 0
+            if i == 0:
+                weight = 3.0
+            elif i == 1:
+                weight = 2.0
+            else:
+                weight = 1.0
+            total += qty * weight
+        return total
+
+    yes_depth = _weighted_depth(yes_levels, max_depth)
+    no_depth = _weighted_depth(no_levels, max_depth)
+
+    total = yes_depth + no_depth
+    if total == 0:
+        return 0.0
+
+    return float((yes_depth - no_depth) / total)

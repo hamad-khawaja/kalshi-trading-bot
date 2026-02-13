@@ -9,12 +9,17 @@ import numpy as np
 from src.config import FeatureConfig
 from src.data.models import FeatureVector, MarketSnapshot
 from src.features.indicators import (
+    bollinger_band_position,
+    macd_signal,
     momentum,
     order_flow_imbalance,
+    orderbook_depth_imbalance,
+    rate_of_change_acceleration,
     rsi,
     spread_ratio,
     time_decay_factor,
     volatility_realized,
+    volume_weighted_momentum,
     vwap,
     vwap_deviation,
 )
@@ -77,6 +82,19 @@ class FeatureEngine:
         # Time to expiry
         time_norm = time_decay_factor(snapshot.time_to_expiry_seconds)
 
+        # New technical indicators
+        bb_pos = bollinger_band_position(prices, window=20)
+
+        _, _, macd_hist = macd_signal(prices, fast=60, slow=130, signal_period=45)
+
+        roc_accel = rate_of_change_acceleration(prices, window=30)
+
+        vol_mom = volume_weighted_momentum(prices_1min, volumes_1min, window=60)
+
+        ob_depth = orderbook_depth_imbalance(
+            ob.yes_levels, ob.no_levels, max_depth=5
+        )
+
         return FeatureVector(
             timestamp=snapshot.timestamp,
             market_ticker=snapshot.market_ticker,
@@ -97,6 +115,11 @@ class FeatureEngine:
             long_short_ratio=snapshot.long_short_ratio,
             kalshi_volume=snapshot.volume,
             implied_probability=implied_prob,
+            bollinger_position=bb_pos,
+            macd_histogram=macd_hist,
+            roc_acceleration=roc_accel,
+            volume_weighted_momentum=vol_mom,
+            orderbook_depth_imbalance=ob_depth,
         )
 
     def _compute_momentum(self, prices: np.ndarray, window_seconds: int) -> float:

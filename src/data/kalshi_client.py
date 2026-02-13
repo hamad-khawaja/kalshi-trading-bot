@@ -188,7 +188,8 @@ class KalshiRestClient:
         # API returns two formats:
         #   - Dollar: "yes_dollars" / "no_dollars" as [[price_str, qty], ...]
         #   - Cent: "yes" / "no" as [[price_cents, qty], ...]
-        for entry in ob.get("yes_dollars", []):
+        # Note: API may return null instead of [] for empty sides.
+        for entry in ob.get("yes_dollars") or []:
             if isinstance(entry, list) and len(entry) >= 2:
                 yes_levels.append(
                     OrderbookLevel(
@@ -197,7 +198,7 @@ class KalshiRestClient:
                     )
                 )
 
-        for entry in ob.get("no_dollars", []):
+        for entry in ob.get("no_dollars") or []:
             if isinstance(entry, list) and len(entry) >= 2:
                 no_levels.append(
                     OrderbookLevel(
@@ -208,7 +209,7 @@ class KalshiRestClient:
 
         # Fallback: parse cent-based fields
         if not yes_levels and not no_levels:
-            for entry in ob.get("yes", []):
+            for entry in ob.get("yes") or []:
                 if isinstance(entry, list) and len(entry) >= 2:
                     yes_levels.append(
                         OrderbookLevel(
@@ -216,7 +217,7 @@ class KalshiRestClient:
                             quantity=int(entry[1]),
                         )
                     )
-            for entry in ob.get("no", []):
+            for entry in ob.get("no") or []:
                 if isinstance(entry, list) and len(entry) >= 2:
                     no_levels.append(
                         OrderbookLevel(
@@ -353,6 +354,7 @@ class KalshiRestClient:
             event_ticker=m.get("event_ticker", ""),
             title=m.get("title", ""),
             subtitle=m.get("subtitle", ""),
+            yes_sub_title=m.get("yes_sub_title", ""),
             status=m.get("status", ""),
             yes_bid=_parse_decimal(m.get("yes_bid_dollars", m.get("yes_bid"))),
             yes_ask=_parse_decimal(m.get("yes_ask_dollars", m.get("yes_ask"))),

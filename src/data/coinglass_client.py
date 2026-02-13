@@ -58,25 +58,39 @@ class CoinglassClient:
         """Store value in cache."""
         self._cache[key] = (time.time(), value)
 
+    MAX_RETRIES = 3
+    RETRY_BASE_DELAY = 1.0  # seconds
+
     async def _request(self, endpoint: str, params: dict | None = None) -> dict:
-        """Make authenticated GET request to Coinglass."""
+        """Make authenticated GET request to Coinglass with retry and backoff."""
         if not self._session:
             raise RuntimeError("Client not connected")
 
         url = f"{self._config.base_url}{endpoint}"
-        try:
-            async with self._session.get(url, params=params) as resp:
-                if resp.status != 200:
-                    logger.warning(
-                        "coinglass_error",
+        for attempt in range(self.MAX_RETRIES):
+            try:
+                async with self._session.get(url, params=params) as resp:
+                    if resp.status == 200:
+                        return await resp.json()
+                    logger.debug(
+                        "coinglass_retry",
                         status=resp.status,
                         endpoint=endpoint,
+                        attempt=attempt + 1,
                     )
-                    return {}
-                return await resp.json()
-        except aiohttp.ClientError as e:
-            logger.warning("coinglass_request_error", error=str(e))
-            return {}
+            except aiohttp.ClientError as e:
+                logger.debug(
+                    "coinglass_retry_error",
+                    error=str(e),
+                    attempt=attempt + 1,
+                )
+
+            if attempt < self.MAX_RETRIES - 1:
+                delay = self.RETRY_BASE_DELAY * (2 ** attempt)
+                await asyncio.sleep(delay)
+
+        logger.warning("coinglass_request_failed", endpoint=endpoint)
+        return {}
 
     async def get_funding_rate(self, symbol: str = "BTC") -> FundingRate:
         """Get current aggregate BTC funding rate."""

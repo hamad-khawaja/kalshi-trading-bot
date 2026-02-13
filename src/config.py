@@ -45,8 +45,14 @@ class StrategyConfig(BaseModel):
     min_edge_threshold: float = 0.03
     max_edge_threshold: float = 0.25
     confidence_weight: float = 0.7
+    directional_max_spread: float = 0.25  # Skip directional trades when spread > this
+    directional_min_depth: int = 5  # Require at least this many contracts in orderbook
     use_market_maker: bool = True
     mm_min_spread: float = 0.05
+    mm_max_spread: float = 0.30
+    mm_max_inventory: int = 37  # Stop MM when holding this many contracts
+    use_time_profiles: bool = True
+    time_profile_lookback_days: int = 30
 
 
 class RiskConfig(BaseModel):
@@ -66,6 +72,12 @@ class FeatureConfig(BaseModel):
     momentum_windows: list[int] = [15, 60, 180, 600]
     volatility_window: int = 300
     orderbook_depth: int = 10
+
+
+class DashboardConfig(BaseModel):
+    enabled: bool = True
+    host: str = "0.0.0.0"
+    port: int = 8080
 
 
 class LoggingConfig(BaseModel):
@@ -88,6 +100,7 @@ class BotSettings(BaseModel):
     features: FeatureConfig = FeatureConfig()
     logging: LoggingConfig = LoggingConfig()
     database: DatabaseConfig = DatabaseConfig()
+    dashboard: DashboardConfig = DashboardConfig()
 
     @model_validator(mode="before")
     @classmethod
