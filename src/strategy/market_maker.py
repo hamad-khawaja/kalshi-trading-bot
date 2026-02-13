@@ -30,6 +30,8 @@ class MarketMaker:
     def __init__(self, config: StrategyConfig):
         self._config = config
         self._min_spread = config.mm_min_spread
+        self._max_spread = config.mm_max_spread
+        self._max_inventory = config.mm_max_inventory
 
     def generate_quotes(
         self,
@@ -45,12 +47,32 @@ class MarketMaker:
         if spread is None or float(spread) < self._min_spread:
             return []
 
+        # Don't market-make into dead/illiquid markets
+        if float(spread) > self._max_spread:
+            logger.debug(
+                "mm_skipped_spread_too_wide",
+                ticker=snapshot.market_ticker,
+                spread=float(spread),
+                max_spread=self._max_spread,
+            )
+            return []
+
         # Don't market-make with low confidence
         if prediction.confidence < 0.3:
             return []
 
         # Don't market-make too close to expiry
         if snapshot.time_to_expiry_seconds < 120:
+            return []
+
+        # Don't market-make when inventory is already large
+        if abs(current_position) >= self._max_inventory:
+            logger.debug(
+                "mm_skipped_inventory_full",
+                ticker=snapshot.market_ticker,
+                position=current_position,
+                cap=self._max_inventory,
+            )
             return []
 
         ob = snapshot.orderbook

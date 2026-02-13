@@ -15,6 +15,7 @@ class PriceTick(BaseModel):
     price: Decimal
     volume: Decimal
     timestamp: datetime
+    is_taker_buy: bool | None = None
 
 
 class OrderbookLevel(BaseModel):
@@ -89,6 +90,7 @@ class Market(BaseModel):
     event_ticker: str = ""
     title: str = ""
     subtitle: str = ""
+    yes_sub_title: str = ""
     status: str = ""
     yes_bid: Decimal | None = None
     yes_ask: Decimal | None = None
@@ -193,6 +195,15 @@ class LongShortRatio(BaseModel):
     timestamp: datetime | None = None
 
 
+class LiquidationData(BaseModel):
+    """Aggregated BTC liquidation data."""
+
+    long_usd: float = 0.0
+    short_usd: float = 0.0
+    total_usd: float = 0.0
+    timestamp: datetime | None = None
+
+
 class MarketSnapshot(BaseModel):
     """Immutable snapshot of all market data at a point in time."""
 
@@ -205,10 +216,19 @@ class MarketSnapshot(BaseModel):
     orderbook: Orderbook
     implied_yes_prob: Decimal | None = None
     spread: Decimal | None = None
+    strike_price: Decimal | None = None
+    statistical_fair_value: float | None = None
+    binance_btc_price: Decimal | None = None
+    cross_exchange_spread: float | None = None
+    cross_exchange_lead: float | None = None
     funding_rate: float | None = None
     open_interest: float | None = None
     open_interest_change: float | None = None
     long_short_ratio: float | None = None
+    liquidation_long_usd: float | None = None
+    liquidation_short_usd: float | None = None
+    taker_buy_volume: float | None = None
+    taker_sell_volume: float | None = None
     time_to_expiry_seconds: float = 0.0
     volume: int = 0
 
@@ -269,6 +289,16 @@ class FeatureVector(BaseModel):
     long_short_ratio: float | None = None
     kalshi_volume: int = 0
     implied_probability: float = 0.5
+    bollinger_position: float = 0.0
+    macd_histogram: float = 0.0
+    roc_acceleration: float = 0.0
+    volume_weighted_momentum: float = 0.0
+    orderbook_depth_imbalance: float = 0.0
+    cross_exchange_spread: float = 0.0
+    cross_exchange_lead: float = 0.0
+    liquidation_intensity: float = 0.0
+    liquidation_imbalance: float = 0.0
+    taker_buy_sell_ratio: float = 0.0
 
     def to_array(self) -> list[float]:
         """Convert to flat list for model input, replacing None with 0."""
@@ -290,6 +320,16 @@ class FeatureVector(BaseModel):
             self.long_short_ratio or 0.0,
             float(self.kalshi_volume),
             self.implied_probability,
+            self.bollinger_position,
+            self.macd_histogram,
+            self.roc_acceleration,
+            self.volume_weighted_momentum,
+            self.orderbook_depth_imbalance,
+            self.cross_exchange_spread,
+            self.cross_exchange_lead,
+            self.liquidation_intensity,
+            self.liquidation_imbalance,
+            self.taker_buy_sell_ratio,
         ]
 
     @staticmethod
@@ -313,6 +353,16 @@ class FeatureVector(BaseModel):
             "long_short_ratio",
             "kalshi_volume",
             "implied_probability",
+            "bollinger_position",
+            "macd_histogram",
+            "roc_acceleration",
+            "volume_weighted_momentum",
+            "orderbook_depth_imbalance",
+            "cross_exchange_spread",
+            "cross_exchange_lead",
+            "liquidation_intensity",
+            "liquidation_imbalance",
+            "taker_buy_sell_ratio",
         ]
 
 

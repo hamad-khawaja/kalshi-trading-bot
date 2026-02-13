@@ -35,6 +35,12 @@ class BinanceConfig(BaseModel):
     symbol: str = "BTCUSDT"
 
 
+class SecondaryFeedConfig(BaseModel):
+    enabled: bool = True
+    ws_url: str = "wss://ws.kraken.com/v2"
+    symbol: str = "BTC/USD"
+
+
 class CoinglassConfig(BaseModel):
     api_key: str = ""
     base_url: str = "https://open-api-v3.coinglass.com/api"
@@ -45,20 +51,29 @@ class StrategyConfig(BaseModel):
     min_edge_threshold: float = 0.03
     max_edge_threshold: float = 0.25
     confidence_weight: float = 0.7
+    confidence_min: float = 0.45  # Minimum model confidence to trade
+    directional_max_spread: float = 0.25  # Skip directional trades when spread > this
+    directional_min_depth: int = 5  # Require at least this many contracts in orderbook
+    use_statistical_fair_value: bool = True  # Use fair value when orderbook is thin
+    thin_book_edge_multiplier: float = 1.5  # Require 1.5x edge on thin orderbooks
     use_market_maker: bool = True
     mm_min_spread: float = 0.05
+    mm_max_spread: float = 0.30
+    mm_max_inventory: int = 37  # Stop MM when holding this many contracts
+    use_time_profiles: bool = True
+    time_profile_lookback_days: int = 30
 
 
 class RiskConfig(BaseModel):
-    max_position_per_market: int = 50
-    max_total_exposure_dollars: float = 500.0
-    max_daily_loss_dollars: float = 100.0
-    max_concurrent_positions: int = 5
+    max_position_per_market: int = 10
+    max_total_exposure_dollars: float = 200.0
+    max_daily_loss_dollars: float = 30.0
+    max_concurrent_positions: int = 3
     kelly_fraction: float = 0.25
     min_balance_dollars: float = 50.0
-    max_trades_per_day: int = 100
+    max_trades_per_day: int = 50
     cooldown_after_streak_minutes: int = 30
-    max_consecutive_losses: int = 5
+    max_consecutive_losses: int = 4
 
 
 class FeatureConfig(BaseModel):
@@ -66,6 +81,12 @@ class FeatureConfig(BaseModel):
     momentum_windows: list[int] = [15, 60, 180, 600]
     volatility_window: int = 300
     orderbook_depth: int = 10
+
+
+class DashboardConfig(BaseModel):
+    enabled: bool = True
+    host: str = "0.0.0.0"
+    port: int = 8080
 
 
 class LoggingConfig(BaseModel):
@@ -82,12 +103,14 @@ class BotSettings(BaseModel):
     mode: Literal["paper", "live"] = "paper"
     kalshi: KalshiConfig = KalshiConfig()
     binance: BinanceConfig = BinanceConfig()
+    secondary_feed: SecondaryFeedConfig = SecondaryFeedConfig()
     coinglass: CoinglassConfig = CoinglassConfig()
     strategy: StrategyConfig = StrategyConfig()
     risk: RiskConfig = RiskConfig()
     features: FeatureConfig = FeatureConfig()
     logging: LoggingConfig = LoggingConfig()
     database: DatabaseConfig = DatabaseConfig()
+    dashboard: DashboardConfig = DashboardConfig()
 
     @model_validator(mode="before")
     @classmethod

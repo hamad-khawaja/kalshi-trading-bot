@@ -80,7 +80,7 @@ class OrderManager:
             action=signal.action,
             count=count,
             client_order_id=client_order_id,
-            post_only=signal.signal_type == "market_making",
+            post_only=True,  # Always use maker orders to pay 1.75% vs 7% taker fee
         )
 
         # Set price based on side
@@ -321,6 +321,46 @@ class OrderManager:
     def get_order(self, order_id: str) -> OrderState | None:
         """Get order state by ID."""
         return self._pending_orders.get(order_id)
+
+    async def check_resting_fills(self) -> list[OrderState]:
+        """Poll Kalshi for fill updates on resting orders.
+
+        Returns list of OrderStates that received new fills.
+        """
+        if self._paper_mode:
+            return []
+
+        newly_filled: list[OrderState] = []
+        for order_id, state in list(self._pending_orders.items()):
+            if state.is_terminal:
+                continue
+            try:
+                order_data = await self._client.get_order(order_id)
+                new_fill_count = order_data.get("fill_count", 0)
+                remaining = order_data.get("remaining_count", 0)
+                api_status = order_data.get("status", "")
+
+                if new_fill_count > state.filled_count:
+                    state.filled_count = new_fill_count
+                    state.last_updated = datetime.now(timezone.utc)
+                    newly_filled.append(state)
+                    logger.info(
+                        "resting_order_filled",
+                        order_id=order_id,
+                        ticker=state.signal.market_ticker,
+                        filled=new_fill_count,
+                        remaining=remaining,
+                    )
+
+                if remaining == 0 or api_status in ("filled", "canceled"):
+                    state.status = "filled" if new_fill_count > 0 else "canceled"
+                elif new_fill_count > 0:
+                    state.status = "partially_filled"
+
+            except Exception:
+                logger.debug("resting_order_check_error", order_id=order_id)
+
+        return newly_filled
 
     def cleanup_terminal_orders(self, max_age_seconds: float = 3600) -> int:
         """Remove old terminal orders from memory."""

@@ -188,7 +188,8 @@ class KalshiRestClient:
         # API returns two formats:
         #   - Dollar: "yes_dollars" / "no_dollars" as [[price_str, qty], ...]
         #   - Cent: "yes" / "no" as [[price_cents, qty], ...]
-        for entry in ob.get("yes_dollars", []):
+        # Note: API may return null instead of [] for empty sides.
+        for entry in ob.get("yes_dollars") or []:
             if isinstance(entry, list) and len(entry) >= 2:
                 yes_levels.append(
                     OrderbookLevel(
@@ -197,7 +198,7 @@ class KalshiRestClient:
                     )
                 )
 
-        for entry in ob.get("no_dollars", []):
+        for entry in ob.get("no_dollars") or []:
             if isinstance(entry, list) and len(entry) >= 2:
                 no_levels.append(
                     OrderbookLevel(
@@ -208,7 +209,7 @@ class KalshiRestClient:
 
         # Fallback: parse cent-based fields
         if not yes_levels and not no_levels:
-            for entry in ob.get("yes", []):
+            for entry in ob.get("yes") or []:
                 if isinstance(entry, list) and len(entry) >= 2:
                     yes_levels.append(
                         OrderbookLevel(
@@ -216,7 +217,7 @@ class KalshiRestClient:
                             quantity=int(entry[1]),
                         )
                     )
-            for entry in ob.get("no", []):
+            for entry in ob.get("no") or []:
                 if isinstance(entry, list) and len(entry) >= 2:
                     no_levels.append(
                         OrderbookLevel(
@@ -231,6 +232,19 @@ class KalshiRestClient:
             no_levels=no_levels,
             timestamp=now,
         )
+
+    async def get_market_result(self, ticker: str) -> str | None:
+        """Get the settlement result for a market ('yes', 'no', or None if not settled)."""
+        try:
+            market = await self.get_market(ticker)
+            if market.status == "settled":
+                # The result is in the raw API data
+                data = await self._request("GET", f"/markets/{ticker}")
+                m = data.get("market", data)
+                return m.get("result", None)
+        except Exception:
+            pass
+        return None
 
     async def get_trades(self, ticker: str, limit: int = 100) -> list[dict]:
         """Get recent trades for a market."""
@@ -310,6 +324,11 @@ class KalshiRestClient:
             )
         return positions
 
+    async def get_order(self, order_id: str) -> dict:
+        """Get a single order by ID."""
+        data = await self._request("GET", f"/portfolio/orders/{order_id}")
+        return data.get("order", data)
+
     async def get_orders(
         self,
         ticker: str | None = None,
@@ -353,6 +372,7 @@ class KalshiRestClient:
             event_ticker=m.get("event_ticker", ""),
             title=m.get("title", ""),
             subtitle=m.get("subtitle", ""),
+            yes_sub_title=m.get("yes_sub_title", ""),
             status=m.get("status", ""),
             yes_bid=_parse_decimal(m.get("yes_bid_dollars", m.get("yes_bid"))),
             yes_ask=_parse_decimal(m.get("yes_ask_dollars", m.get("yes_ask"))),

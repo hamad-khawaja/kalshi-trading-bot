@@ -9,12 +9,17 @@ import numpy as np
 from src.config import FeatureConfig
 from src.data.models import FeatureVector, MarketSnapshot
 from src.features.indicators import (
+    bollinger_band_position,
+    macd_signal,
     momentum,
     order_flow_imbalance,
+    orderbook_depth_imbalance,
+    rate_of_change_acceleration,
     rsi,
     spread_ratio,
     time_decay_factor,
     volatility_realized,
+    volume_weighted_momentum,
     vwap,
     vwap_deviation,
 )
@@ -77,6 +82,19 @@ class FeatureEngine:
         # Time to expiry
         time_norm = time_decay_factor(snapshot.time_to_expiry_seconds)
 
+        # New technical indicators
+        bb_pos = bollinger_band_position(prices, window=20)
+
+        _, _, macd_hist = macd_signal(prices, fast=60, slow=130, signal_period=45)
+
+        roc_accel = rate_of_change_acceleration(prices, window=30)
+
+        vol_mom = volume_weighted_momentum(prices_1min, volumes_1min, window=60)
+
+        ob_depth = orderbook_depth_imbalance(
+            ob.yes_levels, ob.no_levels, max_depth=5
+        )
+
         return FeatureVector(
             timestamp=snapshot.timestamp,
             market_ticker=snapshot.market_ticker,
@@ -97,7 +115,63 @@ class FeatureEngine:
             long_short_ratio=snapshot.long_short_ratio,
             kalshi_volume=snapshot.volume,
             implied_probability=implied_prob,
+            bollinger_position=bb_pos,
+            macd_histogram=macd_hist,
+            roc_acceleration=roc_accel,
+            volume_weighted_momentum=vol_mom,
+            orderbook_depth_imbalance=ob_depth,
+            cross_exchange_spread=snapshot.cross_exchange_spread or 0.0,
+            cross_exchange_lead=snapshot.cross_exchange_lead or 0.0,
+            liquidation_intensity=self._compute_liquidation_intensity(snapshot),
+            liquidation_imbalance=self._compute_liquidation_imbalance(snapshot),
+            taker_buy_sell_ratio=self._compute_taker_ratio(snapshot),
         )
+
+    @staticmethod
+    def _compute_liquidation_intensity(snapshot: MarketSnapshot) -> float:
+        """Compute liquidation intensity as a normalized spike indicator.
+
+        High values indicate liquidation cascades.
+        Normalized using a baseline of $1M in 15 minutes (typical calm period).
+        """
+        long_usd = snapshot.liquidation_long_usd or 0.0
+        short_usd = snapshot.liquidation_short_usd or 0.0
+        total = long_usd + short_usd
+        if total <= 0:
+            return 0.0
+        # Normalize: $1M baseline, tanh for smooth clamping
+        import math
+        return math.tanh(total / 1_000_000)
+
+    @staticmethod
+    def _compute_liquidation_imbalance(snapshot: MarketSnapshot) -> float:
+        """Compute liquidation imbalance: (short - long) / total.
+
+        Positive = more short liquidations = price going up (bullish).
+        Negative = more long liquidations = price going down (bearish).
+        Returns [-1, 1].
+        """
+        long_usd = snapshot.liquidation_long_usd or 0.0
+        short_usd = snapshot.liquidation_short_usd or 0.0
+        total = long_usd + short_usd
+        if total <= 0:
+            return 0.0
+        return (short_usd - long_usd) / total
+
+    @staticmethod
+    def _compute_taker_ratio(snapshot: MarketSnapshot) -> float:
+        """Compute net taker buy/sell ratio.
+
+        Positive = more taker buying = bullish aggression.
+        Negative = more taker selling = bearish aggression.
+        Returns [-1, 1].
+        """
+        buy = snapshot.taker_buy_volume or 0.0
+        sell = snapshot.taker_sell_volume or 0.0
+        total = buy + sell
+        if total <= 0:
+            return 0.0
+        return (buy - sell) / total
 
     def _compute_momentum(self, prices: np.ndarray, window_seconds: int) -> float:
         """Compute momentum using approximate tick count for window.

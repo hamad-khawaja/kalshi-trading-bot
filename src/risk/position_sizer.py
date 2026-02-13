@@ -9,6 +9,7 @@ import structlog
 
 from src.config import RiskConfig
 from src.data.models import TradeSignal
+from src.risk.volatility import VolatilityTracker
 
 logger = structlog.get_logger()
 
@@ -31,6 +32,7 @@ class PositionSizer:
         balance_dollars: Decimal,
         current_exposure_dollars: Decimal,
         current_market_position: int = 0,
+        vol_tracker: VolatilityTracker | None = None,
     ) -> int:
         """Calculate position size in number of contracts.
 
@@ -63,6 +65,11 @@ class PositionSizer:
         # Apply fractional Kelly
         f = kelly_f * self._kelly_fraction
 
+        # Adjust Kelly fraction for volatility regime
+        if vol_tracker is not None:
+            vol_adjusted = vol_tracker.adjust_kelly_fraction(self._kelly_fraction)
+            f *= vol_adjusted / self._kelly_fraction
+
         # Scale by confidence
         f *= signal.confidence
 
@@ -78,6 +85,7 @@ class PositionSizer:
             count = 1
 
         # Apply caps
+        pre_cap_count = count
         count = self._apply_caps(
             count,
             balance_dollars,
@@ -94,6 +102,20 @@ class PositionSizer:
                 fractional_f=round(f, 4),
                 bet_dollars=round(bet_dollars, 2),
                 count=count,
+            )
+        else:
+            logger.debug(
+                "position_size_zero",
+                ticker=signal.market_ticker,
+                kelly_f=round(kelly_f, 4),
+                fractional_f=round(f, 4),
+                bet_dollars=round(bet_dollars, 2),
+                pre_cap_count=pre_cap_count,
+                price=price,
+                balance=float(balance_dollars),
+                model_prob=round(model_prob, 4),
+                current_position=current_market_position,
+                exposure=float(current_exposure_dollars),
             )
 
         return count

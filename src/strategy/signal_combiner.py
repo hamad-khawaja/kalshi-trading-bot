@@ -6,6 +6,8 @@ import structlog
 
 from src.config import StrategyConfig
 from src.data.models import MarketSnapshot, PredictionResult, TradeSignal
+from src.data.time_profile import TimeProfiler
+from src.risk.volatility import VolatilityTracker
 from src.strategy.edge_detector import EdgeDetector
 from src.strategy.market_maker import MarketMaker
 
@@ -26,9 +28,17 @@ class SignalCombiner:
     MIN_TIME_TO_TRADE_SECONDS = 60.0  # No new positions < 60s to expiry
     MM_CANCEL_BEFORE_EXPIRY_SECONDS = 30.0  # Cancel MM orders 30s before expiry
 
-    def __init__(self, config: StrategyConfig):
+    def __init__(
+        self,
+        config: StrategyConfig,
+        vol_tracker: VolatilityTracker | None = None,
+        time_profiler: TimeProfiler | None = None,
+    ):
         self._config = config
-        self._edge_detector = EdgeDetector(config)
+        self._time_profiler = time_profiler
+        self._edge_detector = EdgeDetector(
+            config, vol_tracker=vol_tracker, time_profiler=time_profiler
+        )
         self._market_maker = (
             MarketMaker(config) if config.use_market_maker else None
         )
@@ -69,8 +79,13 @@ class SignalCombiner:
             )
             return signals
 
-        # 2. No directional edge — try market making
-        if self._market_maker is not None:
+        # 2. No directional edge — try market making (if session allows)
+        mm_allowed = True
+        if self._time_profiler is not None:
+            session = self._time_profiler.get_current_session()
+            mm_allowed = self._time_profiler.should_market_make(session)
+
+        if self._market_maker is not None and mm_allowed:
             mm_signals = self._market_maker.generate_quotes(
                 prediction, snapshot, current_position
             )

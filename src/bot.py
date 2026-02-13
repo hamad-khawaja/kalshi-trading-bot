@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import signal
 import sys
@@ -11,8 +12,9 @@ from pathlib import Path
 
 import structlog
 
-from src.config import BotSettings, load_settings
+from src.config import BinanceConfig, BotSettings, load_settings
 from src.data.binance_feed import BinanceFeed
+from src.data.time_profile import TimeProfiler
 from src.data.coinglass_client import CoinglassClient
 from src.data.data_hub import DataHub
 from src.data.database import Database
@@ -27,6 +29,7 @@ from src.model.predict import HeuristicModel, ProbabilityModel
 from src.risk.position_sizer import PositionSizer
 from src.risk.risk_manager import RiskManager
 from src.risk.volatility import VolatilityTracker
+from src.dashboard.server import DashboardServer, DashboardState
 from src.strategy.signal_combiner import SignalCombiner
 
 logger = structlog.get_logger()
@@ -57,6 +60,14 @@ class TradingBot:
         self._kalshi_rest = KalshiRestClient(settings.kalshi, self._auth)
         self._kalshi_ws = KalshiWebSocket(settings.kalshi, self._auth)
         self._binance = BinanceFeed(settings.binance)
+        self._secondary_feed: BinanceFeed | None = None
+        if settings.secondary_feed.enabled:
+            self._secondary_feed = BinanceFeed(
+                BinanceConfig(
+                    ws_url=settings.secondary_feed.ws_url,
+                    symbol=settings.secondary_feed.symbol,
+                )
+            )
         self._coinglass = CoinglassClient(settings.coinglass)
         self._scanner = MarketScanner(self._kalshi_rest, settings.kalshi)
         self._data_hub = DataHub(
@@ -65,6 +76,7 @@ class TradingBot:
             self._binance,
             self._coinglass,
             self._scanner,
+            secondary_feed=self._secondary_feed,
         )
         self._db = Database(settings.database.path)
 
@@ -74,19 +86,39 @@ class TradingBot:
         # Model
         self._model: ProbabilityModel = HeuristicModel()
 
-        # Strategy
-        self._signal_combiner = SignalCombiner(settings.strategy)
-
         # Risk
         self._position_sizer = PositionSizer(settings.risk)
         self._risk_manager = RiskManager(settings.risk)
         self._vol_tracker = VolatilityTracker()
+
+        # Time profiler (optional, controlled by config)
+        self._time_profiler: TimeProfiler | None = None
+        if settings.strategy.use_time_profiles:
+            self._time_profiler = TimeProfiler(
+                lookback_days=settings.strategy.time_profile_lookback_days
+            )
+
+        # Strategy (needs vol_tracker, so must come after risk)
+        self._signal_combiner = SignalCombiner(
+            settings.strategy,
+            vol_tracker=self._vol_tracker,
+            time_profiler=self._time_profiler,
+        )
 
         # Execution
         self._order_manager = OrderManager(self._kalshi_rest, settings)
         self._position_tracker = PositionTracker(
             self._kalshi_rest, self._db, paper_mode=(settings.mode == "paper")
         )
+
+        # Dashboard
+        self._dashboard_state = DashboardState()
+        self._dashboard_state.mode = settings.mode
+        self._dashboard_server = DashboardServer(
+            self._dashboard_state,
+            settings.dashboard.host,
+            settings.dashboard.port,
+        ) if settings.dashboard.enabled else None
 
     async def start(self) -> None:
         """Main entry point: connect, subscribe, and run concurrent loops."""
@@ -106,8 +138,17 @@ class TradingBot:
         # Initialize database
         await self._db.connect()
 
+        # Start dashboard
+        self._dashboard_state.start_time = self._start_time
+        if self._dashboard_server:
+            await self._dashboard_server.start()
+
         # Connect data sources
         await self._data_hub.start()
+
+        # Fetch time profiles
+        if self._time_profiler is not None:
+            await self._time_profiler.fetch_hourly_klines()
 
         # Initial market scan
         await self._scanner.scan()
@@ -129,6 +170,12 @@ class TradingBot:
             asyncio.create_task(self._coinglass_poll_loop(), name="coinglass_poll"),
             asyncio.create_task(self._health_check_loop(), name="health_check"),
         ]
+        if self._time_profiler is not None:
+            tasks.append(
+                asyncio.create_task(
+                    self._time_profile_refresh_loop(), name="time_profile_refresh"
+                )
+            )
 
         try:
             # Wait until shutdown signal
@@ -159,27 +206,92 @@ class TradingBot:
     async def _run_one_cycle(self) -> None:
         """Execute one strategy cycle."""
         self._cycle_count += 1
+        ds = self._dashboard_state
+        ds.cycle = self._cycle_count
 
         # Get current market
         market = self._scanner.get_current_market()
         if market is None:
+            ds.add_decision(self._cycle_count, "no_market", "No active market")
             return
 
         ticker = market.ticker
+        close_time = market.close_time or market.expected_expiration_time or market.expiration_time
+        ds.market = {
+            "ticker": ticker,
+            "title": market.title,
+            "yes_sub_title": market.yes_sub_title,
+            "expiry": str(market.expiration_time) if market.expiration_time else None,
+            "close_time": close_time.isoformat() if close_time else None,
+            "volume": market.volume,
+        }
 
         # Build snapshot
         snapshot = await self._data_hub.get_snapshot(ticker)
         if snapshot is None:
+            ds.add_decision(self._cycle_count, "no_market", f"No snapshot for {ticker}")
             return
+
+        ob = snapshot.orderbook
+        ds.snapshot = {
+            "btc_price": float(snapshot.btc_price),
+            "implied_prob": float(snapshot.implied_yes_prob) if snapshot.implied_yes_prob else None,
+            "time_to_expiry": snapshot.time_to_expiry_seconds,
+            "strike_price": float(snapshot.strike_price) if snapshot.strike_price else None,
+            "statistical_fair_value": snapshot.statistical_fair_value,
+            "binance_btc_price": float(snapshot.binance_btc_price) if snapshot.binance_btc_price else None,
+            "cross_exchange_spread": snapshot.cross_exchange_spread,
+            "cross_exchange_lead": snapshot.cross_exchange_lead,
+            "liquidation_long_usd": snapshot.liquidation_long_usd,
+            "liquidation_short_usd": snapshot.liquidation_short_usd,
+            "taker_buy_volume": snapshot.taker_buy_volume,
+            "taker_sell_volume": snapshot.taker_sell_volume,
+            "orderbook": {
+                "best_yes_bid": str(ob.best_yes_bid) if ob.best_yes_bid else None,
+                "best_no_bid": str(ob.best_no_bid) if ob.best_no_bid else None,
+                "spread": str(ob.spread) if ob.spread else None,
+                "yes_depth": ob.yes_bid_depth,
+                "no_depth": ob.no_bid_depth,
+                "implied_prob": float(ob.implied_yes_prob) if ob.implied_yes_prob else None,
+            },
+        }
 
         # Compute features
         features = self._feature_engine.compute(snapshot)
 
+        ds.features = {
+            name: getattr(features, name, 0.0) or 0.0
+            for name in features.feature_names()
+        }
+
         # Update volatility tracker
         self._vol_tracker.update(features.realized_vol_5min)
 
+        # Update model weights based on current session
+        if self._time_profiler is not None and self._time_profiler.loaded:
+            session = self._time_profiler.get_current_session()
+            multipliers = self._time_profiler.get_weight_multipliers(session)
+            self._model.set_weight_multipliers(multipliers)
+
         # Get model prediction
         prediction = self._model.predict(features)
+
+        ds.prediction = {
+            "probability": prediction.probability_yes,
+            "confidence": prediction.confidence,
+            "model": prediction.model_name,
+            "signals": {
+                "momentum": prediction.features_used.get("mom_signal", 0),
+                "technical": prediction.features_used.get("tech_signal", 0),
+                "flow": prediction.features_used.get("flow_signal", 0),
+                "mean_reversion": prediction.features_used.get("mr_signal", 0),
+                "funding": prediction.features_used.get("funding_signal", 0),
+                "cross_exchange": prediction.features_used.get("cross_exchange_signal", 0),
+                "liquidation": prediction.features_used.get("liquidation_signal", 0),
+                "taker_flow": prediction.features_used.get("taker_signal", 0),
+                "time_decay": prediction.features_used.get("time_decay_signal", 0),
+            },
+        }
 
         # Log prediction for data collection
         try:
@@ -201,11 +313,31 @@ class TradingBot:
             prediction, snapshot, current_position
         )
 
+        # Update edge analysis from the internal edge detector
+        edge_analysis = self._signal_combiner._edge_detector.last_analysis
+        if edge_analysis:
+            ds.edge = edge_analysis
+
         if not signals:
+            reason = edge_analysis.get("decision", "No signal generated") if edge_analysis else "No signal generated"
+            ds.add_decision(self._cycle_count, "reject", reason)
             return
+
+        ds.signals = [
+            {"side": s.side, "type": s.signal_type, "edge": s.net_edge, "price": s.suggested_price_dollars}
+            for s in signals
+        ]
 
         # Get balance
         balance = await self._get_balance()
+
+        # Skip market-making signals when balance is too low
+        min_mm_balance = Decimal(str(self._settings.risk.min_balance_dollars * 2))
+        if float(balance) < float(min_mm_balance):
+            signals = [s for s in signals if s.signal_type != "market_making"]
+            if not signals:
+                ds.add_decision(self._cycle_count, "reject", "Balance too low for market making")
+                return
 
         # Process each signal
         for signal_item in signals:
@@ -225,10 +357,19 @@ class TradingBot:
                 balance,
                 self._position_tracker.total_exposure_dollars,
                 effective_position,
+                vol_tracker=self._vol_tracker,
             )
 
             if count <= 0:
+                max_pos = self._settings.risk.max_position_per_market
+                if effective_position >= max_pos:
+                    reason = f"MAX POSITION: {effective_position}/{max_pos} contracts in {signal_item.side.upper()}"
+                else:
+                    reason = f"Size=0 for {signal_item.side} (pos={effective_position}, bal=${float(balance):.0f})"
+                ds.add_decision(self._cycle_count, "reject", reason)
                 continue
+
+            ds.sizing = {"count": count, "side": signal_item.side, "price": signal_item.suggested_price_dollars}
 
             # Risk check
             positions = self._position_tracker.get_all_positions()
@@ -257,6 +398,10 @@ class TradingBot:
                     ticker=ticker,
                     reason=decision.reason,
                 )
+                ds.add_decision(
+                    self._cycle_count, "reject",
+                    f"Risk rejected: {decision.reason}",
+                )
                 continue
 
             final_count = decision.adjusted_count or count
@@ -269,6 +414,7 @@ class TradingBot:
                 order_state = self._order_manager.get_order(order_id)
                 if order_state and order_state.filled_count > 0:
                     self._position_tracker.update_on_fill(order_state)
+                    self._risk_manager._trades_today += 1
                     logger.info(
                         "trade_filled",
                         ticker=ticker,
@@ -279,6 +425,19 @@ class TradingBot:
                         model_prob=round(prediction.probability_yes, 4),
                         cycle=self._cycle_count,
                     )
+                    ds.last_trade = {
+                        "ticker": ticker,
+                        "side": signal_item.side,
+                        "count": order_state.filled_count,
+                        "price": signal_item.suggested_price_dollars,
+                        "edge": signal_item.net_edge,
+                    }
+                    ds.add_decision(
+                        self._cycle_count, "trade",
+                        f"TRADE: buy {order_state.filled_count}x {signal_item.side.upper()} @ {signal_item.suggested_price_dollars}, edge={signal_item.net_edge:.4f}",
+                    )
+                    # Update dashboard positions/risk immediately
+                    self._update_dashboard_positions()
                 else:
                     logger.info(
                         "order_resting",
@@ -288,6 +447,10 @@ class TradingBot:
                         price=signal_item.suggested_price_dollars,
                         edge=signal_item.net_edge,
                         cycle=self._cycle_count,
+                    )
+                    ds.add_decision(
+                        self._cycle_count, "trade",
+                        f"RESTING: {final_count}x {signal_item.side.upper()} @ {signal_item.suggested_price_dollars}, edge={signal_item.net_edge:.4f}",
                     )
 
     async def _market_scan_loop(self) -> None:
@@ -333,7 +496,67 @@ class TradingBot:
 
                 exits = self._position_tracker.check_exits(snapshots)
                 if exits:
+                    # Record P&L for settled positions before removing
+                    for exit_ticker in exits:
+                        pos = self._position_tracker.get_position(exit_ticker)
+                        if pos:
+                            cost = pos.avg_entry_price * pos.count
+
+                            # Try to get actual settlement result from exchange
+                            settlement_result = None
+                            if not self._settings.mode == "paper":
+                                try:
+                                    settlement_result = await self._kalshi_rest.get_market_result(exit_ticker)
+                                except Exception:
+                                    pass
+
+                            if settlement_result is not None:
+                                # Actual settlement: YES pays $1/contract, NO pays $0
+                                won = (settlement_result == pos.side)
+                                payout = Decimal(str(pos.count)) if won else Decimal("0")
+                                pnl = payout - cost
+                                logger.info(
+                                    "position_settled_actual",
+                                    ticker=exit_ticker,
+                                    side=pos.side,
+                                    result=settlement_result,
+                                    won=won,
+                                    count=pos.count,
+                                    entry_price=float(pos.avg_entry_price),
+                                    pnl=float(pnl),
+                                )
+                            else:
+                                # Paper mode or result not available: estimate from implied prob
+                                snap = snapshots.get(exit_ticker)
+                                if snap and snap.implied_yes_prob is not None:
+                                    settle = float(snap.implied_yes_prob) if pos.side == "yes" else (1.0 - float(snap.implied_yes_prob))
+                                    pnl = Decimal(str(settle)) * pos.count - cost
+                                else:
+                                    pnl = -cost  # Worst case estimate
+                                logger.info(
+                                    "position_settled_estimated",
+                                    ticker=exit_ticker,
+                                    side=pos.side,
+                                    count=pos.count,
+                                    entry_price=float(pos.avg_entry_price),
+                                    pnl=float(pnl),
+                                )
+                            self._risk_manager.record_trade(pnl)
                     self._position_tracker.remove_expired_positions(exits)
+                    self._update_dashboard_positions()
+
+                # Check for fills on resting orders (live mode only)
+                newly_filled = await self._order_manager.check_resting_fills()
+                for filled_state in newly_filled:
+                    self._position_tracker.update_on_fill(filled_state)
+                    self._risk_manager._trades_today += 1
+                    logger.info(
+                        "resting_order_fill_detected",
+                        ticker=filled_state.signal.market_ticker,
+                        side=filled_state.signal.side,
+                        filled=filled_state.filled_count,
+                    )
+                    self._update_dashboard_positions()
 
                 # Cancel stale resting orders (older than 90s)
                 await self._order_manager.cancel_stale_orders(max_age_seconds=90)
@@ -358,6 +581,20 @@ class TradingBot:
                 break
             except Exception:
                 logger.exception("coinglass_poll_error")
+
+    async def _time_profile_refresh_loop(self) -> None:
+        """Re-fetch Binance klines every 6 hours to keep profiles fresh."""
+        while self._running:
+            try:
+                await asyncio.sleep(6 * 3600)
+                if not self._running:
+                    break
+                await self._time_profiler.fetch_hourly_klines()
+                logger.info("time_profile_refreshed")
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                logger.exception("time_profile_refresh_error")
 
     async def _health_check_loop(self) -> None:
         """Log bot health status every 60 seconds."""
@@ -389,6 +626,30 @@ class TradingBot:
                     consecutive_losses=self._risk_manager.consecutive_losses,
                 )
 
+                # Update dashboard risk/position state
+                effective_balance = float(balance + self._risk_manager.daily_pnl) if self._settings.mode == "paper" else float(balance)
+                self._dashboard_state.risk = {
+                    "balance": effective_balance,
+                    "daily_pnl": float(self._risk_manager.daily_pnl),
+                    "trades_today": self._risk_manager.trades_today,
+                    "consecutive_losses": self._risk_manager.consecutive_losses,
+                    "consecutive_wins": self._risk_manager.consecutive_wins,
+                    "win_rate": self._risk_manager.win_rate,
+                    "total_settled": self._risk_manager.total_settled,
+                    "last_pnl": float(self._risk_manager.last_pnl) if self._risk_manager.last_pnl is not None else None,
+                    "vol_regime": self._vol_tracker.current_regime,
+                    "exposure": float(self._position_tracker.total_exposure_dollars),
+                }
+                self._dashboard_state.positions = [
+                    {
+                        "ticker": p.market_ticker,
+                        "side": p.side,
+                        "count": p.count,
+                        "avg_price": str(p.avg_entry_price),
+                    }
+                    for p in positions
+                ]
+
             except asyncio.CancelledError:
                 break
             except Exception:
@@ -405,6 +666,33 @@ class TradingBot:
             logger.warning("balance_fetch_error")
             return Decimal("0")
 
+    def _update_dashboard_positions(self) -> None:
+        """Push current positions and risk stats to the dashboard immediately."""
+        positions = self._position_tracker.get_all_positions()
+        self._dashboard_state.positions = [
+            {
+                "ticker": p.market_ticker,
+                "side": p.side,
+                "count": p.count,
+                "avg_price": str(p.avg_entry_price),
+            }
+            for p in positions
+        ]
+        paper_start = Decimal(str(self._settings.risk.max_total_exposure_dollars * 2))
+        balance = float(paper_start + self._risk_manager.daily_pnl) if self._settings.mode == "paper" else 0.0
+        self._dashboard_state.risk = {
+            "balance": balance,
+            "daily_pnl": float(self._risk_manager.daily_pnl),
+            "trades_today": self._risk_manager.trades_today,
+            "consecutive_losses": self._risk_manager.consecutive_losses,
+            "consecutive_wins": self._risk_manager.consecutive_wins,
+            "win_rate": self._risk_manager.win_rate,
+            "total_settled": self._risk_manager.total_settled,
+            "last_pnl": float(self._risk_manager.last_pnl) if self._risk_manager.last_pnl is not None else None,
+            "vol_regime": self._vol_tracker.current_regime,
+            "exposure": float(self._position_tracker.total_exposure_dollars),
+        }
+
     async def shutdown(self) -> None:
         """Graceful shutdown: cancel orders, close connections, persist state."""
         if not self._running:
@@ -420,6 +708,13 @@ class TradingBot:
                 logger.info("orders_canceled_on_shutdown", count=canceled)
         except Exception:
             logger.exception("shutdown_cancel_error")
+
+        # Stop dashboard
+        if self._dashboard_server:
+            try:
+                await self._dashboard_server.stop()
+            except Exception:
+                logger.exception("shutdown_dashboard_error")
 
         # Close data sources
         try:
@@ -494,14 +789,86 @@ def configure_logging(settings: BotSettings) -> None:
     )
 
 
+def build_parser() -> argparse.ArgumentParser:
+    """Build the CLI argument parser."""
+    parser = argparse.ArgumentParser(
+        prog="kalshi-bot",
+        description="Kalshi Bitcoin 15-minute binary options trading bot",
+    )
+    parser.add_argument(
+        "-v", "--version",
+        action="version",
+        version="kalshi-btc-bot 0.1.0",
+    )
+    parser.add_argument(
+        "-c", "--config",
+        default="config/settings.yaml",
+        help="path to settings YAML file (default: config/settings.yaml)",
+    )
+    parser.add_argument(
+        "-m", "--mode",
+        choices=["paper", "live"],
+        default=None,
+        help="trading mode — overrides config file",
+    )
+    parser.add_argument(
+        "-e", "--env",
+        choices=["demo", "prod"],
+        default=None,
+        help="Kalshi environment — overrides config file",
+    )
+    parser.add_argument(
+        "-l", "--log-level",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        default=None,
+        help="log level — overrides config file",
+    )
+    parser.add_argument(
+        "--max-exposure",
+        type=float,
+        default=None,
+        help="max total exposure in dollars — overrides config file",
+    )
+    parser.add_argument(
+        "--max-daily-loss",
+        type=float,
+        default=None,
+        help="max daily loss in dollars — overrides config file",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="shortcut for --mode paper --env demo",
+    )
+    return parser
+
+
 def main() -> None:
     """CLI entry point."""
-    # Load config
-    config_path = "config/settings.yaml"
-    if len(sys.argv) > 1:
-        config_path = sys.argv[1]
+    parser = build_parser()
+    args = parser.parse_args()
 
-    settings = load_settings(config_path)
+    # Load config from YAML
+    settings = load_settings(args.config)
+
+    # Apply --dry-run defaults (overridden by explicit --mode/--env)
+    if args.dry_run:
+        if args.mode is None:
+            settings.mode = "paper"
+        if args.env is None:
+            settings.kalshi.environment = "demo"
+
+    # Apply explicit CLI overrides
+    if args.mode is not None:
+        settings.mode = args.mode
+    if args.env is not None:
+        settings.kalshi.environment = args.env
+    if args.log_level is not None:
+        settings.logging.level = args.log_level
+    if args.max_exposure is not None:
+        settings.risk.max_total_exposure_dollars = args.max_exposure
+    if args.max_daily_loss is not None:
+        settings.risk.max_daily_loss_dollars = args.max_daily_loss
 
     # Configure logging
     configure_logging(settings)

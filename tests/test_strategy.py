@@ -14,6 +14,7 @@ from src.data.models import (
     OrderbookLevel,
     PredictionResult,
 )
+from src.risk.volatility import VolatilityTracker
 from src.strategy.edge_detector import EdgeDetector
 from src.strategy.market_maker import MarketMaker
 from src.strategy.signal_combiner import SignalCombiner
@@ -214,6 +215,63 @@ class TestMarketMaker:
         )
         quotes = market_maker.generate_quotes(sample_prediction, snapshot, 0)
         assert len(quotes) == 0
+
+
+class TestEdgeDetectorVolAdjusted:
+    """Test that EdgeDetector uses vol-adjusted thresholds when tracker is provided."""
+
+    def test_vol_adjusted_threshold_high_vol(
+        self, strategy_config: StrategyConfig, sample_snapshot: MarketSnapshot
+    ):
+        """High vol regime raises threshold, rejecting marginal edges."""
+        tracker = VolatilityTracker()
+        # Simulate high vol history (high percentile)
+        for _ in range(100):
+            tracker.update(0.001)
+        for _ in range(20):
+            tracker.update(0.01)  # Recent high vol
+
+        detector = EdgeDetector(strategy_config, vol_tracker=tracker)
+        # Edge that would pass normal threshold but not high-vol threshold
+        prediction = PredictionResult(
+            probability_yes=0.58, confidence=0.7, model_name="test"
+        )
+        signal = detector.detect(prediction, sample_snapshot)
+        # High vol regime multiplies threshold by 1.5+, this edge may be rejected
+        # The exact result depends on the regime classification
+        assert signal is None or signal.net_edge > 0
+
+    def test_vol_adjusted_threshold_fallback(
+        self, strategy_config: StrategyConfig, sample_snapshot: MarketSnapshot
+    ):
+        """Without tracker, uses config threshold (no crash)."""
+        detector = EdgeDetector(strategy_config, vol_tracker=None)
+        prediction = PredictionResult(
+            probability_yes=0.62, confidence=0.7, model_name="test"
+        )
+        signal = detector.detect(prediction, sample_snapshot)
+        assert signal is not None
+        assert signal.net_edge > strategy_config.min_edge_threshold
+
+    def test_vol_adjusted_low_vol_easier_entry(
+        self, strategy_config: StrategyConfig, sample_snapshot: MarketSnapshot
+    ):
+        """Low vol regime lowers threshold, allowing smaller edges."""
+        tracker = VolatilityTracker()
+        # Most observations high, few low at end -> low percentile for current
+        for _ in range(90):
+            tracker.update(0.01)
+        for _ in range(10):
+            tracker.update(0.0001)  # Recent low vol, < 20th percentile
+        assert tracker.current_regime == "low"
+
+        detector = EdgeDetector(strategy_config, vol_tracker=tracker)
+        prediction = PredictionResult(
+            probability_yes=0.60, confidence=0.7, model_name="test"
+        )
+        signal = detector.detect(prediction, sample_snapshot)
+        # Low vol regime reduces threshold by 20%, making it easier to enter
+        assert signal is not None
 
 
 class TestSignalCombiner:

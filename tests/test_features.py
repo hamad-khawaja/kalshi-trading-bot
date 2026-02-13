@@ -11,15 +11,20 @@ import pytest
 from src.data.models import MarketSnapshot, Orderbook, OrderbookLevel
 from src.features.feature_engine import FeatureEngine
 from src.features.indicators import (
+    bollinger_band_position,
     funding_rate_z_score,
+    macd_signal,
     mean_reversion_z_score,
     momentum,
     momentum_divergence,
     order_flow_imbalance,
+    orderbook_depth_imbalance,
+    rate_of_change_acceleration,
     rsi,
     spread_ratio,
     time_decay_factor,
     volatility_realized,
+    volume_weighted_momentum,
     vwap,
     vwap_deviation,
 )
@@ -235,6 +240,143 @@ class TestMomentumDivergence:
         assert momentum_divergence(0.01, 0.02) == pytest.approx(-0.01)
 
 
+class TestBollingerBandPosition:
+    def test_at_middle(self):
+        """Price at SMA should return ~0."""
+        prices = np.array([100.0] * 20)
+        result = bollinger_band_position(prices)
+        assert result == 0.0
+
+    def test_above_middle(self):
+        """Price above SMA should be positive."""
+        prices = np.array([100.0] * 19 + [105.0])
+        result = bollinger_band_position(prices)
+        assert result > 0
+
+    def test_below_middle(self):
+        """Price below SMA should be negative."""
+        prices = np.array([100.0] * 19 + [95.0])
+        result = bollinger_band_position(prices)
+        assert result < 0
+
+    def test_clamped_to_range(self):
+        """Result should be clamped to [-1, 1]."""
+        prices = np.array([100.0] * 19 + [200.0])  # Extreme outlier
+        result = bollinger_band_position(prices)
+        assert -1.0 <= result <= 1.0
+
+    def test_insufficient_data(self):
+        prices = np.array([100.0, 101.0])
+        assert bollinger_band_position(prices, window=20) == 0.0
+
+
+class TestMACDSignal:
+    def test_returns_three_values(self):
+        prices = np.array([100.0 + i * 0.1 for i in range(250)])
+        macd_line, signal_line, histogram = macd_signal(prices)
+        assert isinstance(macd_line, float)
+        assert isinstance(signal_line, float)
+        assert isinstance(histogram, float)
+
+    def test_insufficient_data(self):
+        prices = np.array([100.0] * 10)
+        result = macd_signal(prices)
+        assert result == (0.0, 0.0, 0.0)
+
+    def test_trending_up(self):
+        """Uptrend should produce positive MACD histogram."""
+        prices = np.array([100.0 + i * 0.5 for i in range(300)])
+        _, _, histogram = macd_signal(prices)
+        assert histogram > 0
+
+
+class TestRateOfChangeAcceleration:
+    def test_accelerating(self):
+        """Accelerating momentum should be positive."""
+        # Prices that accelerate upward
+        prices = np.array([100.0 + i ** 1.5 * 0.01 for i in range(100)])
+        result = rate_of_change_acceleration(prices, window=30)
+        assert result > 0
+
+    def test_insufficient_data(self):
+        prices = np.array([100.0] * 10)
+        assert rate_of_change_acceleration(prices, window=30) == 0.0
+
+    def test_constant_speed(self):
+        """Linear trend should have near-zero acceleration."""
+        prices = np.array([100.0 + i * 0.1 for i in range(100)])
+        result = rate_of_change_acceleration(prices, window=30)
+        assert abs(result) < 0.001
+
+
+class TestVolumeWeightedMomentum:
+    def test_high_volume_move(self):
+        """Big-volume moves should produce a stronger signal."""
+        prices = np.array([100.0, 101.0, 102.0, 103.0, 104.0])
+        high_vol = np.array([100.0, 100.0, 100.0, 100.0, 100.0])
+        low_vol = np.array([1.0, 1.0, 1.0, 1.0, 1.0])
+        result_high = volume_weighted_momentum(prices, high_vol)
+        result_low = volume_weighted_momentum(prices, low_vol)
+        # Same returns, both should be positive
+        assert result_high > 0
+        assert result_low > 0
+        # With equal per-tick returns, weighting shouldn't matter
+        assert result_high == pytest.approx(result_low, abs=0.001)
+
+    def test_empty_data(self):
+        assert volume_weighted_momentum(np.array([]), np.array([])) == 0.0
+
+    def test_zero_volume(self):
+        prices = np.array([100.0, 101.0])
+        volumes = np.array([0.0, 0.0])
+        assert volume_weighted_momentum(prices, volumes) == 0.0
+
+
+class TestOrderbookDepthImbalance:
+    def test_balanced(self):
+        """Equal depth should return 0."""
+        yes = [OrderbookLevel(price_dollars=Decimal("0.50"), quantity=100)]
+        no = [OrderbookLevel(price_dollars=Decimal("0.50"), quantity=100)]
+        result = orderbook_depth_imbalance(yes, no)
+        assert result == 0.0
+
+    def test_yes_dominant(self):
+        """More YES depth should be positive."""
+        yes = [OrderbookLevel(price_dollars=Decimal("0.50"), quantity=200)]
+        no = [OrderbookLevel(price_dollars=Decimal("0.50"), quantity=50)]
+        result = orderbook_depth_imbalance(yes, no)
+        assert result > 0
+
+    def test_no_dominant(self):
+        """More NO depth should be negative."""
+        yes = [OrderbookLevel(price_dollars=Decimal("0.50"), quantity=50)]
+        no = [OrderbookLevel(price_dollars=Decimal("0.50"), quantity=200)]
+        result = orderbook_depth_imbalance(yes, no)
+        assert result < 0
+
+    def test_empty_levels(self):
+        assert orderbook_depth_imbalance([], []) == 0.0
+
+    def test_weighting(self):
+        """Top of book should be weighted more heavily (3x)."""
+        # YES: 100 at top (3x=300), NO: 100 at second level (2x=200)
+        yes = [OrderbookLevel(price_dollars=Decimal("0.52"), quantity=100)]
+        no = [
+            OrderbookLevel(price_dollars=Decimal("0.50"), quantity=0),
+            OrderbookLevel(price_dollars=Decimal("0.48"), quantity=100),
+        ]
+        result = orderbook_depth_imbalance(yes, no)
+        # YES weighted: 300, NO weighted: 0 + 200 = 200 -> (300-200)/500 = 0.2
+        assert result > 0
+
+    def test_range(self):
+        """Result should always be in [-1, 1]."""
+        yes = [OrderbookLevel(price_dollars=Decimal("0.50"), quantity=1000)]
+        no = [OrderbookLevel(price_dollars=Decimal("0.50"), quantity=1)]
+        result = orderbook_depth_imbalance(yes, no)
+        assert -1.0 <= result <= 1.0
+
+
 class TestFeatureEngine:
     def test_compute_returns_all_fields(self, sample_snapshot: MarketSnapshot):
         from src.config import FeatureConfig
@@ -252,6 +394,11 @@ class TestFeatureEngine:
         assert isinstance(fv.spread, float)
         assert isinstance(fv.time_to_expiry_normalized, float)
         assert fv.implied_probability > 0
+        assert isinstance(fv.bollinger_position, float)
+        assert isinstance(fv.macd_histogram, float)
+        assert isinstance(fv.roc_acceleration, float)
+        assert isinstance(fv.volume_weighted_momentum, float)
+        assert isinstance(fv.orderbook_depth_imbalance, float)
 
     def test_compute_handles_empty_prices(self, now: datetime):
         from src.config import FeatureConfig
@@ -268,9 +415,12 @@ class TestFeatureEngine:
         # Should not crash, return defaults
         assert fv.momentum_15s == 0.0
         assert fv.rsi_14 == 50.0
+        assert fv.bollinger_position == 0.0
+        assert fv.macd_histogram == 0.0
+        assert fv.roc_acceleration == 0.0
 
     def test_to_array_shape(self, sample_feature_vector):
         arr = sample_feature_vector.to_array()
         names = sample_feature_vector.feature_names()
         assert len(arr) == len(names)
-        assert len(arr) == 17
+        assert len(arr) == 27

@@ -103,6 +103,11 @@ def sample_feature_vector(now: datetime) -> FeatureVector:
         long_short_ratio=1.05,
         kalshi_volume=250,
         implied_probability=0.51,
+        bollinger_position=0.1,
+        macd_histogram=0.0005,
+        roc_acceleration=0.0001,
+        volume_weighted_momentum=0.0003,
+        orderbook_depth_imbalance=0.15,
     )
 
 

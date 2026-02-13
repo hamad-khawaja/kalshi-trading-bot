@@ -10,6 +10,8 @@ import structlog
 
 from src.config import StrategyConfig
 from src.data.models import MarketSnapshot, PredictionResult, TradeSignal
+from src.data.time_profile import TimeProfiler
+from src.risk.volatility import VolatilityTracker
 
 logger = structlog.get_logger()
 
@@ -22,8 +24,16 @@ class EdgeDetector:
     the net edge exceeds the configured threshold.
     """
 
-    def __init__(self, config: StrategyConfig):
+    def __init__(
+        self,
+        config: StrategyConfig,
+        vol_tracker: VolatilityTracker | None = None,
+        time_profiler: TimeProfiler | None = None,
+    ):
         self._config = config
+        self._vol_tracker = vol_tracker
+        self._time_profiler = time_profiler
+        self.last_analysis: dict = {}
 
     def detect(
         self,
@@ -32,13 +42,69 @@ class EdgeDetector:
     ) -> TradeSignal | None:
         """Detect edge between model probability and market implied probability.
 
+        When the orderbook is liquid (tight spread), uses orderbook-implied probability.
+        When the orderbook is thin, falls back to statistical fair value computed
+        from BTC price distance to strike, realized volatility, and time to expiry.
+        Thin-book trades require a higher edge threshold (configurable multiplier).
+
         Returns a TradeSignal if edge exceeds threshold, None otherwise.
         """
-        implied_prob = snapshot.implied_yes_prob
-        if implied_prob is None:
-            return None
+        ob = snapshot.orderbook
+        spread = ob.spread
+        max_spread = self._config.directional_max_spread
+        min_depth = self._config.directional_min_depth
+        total_depth = ob.yes_bid_depth + ob.no_bid_depth
 
-        implied = float(implied_prob)
+        orderbook_is_thin = (
+            (spread is not None and float(spread) > max_spread)
+            or total_depth < min_depth
+        )
+
+        # Determine which implied probability source to use
+        using_fair_value = False
+        if orderbook_is_thin:
+            # Try statistical fair value as fallback
+            if (
+                self._config.use_statistical_fair_value
+                and snapshot.statistical_fair_value is not None
+            ):
+                implied = snapshot.statistical_fair_value
+                using_fair_value = True
+                logger.debug(
+                    "edge_using_fair_value",
+                    ticker=snapshot.market_ticker,
+                    fair_value=round(implied, 4),
+                    strike=str(snapshot.strike_price),
+                    btc_price=float(snapshot.btc_price),
+                    spread=float(spread) if spread else None,
+                )
+            else:
+                # No fair value available — cannot compute edge
+                spread_str = f"{float(spread):.2f}" if spread else "N/A"
+                self.last_analysis = {
+                    "side": "none",
+                    "raw_edge": 0,
+                    "fee_drag": 0,
+                    "net_edge": 0,
+                    "min_threshold": self._config.min_edge_threshold,
+                    "max_threshold": self._config.max_edge_threshold,
+                    "model_prob": round(prediction.probability_yes, 4),
+                    "implied_prob": float(snapshot.implied_yes_prob) if snapshot.implied_yes_prob else 0,
+                    "confidence": round(prediction.confidence, 4),
+                    "edge_passed": False,
+                    "confidence_ok": False,
+                    "passed": False,
+                    "using_fair_value": False,
+                    "decision": f"NO TRADE: thin orderbook (spread={spread_str}, depth={total_depth}) and no fair value available",
+                }
+                return None
+        else:
+            # Use orderbook-derived implied probability
+            implied_prob = snapshot.implied_yes_prob
+            if implied_prob is None:
+                return None
+            implied = float(implied_prob)
+
         model_prob = prediction.probability_yes
 
         # Determine direction
@@ -54,17 +120,76 @@ class EdgeDetector:
             trade_price = 1.0 - implied  # NO price = 1 - YES implied
 
         # Compute fee drag per contract
-        # Using taker fee as conservative estimate
-        fee_per_contract = self.compute_fee_dollars(1, trade_price, is_maker=False)
+        # Using maker fee since all orders use post_only=True
+        fee_per_contract = self.compute_fee_dollars(1, trade_price, is_maker=True)
         fee_drag = float(fee_per_contract)
 
         net_edge = raw_edge - fee_drag
 
+        # Apply volatility-adjusted thresholds when tracker is available
+        if self._vol_tracker is not None:
+            min_threshold = self._vol_tracker.adjust_edge_threshold(
+                self._config.min_edge_threshold
+            )
+            max_threshold = (
+                self._config.max_edge_threshold
+                * min_threshold
+                / self._config.min_edge_threshold
+            )
+        else:
+            min_threshold = self._config.min_edge_threshold
+            max_threshold = self._config.max_edge_threshold
+
+        # Apply session-based threshold multiplier on top of vol adjustment
+        if self._time_profiler is not None:
+            session = self._time_profiler.get_current_session()
+            session_mult = self._time_profiler.get_edge_threshold_multiplier(session)
+            min_threshold *= session_mult
+            max_threshold *= session_mult
+
+        # Apply thin-book multiplier: require higher edge when using fair value
+        if using_fair_value:
+            thin_mult = self._config.thin_book_edge_multiplier
+            min_threshold *= thin_mult
+            max_threshold *= thin_mult
+
+        # Capture analysis state for dashboard
+        fv_label = " [fair value]" if using_fair_value else ""
+        edge_passed = min_threshold <= net_edge <= max_threshold
+        confidence_ok = prediction.confidence >= self._config.confidence_min
+        if not edge_passed:
+            if net_edge < min_threshold:
+                decision = f"NO TRADE: net edge {net_edge:.4f} < threshold {min_threshold:.4f}{fv_label}"
+            else:
+                decision = f"NO TRADE: net edge {net_edge:.4f} > max threshold {max_threshold:.4f}{fv_label}"
+        elif not confidence_ok:
+            decision = f"NO TRADE: confidence {prediction.confidence:.3f} < min {self._config.confidence_min:.3f}{fv_label}"
+        else:
+            decision = f"TRADE: {side.upper()} edge={net_edge:.4f} (threshold {min_threshold:.4f}){fv_label}"
+        self.last_analysis = {
+            "side": side,
+            "raw_edge": round(raw_edge, 4),
+            "fee_drag": round(fee_drag, 4),
+            "net_edge": round(net_edge, 4),
+            "min_threshold": round(min_threshold, 4),
+            "max_threshold": round(max_threshold, 4),
+            "model_prob": round(model_prob, 4),
+            "implied_prob": round(implied, 4),
+            "confidence": round(prediction.confidence, 4),
+            "edge_passed": edge_passed,
+            "confidence_ok": confidence_ok,
+            "passed": edge_passed and confidence_ok,
+            "using_fair_value": using_fair_value,
+            "strike_price": float(snapshot.strike_price) if snapshot.strike_price else None,
+            "statistical_fair_value": snapshot.statistical_fair_value,
+            "decision": decision,
+        }
+
         # Check thresholds
-        if net_edge < self._config.min_edge_threshold:
+        if net_edge < min_threshold:
             return None
 
-        if net_edge > self._config.max_edge_threshold:
+        if net_edge > max_threshold:
             logger.warning(
                 "edge_too_large",
                 net_edge=net_edge,
@@ -75,7 +200,7 @@ class EdgeDetector:
             return None
 
         # Confidence gate
-        if prediction.confidence < self._config.confidence_weight * 0.5:
+        if prediction.confidence < self._config.confidence_min:
             return None
 
         # Determine price to submit
@@ -112,6 +237,7 @@ class EdgeDetector:
             implied=round(implied, 4),
             confidence=round(prediction.confidence, 4),
             price=suggested_price,
+            fair_value=using_fair_value,
         )
 
         return TradeSignal(
