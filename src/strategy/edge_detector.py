@@ -79,22 +79,27 @@ class EdgeDetector:
             return None
 
         # Determine price to submit
+        # Use model probability as basis, discounted by a fraction of the edge
+        # to ensure we still get filled while capturing most of the edge.
         if side == "yes":
-            # Place bid slightly above current best YES bid
+            # We think YES is worth model_prob, market says implied.
+            # Bid between implied and model_prob (keep ~40% of edge as profit).
+            target_price = implied + raw_edge * 0.6
             best_bid = snapshot.orderbook.best_yes_bid
             if best_bid is not None:
-                # Improve by 1 cent
-                price = float(best_bid) + 0.01
+                # Don't bid below best bid (we want to be at top of book)
+                price = max(float(best_bid) + 0.01, target_price)
             else:
-                price = implied
+                price = target_price
             suggested_price = f"{min(0.99, max(0.01, price)):.2f}"
         else:
-            # Place bid slightly above current best NO bid
+            # NO price: we think NO is worth (1 - model_prob), market says (1 - implied).
+            target_price = (1.0 - implied) + raw_edge * 0.6
             best_bid = snapshot.orderbook.best_no_bid
             if best_bid is not None:
-                price = float(best_bid) + 0.01
+                price = max(float(best_bid) + 0.01, target_price)
             else:
-                price = 1.0 - implied
+                price = target_price
             suggested_price = f"{min(0.99, max(0.01, price)):.2f}"
 
         logger.info(

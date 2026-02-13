@@ -72,6 +72,11 @@ class PositionSizer:
         # Convert to contract count (each contract costs `price` dollars)
         count = int(bet_dollars / price)
 
+        # Small bankroll floor: if Kelly says to trade but count rounds to 0,
+        # use 1 contract when we can afford it (< 10% of bankroll)
+        if count <= 0 and kelly_f > 0 and price < float(balance_dollars) * 0.10:
+            count = 1
+
         # Apply caps
         count = self._apply_caps(
             count,
@@ -136,10 +141,9 @@ class PositionSizer:
         elif remaining_exposure <= 0:
             count = 0
 
-        # Cap 3: Don't risk more than 2% of bankroll on a single trade
-        max_risk_dollars = float(balance) * 0.02
-        max_contracts_by_risk = int(max_risk_dollars / price) if price > 0 else 0
+        # Cap 3: Don't risk more than 10% of bankroll on a single trade
+        max_risk_dollars = float(balance) * 0.10
+        max_contracts_by_risk = max(1, int(max_risk_dollars / price)) if price > 0 else 0
         count = min(count, max_contracts_by_risk)
 
-        # Cap 4: Must have at least 1 contract
         return max(0, count)

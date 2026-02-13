@@ -74,12 +74,15 @@ class MarketMaker:
         yes_bid_price = max(best_yes_bid + Decimal("0.01"), yes_bid_price)
         yes_bid_price = max(Decimal("0.01"), min(Decimal("0.99"), yes_bid_price))
 
-        # Check if YES bid is profitable (spread capture minus fees)
+        # Clamp YES bid below the effective YES ask to prevent post_only cross
         yes_ask = Decimal("1") - best_no_bid  # Effective YES ask
-        potential_profit_yes = yes_ask - yes_bid_price
-        fee_estimate = Decimal("0.02")  # Conservative maker fee estimate
+        if yes_bid_price >= yes_ask:
+            yes_bid_price = yes_ask - Decimal("0.01")
 
-        if potential_profit_yes > fee_estimate:
+        fee_estimate = Decimal("0.02")  # Conservative maker fee estimate
+        potential_profit_yes = yes_ask - yes_bid_price
+
+        if potential_profit_yes > fee_estimate and yes_bid_price >= Decimal("0.01"):
             signals.append(
                 TradeSignal(
                     market_ticker=snapshot.market_ticker,
@@ -103,11 +106,14 @@ class MarketMaker:
         no_bid_price = max(best_no_bid + Decimal("0.01"), no_bid_price)
         no_bid_price = max(Decimal("0.01"), min(Decimal("0.99"), no_bid_price))
 
-        # Check NO bid profitability
+        # Clamp NO bid below the effective NO ask to prevent post_only cross
         no_ask = Decimal("1") - best_yes_bid  # Effective NO ask
+        if no_bid_price >= no_ask:
+            no_bid_price = no_ask - Decimal("0.01")
+
         potential_profit_no = no_ask - no_bid_price
 
-        if potential_profit_no > fee_estimate:
+        if potential_profit_no > fee_estimate and no_bid_price >= Decimal("0.01"):
             signals.append(
                 TradeSignal(
                     market_ticker=snapshot.market_ticker,

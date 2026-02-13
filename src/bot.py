@@ -209,12 +209,22 @@ class TradingBot:
 
         # Process each signal
         for signal_item in signals:
+            # Cancel conflicting orders (opposite side) before placing new ones
+            opposite_side = "no" if signal_item.side == "yes" else "yes"
+            await self._order_manager.cancel_market_orders(ticker, side=opposite_side)
+
+            # Include resting orders in position count for sizing
+            resting = self._order_manager.get_resting_order_count(
+                ticker, signal_item.side
+            )
+            effective_position = abs(current_position) + resting
+
             # Size position
             count = self._position_sizer.size(
                 signal_item,
                 balance,
                 self._position_tracker.total_exposure_dollars,
-                abs(current_position),
+                effective_position,
             )
 
             if count <= 0:
@@ -242,7 +252,7 @@ class TradingBot:
             )
 
             if not decision.approved:
-                logger.debug(
+                logger.info(
                     "trade_rejected",
                     ticker=ticker,
                     reason=decision.reason,
@@ -255,21 +265,30 @@ class TradingBot:
             order_id = await self._order_manager.submit(signal_item, final_count)
 
             if order_id:
-                # Update position tracker
+                # Update position tracker if order filled immediately
                 order_state = self._order_manager.get_order(order_id)
                 if order_state and order_state.filled_count > 0:
                     self._position_tracker.update_on_fill(order_state)
-
-                logger.info(
-                    "trade_executed",
-                    ticker=ticker,
-                    side=signal_item.side,
-                    count=final_count,
-                    price=signal_item.suggested_price_dollars,
-                    edge=signal_item.net_edge,
-                    model_prob=round(prediction.probability_yes, 4),
-                    cycle=self._cycle_count,
-                )
+                    logger.info(
+                        "trade_filled",
+                        ticker=ticker,
+                        side=signal_item.side,
+                        count=order_state.filled_count,
+                        price=signal_item.suggested_price_dollars,
+                        edge=signal_item.net_edge,
+                        model_prob=round(prediction.probability_yes, 4),
+                        cycle=self._cycle_count,
+                    )
+                else:
+                    logger.info(
+                        "order_resting",
+                        ticker=ticker,
+                        side=signal_item.side,
+                        count=final_count,
+                        price=signal_item.suggested_price_dollars,
+                        edge=signal_item.net_edge,
+                        cycle=self._cycle_count,
+                    )
 
     async def _market_scan_loop(self) -> None:
         """Scan for new markets every 60 seconds."""
@@ -315,6 +334,9 @@ class TradingBot:
                 exits = self._position_tracker.check_exits(snapshots)
                 if exits:
                     self._position_tracker.remove_expired_positions(exits)
+
+                # Cancel stale resting orders (older than 90s)
+                await self._order_manager.cancel_stale_orders(max_age_seconds=90)
 
                 # Cleanup old terminal orders
                 self._order_manager.cleanup_terminal_orders()

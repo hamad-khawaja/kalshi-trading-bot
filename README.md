@@ -1,8 +1,97 @@
 # Kalshi Bitcoin 15-Minute Trading Bot
 
-Automated trading bot for [Kalshi](https://kalshi.com) prediction markets, targeting **Bitcoin 15-minute price movement contracts** (`KXBTC15M` series). The bot continuously monitors BTC price data and Kalshi order books, estimates the probability of BTC going up/down in each 15-minute window, identifies mispriced contracts, and executes trades with strict risk management.
+Automated trading bot for [Kalshi](https://kalshi.com) prediction markets, targeting **Bitcoin 15-minute price movement contracts** (`KXBTC15M` series). The bot monitors BTC price data and Kalshi order books, estimates the probability of BTC moving up/down in each 15-minute window, identifies mispriced contracts, and executes trades with strict risk management.
 
-## Architecture
+---
+
+## Quick Start
+
+### 1. Prerequisites
+
+| Requirement | Notes |
+|---|---|
+| **Python 3.11+** | Check with `python3 --version` |
+| **Kalshi account** | Sign up at [kalshi.com](https://kalshi.com) |
+| **Kalshi API key** | RSA key pair — see step 2 below |
+| **Coinglass API key** | *Optional* — adds funding rate data for better signals |
+
+### 2. Generate your Kalshi API key
+
+```bash
+# Generate a 4096-bit RSA private key
+openssl genrsa -out kalshi_key.pem 4096
+
+# Extract the public key
+openssl rsa -in kalshi_key.pem -pubout -out kalshi_key_pub.pem
+```
+
+Then go to your [Kalshi account settings](https://kalshi.com), upload `kalshi_key_pub.pem`, and copy the **API Key ID** it gives you.
+
+### 3. Install
+
+```bash
+git clone <repo-url>
+cd kalshi-btc-bot
+
+# Create a virtual environment and install
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .
+```
+
+### 4. Set environment variables
+
+```bash
+export KALSHI_API_KEY_ID="your-api-key-id"
+export KALSHI_PRIVATE_KEY_PATH="/path/to/kalshi_key.pem"
+export COINGLASS_API_KEY="your-coinglass-key"  # optional
+```
+
+> **Tip:** Add these to your `~/.bashrc` or `~/.zshrc` so they persist across terminal sessions.
+
+### 5. Configure
+
+Open `config/settings.yaml` and review these settings before your first run:
+
+```yaml
+mode: paper          # "paper" = no real orders, "live" = real money
+
+kalshi:
+  environment: demo  # "demo" = sandbox, "prod" = real market
+```
+
+Start with `mode: paper` and `environment: demo` until you're comfortable.
+
+### 6. Run the bot
+
+```bash
+# Using the installed command
+kalshi-bot
+
+# Or via Python directly
+python -m src.bot
+
+# With a custom config file
+kalshi-bot path/to/settings.yaml
+```
+
+The bot will start logging to the terminal. You'll see it scanning for active markets, pulling BTC prices, and evaluating trades every ~4 seconds.
+
+### Going live
+
+When you're ready to trade with real money, change two values in `config/settings.yaml`:
+
+```yaml
+mode: live
+kalshi:
+  environment: prod
+```
+
+Review the risk limits in the same file before going live — especially `max_daily_loss_dollars` and `max_total_exposure_dollars`.
+
+---
+
+## How It Works
 
 ```
 ┌──────────────────┐     ┌──────────────────┐     ┌──────────────────┐
@@ -13,16 +102,16 @@ Automated trading bot for [Kalshi](https://kalshi.com) prediction markets, targe
 │ • Coinglass API   │     │ • Edge Detector   │     │ • Position Track │
 │ • Market Scanner  │     │ • Market Maker    │     │                   │
 └──────────────────┘     └──────────────────┘     └──────────────────┘
-                                                           │
-                                                           ▼
-                                                  ┌──────────────────┐
-                                                  │ Risk Management   │
-                                                  │                   │
-                                                  │ • Kelly Sizing    │
-                                                  │ • Daily Loss Limit│
-                                                  │ • Vol Regime      │
-                                                  │ • Position Caps   │
-                                                  └──────────────────┘
+                                                          │
+                                                          ▼
+                                                 ┌──────────────────┐
+                                                 │ Risk Management   │
+                                                 │                   │
+                                                 │ • Kelly Sizing    │
+                                                 │ • Daily Loss Limit│
+                                                 │ • Vol Regime      │
+                                                 │ • Position Caps   │
+                                                 └──────────────────┘
 ```
 
 ### Main Loop (every ~4 seconds)
@@ -35,60 +124,55 @@ Automated trading bot for [Kalshi](https://kalshi.com) prediction markets, targe
 6. If net edge > threshold AND risk limits OK → place trade
 7. Monitor open positions for exit / settlement
 
-## Setup
+## Strategy
 
-### Prerequisites
+### Core: Implied Probability Mispricing
 
-- Python 3.11+
-- Kalshi API key (RSA key pair) — see [Kalshi API docs](https://trading-api.readme.io/reference)
-- Binance WebSocket access (no auth needed for public streams)
-- Optional: Coinglass API key for funding rate data
+The bot builds its own probability estimate using real-time market data and compares it to the Kalshi contract's implied probability. When the gap exceeds a threshold (after accounting for fees), it trades.
 
-### Installation
+```
+model_prob = model.predict(features)       # e.g., 0.62
+implied_prob = kalshi_midpoint_price       # e.g., 0.55
+net_edge = abs(model_prob - implied_prob) - fee_drag
 
-```bash
-# Clone and install
-git clone <repo-url>
-cd kalshi-btc-bot
-pip install -e ".[dev]"
-
-# For ML model training
-pip install -e ".[ml]"
-
-# For backtesting visualizations
-pip install -e ".[backtest]"
+If net_edge > 0.03:  → Trade
 ```
 
-### Configuration
+### Secondary: Market Making
 
-1. Generate an RSA key pair for Kalshi API authentication:
-```bash
-openssl genrsa -out kalshi_key.pem 4096
-openssl rsa -in kalshi_key.pem -pubout -out kalshi_key_pub.pem
-```
+When Kalshi spreads are wide (>$0.05), the bot places resting limit orders on both sides to capture the spread. Uses `post_only` orders for lower maker fees (1.75% vs 7% taker).
 
-2. Upload the public key to your Kalshi account and note the API Key ID.
+### Fee-Aware Edge Calculation
 
-3. Set environment variables:
-```bash
-export KALSHI_API_KEY_ID="your-api-key-id"
-export KALSHI_PRIVATE_KEY_PATH="/path/to/kalshi_key.pem"
-export COINGLASS_API_KEY="your-coinglass-key"  # Optional
-```
+All edge calculations account for Kalshi fees:
+- **Taker fee**: `ceil(0.07 × C × P × (1-P))`
+- **Maker fee**: `ceil(0.0175 × C × P × (1-P))`
 
-4. Edit `config/settings.yaml` to adjust strategy parameters, risk limits, and other settings.
+### Risk Management
 
-### Running
+- **Quarter-Kelly position sizing** — conservative, avoids ruin
+- **Daily loss limit** — stops trading after configurable daily loss
+- **Max position per market** — prevents concentration
+- **Total exposure cap** — limits capital at risk
+- **Consecutive loss cooldown** — pauses after loss streaks
+- **Volatility regime adjustment** — wider edge requirements in high-vol
+- **Time-to-expiry gate** — no new trades within 60s of settlement
 
-```bash
-# Paper trading (default, no real orders)
-python -m src.bot
+## Configuration Reference
 
-# With custom config
-python -m src.bot config/settings.yaml
-```
+All settings live in `config/settings.yaml`. Key parameters:
 
-To switch to live trading, change `mode: live` and `environment: prod` in `config/settings.yaml`.
+| Setting | Default | Description |
+|---|---|---|
+| `mode` | `live` | `paper` or `live` |
+| `kalshi.environment` | `prod` | `demo` or `prod` |
+| `strategy.poll_interval_seconds` | `4` | How often the main loop runs |
+| `strategy.min_edge_threshold` | `0.03` | Minimum edge (3%) to trigger a trade |
+| `risk.max_position_per_market` | `50` | Max contracts per market |
+| `risk.max_total_exposure_dollars` | `500` | Total capital at risk cap |
+| `risk.max_daily_loss_dollars` | `100` | Stop trading after this daily loss |
+| `risk.max_concurrent_positions` | `5` | Max open positions at once |
+| `risk.kelly_fraction` | `0.25` | Kelly fraction (0.25 = quarter-Kelly) |
 
 ## Project Structure
 
@@ -130,50 +214,28 @@ To switch to live trading, change `mode: live` and `environment: prod` in `confi
 │   ├── data_collector.py       # Historical data collection
 │   ├── backtester.py           # Strategy backtesting engine
 │   └── analysis.py             # Performance analysis
-├── tests/                      # Comprehensive test suite (119 tests)
+├── tests/                      # Test suite
 ├── logs/                       # Runtime logs
 ├── data/                       # SQLite database
 └── pyproject.toml              # Dependencies and tool config
 ```
 
-## Strategy
+## Optional Extras
 
-### Core: Implied Probability Mispricing
+```bash
+# Install ML dependencies (for LightGBM model training)
+pip install -e ".[ml]"
 
-The bot builds its own probability estimate using real-time market data and compares it to the Kalshi contract's implied probability. When the gap exceeds a threshold (after accounting for fees), it trades.
+# Install backtesting visualization tools
+pip install -e ".[backtest]"
 
+# Install dev tools (pytest, mypy, ruff)
+pip install -e ".[dev]"
 ```
-model_prob = model.predict(features)       # e.g., 0.62
-implied_prob = kalshi_midpoint_price       # e.g., 0.55
-net_edge = abs(model_prob - implied_prob) - fee_drag
-
-If net_edge > 0.03:  → Trade
-```
-
-### Secondary: Market Making
-
-When Kalshi spreads are wide (>$0.05), the bot places resting limit orders on both sides to capture the spread. Uses `post_only` orders for lower maker fees (1.75% vs 7% taker).
-
-### Fee-Aware Edge Calculation
-
-All edge calculations account for Kalshi fees:
-- **Taker fee**: `ceil(0.07 × C × P × (1-P))`
-- **Maker fee**: `ceil(0.0175 × C × P × (1-P))`
-
-### Risk Management
-
-- **Quarter-Kelly position sizing** — conservative, avoids ruin
-- **Daily loss limit** — stops trading after configurable daily loss
-- **Max position per market** — prevents concentration
-- **Total exposure cap** — limits capital at risk
-- **Consecutive loss cooldown** — pauses after loss streaks
-- **Volatility regime adjustment** — wider edge requirements in high-vol
-- **Time-to-expiry gate** — no new trades within 60s of settlement
 
 ## Testing
 
 ```bash
-# Run all tests
 pytest tests/ -v
 
 # With coverage
@@ -195,7 +257,7 @@ import pandas as pd
 
 settings = load_settings()
 bt = Backtester(settings)
-data = pd.read_csv('your_data.csv')  # Prepare historical data
+data = pd.read_csv('your_data.csv')
 result = bt.run(data)
 print(BacktestAnalyzer().summary(result))
 "
@@ -208,3 +270,4 @@ print(BacktestAnalyzer().summary(result))
 - **Authentication**: RSA-PSS signatures (SHA256)
 - **Prices**: Dollar-denominated (`yes_price_dollars`, `no_price_dollars`)
 - **Contract series**: `KXBTC15M` (Bitcoin 15-minute price up/down)
+- **API Docs**: [trading-api.readme.io/reference](https://trading-api.readme.io/reference)

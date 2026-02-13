@@ -255,6 +255,69 @@ class OrderManager:
             result.append(state)
         return result
 
+    def get_resting_order_count(self, ticker: str, side: str | None = None) -> int:
+        """Count unfilled contracts in resting orders for a ticker.
+
+        Args:
+            ticker: Market ticker to filter by
+            side: Optional side filter ("yes" or "no")
+
+        Returns:
+            Total unfilled contract count across resting orders.
+        """
+        total = 0
+        for state in self._pending_orders.values():
+            if state.is_terminal:
+                continue
+            if state.signal.market_ticker != ticker:
+                continue
+            if side and state.signal.side != side:
+                continue
+            remaining = state.requested_count - state.filled_count
+            total += max(0, remaining)
+        return total
+
+    async def cancel_market_orders(
+        self, ticker: str, side: str | None = None
+    ) -> int:
+        """Cancel all resting orders for a ticker, optionally filtered by side.
+
+        Returns number of orders canceled.
+        """
+        canceled = 0
+        for order_id, state in list(self._pending_orders.items()):
+            if state.is_terminal:
+                continue
+            if state.signal.market_ticker != ticker:
+                continue
+            if side and state.signal.side != side:
+                continue
+            if await self.cancel(order_id):
+                canceled += 1
+        if canceled:
+            logger.info(
+                "market_orders_canceled",
+                ticker=ticker,
+                side=side,
+                count=canceled,
+            )
+        return canceled
+
+    async def cancel_stale_orders(self, max_age_seconds: float = 90) -> int:
+        """Cancel orders older than max_age_seconds that haven't fully filled."""
+        now = datetime.now(timezone.utc)
+        canceled = 0
+        for order_id, state in list(self._pending_orders.items()):
+            if state.is_terminal:
+                continue
+            age = (now - state.created_at).total_seconds()
+            if age > max_age_seconds:
+                if await self.cancel(order_id):
+                    canceled += 1
+        if canceled:
+            logger.info("stale_orders_canceled", count=canceled)
+        return canceled
+
     def get_order(self, order_id: str) -> OrderState | None:
         """Get order state by ID."""
         return self._pending_orders.get(order_id)

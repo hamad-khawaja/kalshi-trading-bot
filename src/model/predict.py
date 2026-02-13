@@ -41,27 +41,37 @@ class HeuristicModel(ProbabilityModel):
     5. Time to expiry (affects confidence)
     """
 
-    # Signal weights (sum to ~1.0 for the probability adjustment)
-    MOMENTUM_WEIGHT = 0.40
-    ORDERFLOW_WEIGHT = 0.25
-    FUNDING_WEIGHT = 0.15
-    MEAN_REVERSION_WEIGHT = 0.20
+    # Signal weights — favor longer-term signals over short-term noise
+    MOMENTUM_WEIGHT = 0.10
+    ORDERFLOW_WEIGHT = 0.20
+    FUNDING_WEIGHT = 0.0  # Coinglass returning 500s
+    MEAN_REVERSION_WEIGHT = 0.30
+    TIME_DECAY_WEIGHT = 0.40
 
     # Maximum adjustment from 0.50 base
     MAX_ADJUSTMENT = 0.20
 
+    # Dead zone: suppress marginal signals near 0.50
+    DEAD_ZONE = 0.04
+
+    # EMA smoothing alpha (0 = fully smooth, 1 = no smoothing)
+    EMA_ALPHA = 0.3
+
+    def __init__(self) -> None:
+        self._prev_probability: float | None = None
+
     def name(self) -> str:
-        return "heuristic_v1"
+        return "heuristic_v2"
 
     def predict(self, features: FeatureVector) -> PredictionResult:
         """Estimate P(BTC up) using rule-based signals."""
         # --- 1. Momentum signal ---
-        # Combine multiple timeframes with decay
+        # Favor longer timeframes to reduce noise from short-term jitter
         mom_signal = (
-            0.4 * self._normalize_momentum(features.momentum_15s)
-            + 0.3 * self._normalize_momentum(features.momentum_60s)
-            + 0.2 * self._normalize_momentum(features.momentum_180s)
-            + 0.1 * self._normalize_momentum(features.momentum_600s)
+            0.1 * self._normalize_momentum(features.momentum_15s)
+            + 0.2 * self._normalize_momentum(features.momentum_60s)
+            + 0.3 * self._normalize_momentum(features.momentum_180s)
+            + 0.4 * self._normalize_momentum(features.momentum_600s)
         )
 
         # Check momentum consistency (all timeframes agree = stronger signal)
@@ -105,17 +115,45 @@ class HeuristicModel(ProbabilityModel):
         else:
             mr_signal = 0.0  # Neutral zone, no signal
 
+        # --- 5. Time decay signal ---
+        # As market approaches expiry, pull toward implied market price
+        # (reduces unnecessary trades near expiry)
+        time_decay_signal = 0.0
+        if features.time_to_expiry_normalized < 0.3:
+            # Pull toward 0.0 adjustment (i.e., toward 0.50 base)
+            decay_strength = 1.0 - (features.time_to_expiry_normalized / 0.3)
+            # Counteract other signals proportionally
+            other_adjustment = (
+                self.MOMENTUM_WEIGHT * mom_signal
+                + self.ORDERFLOW_WEIGHT * flow_signal
+                + self.MEAN_REVERSION_WEIGHT * mr_signal
+            )
+            time_decay_signal = -other_adjustment * decay_strength
+
         # --- Combine signals ---
         raw_adjustment = (
             self.MOMENTUM_WEIGHT * mom_signal
             + self.ORDERFLOW_WEIGHT * flow_signal
             + self.FUNDING_WEIGHT * funding_signal
             + self.MEAN_REVERSION_WEIGHT * mr_signal
+            + self.TIME_DECAY_WEIGHT * time_decay_signal
         )
 
         # Clamp adjustment
         adjustment = max(-self.MAX_ADJUSTMENT, min(self.MAX_ADJUSTMENT, raw_adjustment))
         probability = 0.50 + adjustment
+
+        # Dead zone: suppress marginal signals near 0.50
+        if abs(probability - 0.50) < self.DEAD_ZONE:
+            probability = 0.50
+
+        # EMA smoothing to reduce oscillation
+        if self._prev_probability is not None:
+            probability = (
+                self.EMA_ALPHA * probability
+                + (1 - self.EMA_ALPHA) * self._prev_probability
+            )
+        self._prev_probability = probability
 
         # Clamp to valid probability range
         probability = max(0.05, min(0.95, probability))
@@ -129,6 +167,7 @@ class HeuristicModel(ProbabilityModel):
             "flow_signal": round(flow_signal, 4),
             "funding_signal": round(funding_signal, 4),
             "mr_signal": round(mr_signal, 4),
+            "time_decay_signal": round(time_decay_signal, 4),
             "consistency": round(consistency, 4),
             "raw_adjustment": round(raw_adjustment, 4),
         }
@@ -146,8 +185,8 @@ class HeuristicModel(ProbabilityModel):
 
         BTC 15-second momentum is typically in [-0.005, 0.005] range.
         """
-        # Scale factor: 0.002 movement -> ~0.5 signal
-        return math.tanh(mom / 0.002)
+        # Scale factor: 0.005 movement -> ~0.5 signal (wider to reduce noise)
+        return math.tanh(mom / 0.005)
 
     @staticmethod
     def _compute_confidence(features: FeatureVector, consistency: float) -> float:

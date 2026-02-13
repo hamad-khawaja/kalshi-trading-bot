@@ -2,6 +2,11 @@
 *.pem
 config/paper_key.pem
 
+# Database files
+data/*.db
+data/*.db-shm
+data/*.db-wal
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

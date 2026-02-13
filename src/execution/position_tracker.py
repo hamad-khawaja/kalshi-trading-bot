@@ -130,12 +130,44 @@ class PositionTracker:
         try:
             exchange_positions = await self._client.get_positions()
             for p in exchange_positions:
-                if abs(p.market_exposure) > 0 and p.ticker not in self._positions:
-                    # Position exists on exchange but not locally
-                    logger.warning(
-                        "position_sync_mismatch",
+                if abs(p.market_exposure) > 0:
+                    if p.ticker not in self._positions:
+                        # Position exists on exchange but not locally — adopt it
+                        side = "yes" if p.market_exposure > 0 else "no"
+                        count = abs(p.market_exposure)
+                        self._positions[p.ticker] = PositionState(
+                            market_ticker=p.ticker,
+                            side=side,
+                            count=count,
+                            avg_entry_price=Decimal("0.50"),  # Unknown, estimate midpoint
+                            entry_time=datetime.now(timezone.utc),
+                        )
+                        logger.info(
+                            "position_synced_from_exchange",
+                            ticker=p.ticker,
+                            side=side,
+                            count=count,
+                            exchange_exposure=p.market_exposure,
+                        )
+                    else:
+                        # Update count if exchange disagrees
+                        local = self._positions[p.ticker]
+                        exchange_count = abs(p.market_exposure)
+                        if local.count != exchange_count:
+                            local.count = exchange_count
+                            logger.info(
+                                "position_count_synced",
+                                ticker=p.ticker,
+                                local_count=local.count,
+                                exchange_count=exchange_count,
+                            )
+                elif p.ticker in self._positions:
+                    # Exchange says no position but we have one locally — remove
+                    removed = self._positions.pop(p.ticker)
+                    logger.info(
+                        "position_removed_by_sync",
                         ticker=p.ticker,
-                        exchange_exposure=p.market_exposure,
+                        was_count=removed.count,
                     )
         except Exception:
             logger.exception("position_sync_error")
