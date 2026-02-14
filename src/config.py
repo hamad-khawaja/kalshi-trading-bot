@@ -58,6 +58,7 @@ class AveragingConfig(BaseModel):
 
 class StrategyConfig(BaseModel):
     poll_interval_seconds: float = 4.0
+    invert_signals: bool = False  # Flip side: if model says YES, trade NO (and vice versa)
     min_edge_threshold: float = 0.03
     max_edge_threshold: float = 0.25
     confidence_weight: float = 0.7

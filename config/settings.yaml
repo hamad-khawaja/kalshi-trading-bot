@@ -17,8 +17,9 @@ coinglass:
 
 strategy:
   poll_interval_seconds: 4
+  invert_signals: true           # Flip all signals — model is consistently wrong, trade opposite
   min_edge_threshold: 0.04      # 4% minimum edge (must clear fees + slippage)
-  max_edge_threshold: 0.15      # Reject large edges (model wrong, not opportunity)
+  max_edge_threshold: 0.35      # Higher ceiling for inverted signals (larger divergences expected)
   confidence_min: 0.55          # Reject low-quality signals
   directional_max_spread: 0.15  # Skip wide-spread illiquid books
   mm_max_inventory: 20          # Don't accumulate huge MM positions
@@ -34,7 +35,7 @@ strategy:
   fomo_max_implied_prob: 0.85
   fomo_min_implied_prob: 0.15
   # Edge persistence
-  edge_confirmation_cycles: 2     # Require 2 consecutive cycles with same-side edge
+  edge_confirmation_cycles: 1     # Immediate entry — inverted signals flip sides too often for streak=2
   # Thesis-break exits
   thesis_break_enabled: true
   thesis_break_threshold: 0.02    # Model must cross 0.50 +/- this to exit

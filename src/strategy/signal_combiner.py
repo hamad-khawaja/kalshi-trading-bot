@@ -78,7 +78,8 @@ class SignalCombiner:
             # Trend guard: if all momentum timeframes agree on a direction,
             # don't trade against the trend. The model hovers near 0.50 and
             # generates fake edges against clear trends.
-            if features is not None:
+            # Skip trend guard when signals are inverted (we WANT to trade with trend).
+            if features is not None and not self._config.invert_signals:
                 momentums = [
                     features.momentum_15s,
                     features.momentum_60s,

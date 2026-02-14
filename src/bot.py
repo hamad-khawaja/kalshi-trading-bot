@@ -331,6 +331,15 @@ class TradingBot:
             prediction, snapshot, current_position, features=features
         )
 
+        if signals:
+            logger.info(
+                "signals_generated",
+                ticker=ticker,
+                count=len(signals),
+                sides=[s.side for s in signals],
+                types=[s.signal_type for s in signals],
+            )
+
         # Update edge analysis from the internal edge detector
         edge_analysis = self._signal_combiner._edge_detector.last_analysis
         if edge_analysis:

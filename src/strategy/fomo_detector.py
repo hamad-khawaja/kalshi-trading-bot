@@ -90,6 +90,16 @@ class FomoDetector:
             underpriced_side = "yes"
             trade_price = implied
 
+        # Invert: trade with the crowd instead of against it
+        if self._config.invert_signals:
+            underpriced_side = "no" if underpriced_side == "yes" else "yes"
+            trade_price = 1.0 - trade_price if trade_price > 0 else trade_price
+            # Inverted model prob: market + fraction of divergence as real edge
+            if underpriced_side == "yes":
+                model_prob = min(0.95, implied + divergence * 0.3)
+            else:
+                model_prob = max(0.05, (1.0 - implied) + divergence * 0.3)
+
         if divergence < self._config.fomo_min_divergence:
             self.last_analysis = {
                 "decision": (
@@ -239,7 +249,7 @@ class FomoDetector:
             action="buy",
             raw_edge=round(raw_edge, 4),
             net_edge=round(net_edge, 4),
-            model_probability=prediction.probability_yes,
+            model_probability=model_prob,
             implied_probability=implied,
             confidence=prediction.confidence,
             suggested_price_dollars=suggested_price,

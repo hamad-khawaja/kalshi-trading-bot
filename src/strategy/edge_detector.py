@@ -119,6 +119,20 @@ class EdgeDetector:
             raw_edge = implied - model_prob
             trade_price = 1.0 - implied  # NO price = 1 - YES implied
 
+        # Invert: trade the opposite side (model is consistently wrong).
+        # If the model underestimates YES (model < implied), normally we'd buy NO.
+        # Inverting means: model is wrong → market is right → buy YES instead.
+        # For Kelly sizing, our "true prob" = implied + fraction of the divergence
+        # (we believe the market is right and the model error IS the edge).
+        if self._config.invert_signals:
+            side = "no" if side == "yes" else "yes"
+            trade_price = (1.0 - trade_price) if trade_price > 0 else trade_price
+            # Inverted model prob: market price + 30% of the model's error as real edge
+            if side == "yes":
+                model_prob = min(0.95, implied + raw_edge * 0.3)
+            else:
+                model_prob = max(0.05, (1.0 - implied) + raw_edge * 0.3)
+
         # Compute fee drag per contract
         # Using maker fee since all orders use post_only=True
         fee_per_contract = self.compute_fee_dollars(1, trade_price, is_maker=True)
