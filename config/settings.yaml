@@ -1,4 +1,4 @@
-mode: live  # paper | live
+mode: paper  # paper | live
 
 kalshi:
   environment: prod  # demo | prod
@@ -17,22 +17,53 @@ coinglass:
 
 strategy:
   poll_interval_seconds: 4
-  min_edge_threshold: 0.03      # 3% minimum edge after fees
-  max_edge_threshold: 0.25      # Reject if edge seems too good (stale data)
+  min_edge_threshold: 0.04      # 4% minimum edge (must clear fees + slippage)
+  max_edge_threshold: 0.15      # Reject large edges (model wrong, not opportunity)
+  confidence_min: 0.55          # Reject low-quality signals
+  directional_max_spread: 0.15  # Skip wide-spread illiquid books
+  mm_max_inventory: 20          # Don't accumulate huge MM positions
   confidence_weight: 0.7
   use_market_maker: true
   mm_min_spread: 0.05           # Minimum spread ($) for market-making
+  # FOMO exploitation
+  fomo_enabled: true
+  fomo_min_divergence: 0.12       # Min gap between implied and model prob
+  fomo_edge_threshold: 0.02       # Lower edge threshold (96.6% empirical edge)
+  fomo_momentum_min_magnitude: 0.003
+  fomo_momentum_consistency_required: true
+  fomo_max_implied_prob: 0.85
+  fomo_min_implied_prob: 0.15
+  # Edge persistence
+  edge_confirmation_cycles: 2     # Require 2 consecutive cycles with same-side edge
+  # Thesis-break exits
+  thesis_break_enabled: true
+  thesis_break_threshold: 0.02    # Model must cross 0.50 +/- this to exit
 
 risk:
-  max_position_per_market: 50   # Max contracts per single market
-  max_total_exposure_dollars: 500.0
-  max_daily_loss_dollars: 100.0
+  max_position_per_market: 20    # Reduced from 50: limits damage from bad bets
+  max_total_exposure_dollars: 50.0   # $100 paper bankroll / 2 (paper balance = exposure * 2)
+  max_daily_loss_dollars: 50.0       # 50% of bankroll
   max_concurrent_positions: 5
-  kelly_fraction: 0.25          # Quarter-Kelly for safety
-  min_balance_dollars: 5.0      # Emergency stop
-  max_trades_per_day: 100
+  kelly_fraction: 0.25          # Quarter-Kelly for paper testing
+  min_balance_dollars: 25.0     # Emergency stop at 25% of bankroll
+  max_trades_per_day: 1000       # Paper trading: no daily limit
   cooldown_after_streak_minutes: 30
-  max_consecutive_losses: 5
+  max_consecutive_losses: 5     # Paper: more room to test
+  # Entry discipline
+  entry_cooldown_seconds: 30     # Min seconds between fills on same market
+  max_contracts_per_cycle: 10    # Max contracts placed in one 4s cycle
+  # Fee-aware sizing at extreme prices
+  fee_extreme_price_threshold: 0.25
+  fee_extreme_kelly_multiplier: 1.0  # Disable boost at extremes
+
+averaging:
+  enabled: true
+  discount_tiers: [0.10, 0.20, 0.35]  # % below avg entry per tier
+  size_multipliers: [1.0, 1.5, 2.0]   # multiplier per tier
+  max_adds_per_position: 3
+  min_time_to_expiry_seconds: 120.0
+  momentum_threshold: 0.003            # magnitude to consider "strong" momentum
+  dead_zone: 0.02                      # buffer around 0.50 for thesis check
 
 features:
   lookback_seconds: 900         # 15 minutes of tick data

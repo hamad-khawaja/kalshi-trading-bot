@@ -315,6 +315,7 @@ class KalshiRestClient:
             positions.append(
                 Position(
                     ticker=p.get("ticker", ""),
+                    position=p.get("position", 0),
                     market_exposure=p.get("market_exposure", 0),
                     resting_orders_count=p.get("resting_orders_count", 0),
                     fees_paid=Decimal(str(p.get("fees_paid", 0))) / 100,

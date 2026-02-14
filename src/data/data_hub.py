@@ -14,7 +14,7 @@ from src.data.coinglass_client import CoinglassClient
 from src.data.kalshi_client import KalshiRestClient
 from src.data.kalshi_ws import KalshiWebSocket
 from src.data.market_scanner import MarketScanner
-from src.data.models import MarketSnapshot, Orderbook
+from src.data.models import MarketSnapshot, Orderbook, OrderbookLevel
 from src.strategy.fair_value import compute_fair_value_from_prices, parse_strike_price
 
 logger = structlog.get_logger()
@@ -46,6 +46,7 @@ class DataHub:
         self._scanner = scanner
         self._orderbook_cache: dict[str, Orderbook] = {}
         self._ws_subscribed_tickers: set[str] = set()
+        self._ws_seq: dict[str, int] = {}  # Last processed seq per ticker
 
     async def start(self) -> None:
         """Connect all data sources. Kalshi/Coinglass failures are non-fatal."""
@@ -93,14 +94,126 @@ class DataHub:
         logger.info("data_hub_subscribed", ticker=ticker)
 
     def _on_orderbook_update(self, ticker: str, msg: dict) -> None:
-        """Handle orderbook updates from WebSocket."""
-        # Store the latest orderbook snapshot
-        # The WebSocket sends initial snapshot + deltas
+        """Handle orderbook updates from WebSocket.
+
+        Processes both orderbook_snapshot (full book) and orderbook_delta
+        (incremental quantity changes). Uses seq numbers for deduplication
+        since all channel callbacks fire for every message.
+        """
         msg_type = msg.get("type", "")
-        if msg_type in ("orderbook_snapshot", "orderbook_delta"):
-            # For simplicity, we'll refresh via REST on each strategy cycle
-            # WebSocket updates are used primarily for latency-sensitive detection
-            pass
+        payload = msg.get("msg", {})
+        actual_ticker = payload.get("market_ticker")
+        if not actual_ticker:
+            return
+
+        # Dedup: only process each message once (all callbacks fire for every msg)
+        seq = msg.get("seq", 0)
+        last_seq = self._ws_seq.get(actual_ticker, -1)
+        if seq <= last_seq:
+            return
+        self._ws_seq[actual_ticker] = seq
+
+        now = datetime.now(timezone.utc)
+
+        if msg_type == "orderbook_snapshot":
+            self._handle_orderbook_snapshot(actual_ticker, payload, now)
+        elif msg_type == "orderbook_delta":
+            self._handle_orderbook_delta(actual_ticker, payload)
+
+    def _handle_orderbook_snapshot(
+        self, ticker: str, payload: dict, now: datetime
+    ) -> None:
+        """Parse a full orderbook snapshot into the cache."""
+        yes_levels: list[OrderbookLevel] = []
+        no_levels: list[OrderbookLevel] = []
+
+        # Prefer dollar format, fall back to cents
+        for entry in payload.get("yes_dollars") or []:
+            if isinstance(entry, list) and len(entry) >= 2:
+                yes_levels.append(
+                    OrderbookLevel(
+                        price_dollars=Decimal(str(entry[0])),
+                        quantity=int(entry[1]),
+                    )
+                )
+        for entry in payload.get("no_dollars") or []:
+            if isinstance(entry, list) and len(entry) >= 2:
+                no_levels.append(
+                    OrderbookLevel(
+                        price_dollars=Decimal(str(entry[0])),
+                        quantity=int(entry[1]),
+                    )
+                )
+
+        if not yes_levels and not no_levels:
+            for entry in payload.get("yes") or []:
+                if isinstance(entry, list) and len(entry) >= 2:
+                    yes_levels.append(
+                        OrderbookLevel(
+                            price_dollars=Decimal(str(entry[0])) / 100,
+                            quantity=int(entry[1]),
+                        )
+                    )
+            for entry in payload.get("no") or []:
+                if isinstance(entry, list) and len(entry) >= 2:
+                    no_levels.append(
+                        OrderbookLevel(
+                            price_dollars=Decimal(str(entry[0])) / 100,
+                            quantity=int(entry[1]),
+                        )
+                    )
+
+        self._orderbook_cache[ticker] = Orderbook(
+            ticker=ticker,
+            yes_levels=yes_levels,
+            no_levels=no_levels,
+            timestamp=now,
+        )
+        logger.debug(
+            "ws_orderbook_snapshot",
+            ticker=ticker,
+            yes_levels=len(yes_levels),
+            no_levels=len(no_levels),
+        )
+
+    def _handle_orderbook_delta(self, ticker: str, payload: dict) -> None:
+        """Apply an incremental delta to the cached orderbook."""
+        cached = self._orderbook_cache.get(ticker)
+        if cached is None:
+            return  # No snapshot yet — can't apply delta
+
+        side = payload.get("side")  # "yes" or "no"
+        delta = payload.get("delta", 0)
+
+        # Parse price — prefer dollars, fall back to cents
+        price_str = payload.get("price_dollars")
+        if price_str is not None:
+            price = Decimal(str(price_str))
+        elif payload.get("price") is not None:
+            price = Decimal(str(payload["price"])) / 100
+        else:
+            return
+
+        levels = cached.yes_levels if side == "yes" else cached.no_levels
+
+        # Find existing level at this price
+        found = False
+        for i, lvl in enumerate(levels):
+            if lvl.price_dollars == price:
+                new_qty = lvl.quantity + delta
+                if new_qty > 0:
+                    levels[i] = OrderbookLevel(
+                        price_dollars=price, quantity=new_qty
+                    )
+                else:
+                    levels.pop(i)
+                found = True
+                break
+
+        if not found and delta > 0:
+            # New price level — insert and keep sorted descending by price
+            levels.append(OrderbookLevel(price_dollars=price, quantity=delta))
+            levels.sort(key=lambda l: l.price_dollars, reverse=True)
 
     async def get_snapshot(self, market_ticker: str) -> MarketSnapshot | None:
         """Build a complete market snapshot for the strategy layer.
@@ -122,16 +235,15 @@ class DataHub:
         prices_5min = [t.price for t in ticks_5min]
         volumes_1min = [t.volume for t in ticks_1min]
 
-        # Kalshi orderbook (REST for reliability, WS for speed)
-        try:
-            orderbook = await self._kalshi_rest.get_orderbook(market_ticker)
-            self._orderbook_cache[market_ticker] = orderbook
-        except Exception:
-            logger.warning("snapshot_orderbook_error", ticker=market_ticker)
-            orderbook = self._orderbook_cache.get(
-                market_ticker,
-                Orderbook(ticker=market_ticker, timestamp=now),
-            )
+        # Kalshi orderbook — use WS-maintained cache, REST fallback on cache miss
+        orderbook = self._orderbook_cache.get(market_ticker)
+        if orderbook is None:
+            try:
+                orderbook = await self._kalshi_rest.get_orderbook(market_ticker)
+                self._orderbook_cache[market_ticker] = orderbook
+            except Exception:
+                logger.warning("snapshot_orderbook_error", ticker=market_ticker)
+                orderbook = Orderbook(ticker=market_ticker, timestamp=now)
 
         # Kalshi market info
         market = self._scanner.active_markets.get(market_ticker)

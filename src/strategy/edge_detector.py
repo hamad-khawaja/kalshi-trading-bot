@@ -136,6 +136,8 @@ class EdgeDetector:
                 * min_threshold
                 / self._config.min_edge_threshold
             )
+            # Hard cap: never accept edges above 0.20 regardless of vol adjustment
+            max_threshold = min(max_threshold, 0.20)
         else:
             min_threshold = self._config.min_edge_threshold
             max_threshold = self._config.max_edge_threshold
@@ -206,25 +208,67 @@ class EdgeDetector:
         # Determine price to submit
         # Use model probability as basis, discounted by a fraction of the edge
         # to ensure we still get filled while capturing most of the edge.
+        # CRITICAL: cap below the best ask to avoid crossing (post_only rejection).
         if side == "yes":
-            # We think YES is worth model_prob, market says implied.
-            # Bid between implied and model_prob (keep ~40% of edge as profit).
-            target_price = implied + raw_edge * 0.6
             best_bid = snapshot.orderbook.best_yes_bid
-            if best_bid is not None:
-                # Don't bid below best bid (we want to be at top of book)
-                price = max(float(best_bid) + 0.01, target_price)
+            best_ask = snapshot.orderbook.best_yes_ask
+
+            if using_fair_value:
+                # Thin book: anchor to actual orderbook levels, not fair value.
+                # Fair value is used for edge detection only — pricing must
+                # be grounded in real levels to avoid post_only cross.
+                if best_bid is None or best_ask is None:
+                    self.last_analysis["decision"] = "NO TRADE: thin book, insufficient YES levels"
+                    self.last_analysis["passed"] = False
+                    return None
+                bid_f, ask_f = float(best_bid), float(best_ask)
+                if ask_f - bid_f < 0.03:
+                    self.last_analysis["decision"] = "NO TRADE: thin book, spread too tight"
+                    self.last_analysis["passed"] = False
+                    return None
+                # Place conservatively: one tick above bid, capped well below ask
+                price = bid_f + 0.01
+                price = min(price, ask_f - 0.02)
             else:
-                price = target_price
+                target_price = implied + raw_edge * 0.6
+                if best_bid is not None:
+                    price = max(float(best_bid) + 0.01, target_price)
+                else:
+                    price = target_price
+                if best_ask is not None:
+                    price = min(price, float(best_ask) - 0.01)
+
             suggested_price = f"{min(0.99, max(0.01, price)):.2f}"
         else:
-            # NO price: we think NO is worth (1 - model_prob), market says (1 - implied).
-            target_price = (1.0 - implied) + raw_edge * 0.6
             best_bid = snapshot.orderbook.best_no_bid
-            if best_bid is not None:
-                price = max(float(best_bid) + 0.01, target_price)
+            best_no_ask = (
+                Decimal("1") - snapshot.orderbook.best_yes_bid
+                if snapshot.orderbook.best_yes_bid is not None
+                else None
+            )
+
+            if using_fair_value:
+                # Thin book: anchor to actual orderbook levels, not fair value.
+                if best_bid is None or best_no_ask is None:
+                    self.last_analysis["decision"] = "NO TRADE: thin book, insufficient NO levels"
+                    self.last_analysis["passed"] = False
+                    return None
+                bid_f, ask_f = float(best_bid), float(best_no_ask)
+                if ask_f - bid_f < 0.03:
+                    self.last_analysis["decision"] = "NO TRADE: thin book, spread too tight"
+                    self.last_analysis["passed"] = False
+                    return None
+                price = bid_f + 0.01
+                price = min(price, ask_f - 0.02)
             else:
-                price = target_price
+                target_price = (1.0 - implied) + raw_edge * 0.6
+                if best_bid is not None:
+                    price = max(float(best_bid) + 0.01, target_price)
+                else:
+                    price = target_price
+                if best_no_ask is not None:
+                    price = min(price, float(best_no_ask) - 0.01)
+
             suggested_price = f"{min(0.99, max(0.01, price)):.2f}"
 
         logger.info(

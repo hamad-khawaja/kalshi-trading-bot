@@ -155,10 +155,18 @@ class KalshiWebSocket:
                 await asyncio.sleep(delay)
                 reconnect_attempt += 1
 
+    # Map snapshot message types to their subscription channel
+    _TYPE_TO_CHANNEL = {
+        "orderbook_snapshot": "orderbook_delta",
+    }
+
     async def _dispatch(self, msg: dict[str, Any]) -> None:
         """Dispatch a message to registered callbacks."""
         msg_type = msg.get("type", "")
-        channel = msg.get("channel", msg_type)
+        channel = msg.get("channel", "")
+        if not channel:
+            # Map known snapshot types to their subscription channel
+            channel = self._TYPE_TO_CHANNEL.get(msg_type, msg_type)
 
         # Handle subscription confirmations
         if msg_type == "subscribed":

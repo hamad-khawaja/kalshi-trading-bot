@@ -70,8 +70,22 @@ class PositionSizer:
             vol_adjusted = vol_tracker.adjust_kelly_fraction(self._kelly_fraction)
             f *= vol_adjusted / self._kelly_fraction
 
-        # Scale by confidence
-        f *= signal.confidence
+        # Scale by confidence (sqrt to avoid quadratic scaling with Kelly)
+        f *= math.sqrt(signal.confidence)
+
+        # Fee-aware boost: increase position at extreme prices where fees
+        # are negligible (~0.2% at 20c vs ~1.56% at 50c)
+        price = float(signal.suggested_price_dollars)
+        fee_threshold = self._config.fee_extreme_price_threshold
+        if price < fee_threshold or price > (1.0 - fee_threshold):
+            distance_from_mid = abs(price - 0.50)
+            max_distance = 0.50 - fee_threshold
+            if max_distance > 0:
+                extremity = (distance_from_mid - max_distance) / (fee_threshold - 0.01)
+                extremity = max(0.0, min(1.0, extremity))
+                max_mult = self._config.fee_extreme_kelly_multiplier
+                multiplier = 1.0 + extremity * (max_mult - 1.0)
+                f *= min(multiplier, max_mult)
 
         # Convert to dollar amount
         bet_dollars = f * float(balance_dollars)
