@@ -36,8 +36,8 @@ strategy:
   fomo_min_implied_prob: 0.15
   # Edge persistence
   edge_confirmation_cycles: 1     # Immediate entry — inverted signals flip sides too often for streak=2
-  # Thesis-break exits
-  thesis_break_enabled: true
+  # Thesis-break exits (disabled: inversion means model always disagrees with position)
+  thesis_break_enabled: false
   thesis_break_threshold: 0.02    # Model must cross 0.50 +/- this to exit
 
 risk:
