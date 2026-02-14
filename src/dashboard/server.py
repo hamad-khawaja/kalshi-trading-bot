@@ -34,6 +34,7 @@ class DashboardState:
         self.features: dict[str, float] = {}
         self.prediction: dict[str, Any] = {}
         self.edge: dict[str, Any] = {}
+        self.fomo: dict[str, Any] = {}
         self.signals: list[dict[str, Any]] = []
         self.sizing: dict[str, Any] = {}
         self.last_trade: dict[str, Any] = {}
@@ -83,6 +84,7 @@ class DashboardState:
             "features": self.features,
             "prediction": self.prediction,
             "edge": self.edge,
+            "fomo": self.fomo,
             "signals": self.signals,
             "sizing": self.sizing,
             "last_trade": self.last_trade,

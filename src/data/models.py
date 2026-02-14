@@ -164,7 +164,8 @@ class Position(BaseModel):
     """A position held in a Kalshi market."""
 
     ticker: str = ""
-    market_exposure: int = 0
+    position: int = 0  # Signed contract count: +N = YES, -N = NO
+    market_exposure: int = 0  # Cost of position in cents
     resting_orders_count: int = 0
     fees_paid: Decimal = Decimal("0")
     total_traded: Decimal = Decimal("0")
@@ -247,7 +248,7 @@ class TradeSignal(BaseModel):
     suggested_price_dollars: str
     suggested_count: int = 0
     timestamp: datetime
-    signal_type: Literal["directional", "market_making"] = "directional"
+    signal_type: Literal["directional", "market_making", "fomo", "averaging"] = "directional"
 
 
 class CompletedTrade(BaseModel):

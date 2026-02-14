@@ -80,7 +80,7 @@ class OrderManager:
             action=signal.action,
             count=count,
             client_order_id=client_order_id,
-            post_only=True,  # Always use maker orders to pay 1.75% vs 7% taker fee
+            post_only=(signal.action != "sell"),  # Taker for exits, maker for entries
         )
 
         # Set price based on side

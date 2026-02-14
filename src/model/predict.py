@@ -43,25 +43,30 @@ class HeuristicModel(ProbabilityModel):
     5. Time to expiry (affects confidence)
     """
 
-    # Signal weights — rebalanced for trend awareness + technical depth
-    MOMENTUM_WEIGHT = 0.12
-    TECHNICAL_WEIGHT = 0.10  # BB, MACD, ROC, vol-mom composite
-    ORDERFLOW_WEIGHT = 0.15
-    MEAN_REVERSION_WEIGHT = 0.13
-    FUNDING_WEIGHT = 0.06
+    # Signal weights — proven signals (momentum, mean reversion) weighted higher;
+    # noisy/broken signals reduced, dead signals (Coinglass) zeroed out.
+    MOMENTUM_WEIGHT = 0.25
+    TECHNICAL_WEIGHT = 0.14  # BB, MACD, ROC, vol-mom composite
+    ORDERFLOW_WEIGHT = 0.08  # Kalshi retail book = noise
+    MEAN_REVERSION_WEIGHT = 0.20  # RSI reversals strong on 15-min
+    FUNDING_WEIGHT = 0.00  # Coinglass broken, always returns 0
     TIME_DECAY_WEIGHT = 0.14
-    CROSS_EXCHANGE_WEIGHT = 0.10  # Binance lead-lag signal
-    LIQUIDATION_WEIGHT = 0.10  # Liquidation cascade + taker flow
-    TAKER_FLOW_WEIGHT = 0.10  # Net aggressive buying/selling
+    CROSS_EXCHANGE_WEIGHT = 0.05  # Coinbase IS the oracle, Binance lead weak
+    LIQUIDATION_WEIGHT = 0.00  # Coinglass broken, always returns 0
+    TAKER_FLOW_WEIGHT = 0.14  # Net aggressive buying/selling
 
     # Maximum adjustment from 0.50 base
-    MAX_ADJUSTMENT = 0.20
+    MAX_ADJUSTMENT = 0.15
+
+    # Maximum adjustment when strong multi-timeframe momentum is detected.
+    # Reflects empirical finding: BTC direction -> resolution 96.6% of time
+    STRONG_MOMENTUM_MAX_ADJUSTMENT = 0.35
 
     # Dead zone: suppress marginal signals near 0.50
-    DEAD_ZONE = 0.04
+    DEAD_ZONE = 0.03
 
     # EMA smoothing alpha (0 = fully smooth, 1 = no smoothing)
-    EMA_ALPHA = 0.3
+    EMA_ALPHA = 0.5
 
     def __init__(self, weight_multipliers: dict[str, float] | None = None) -> None:
         self._prev_probability: float | None = None
@@ -116,12 +121,19 @@ class HeuristicModel(ProbabilityModel):
 
         # --- 4. Mean reversion component ---
         # RSI-based: overbought/oversold with graduated response
+        # IMPORTANT: suppress during consistent trends — mean reversion
+        # fights momentum and keeps the model at ~0.50 during real moves.
         rsi_norm = (features.rsi_14 - 50) / 50  # [-1, 1]
         mr_signal = 0.0
         if abs(rsi_norm) > 0.25:
             mr_signal = -rsi_norm * 0.3  # Moderate contrarian
         if abs(rsi_norm) > 0.5:
             mr_signal += -rsi_norm * 0.2  # Additional push at extremes
+
+        # When all momentum timeframes agree, suppress mean reversion —
+        # a consistent trend is not a mean-reversion opportunity.
+        if consistency == 1.0 and abs(mom_signal) > 0.3:
+            mr_signal *= 0.2  # 80% suppression
 
         # --- 5. Funding rate signal ---
         funding_signal = 0.0
@@ -227,8 +239,19 @@ class HeuristicModel(ProbabilityModel):
             + td_w * time_decay_signal
         )
 
-        # Clamp adjustment
-        adjustment = max(-self.MAX_ADJUSTMENT, min(self.MAX_ADJUSTMENT, raw_adjustment))
+        # Clamp adjustment — with strong momentum override
+        effective_max = self.MAX_ADJUSTMENT
+
+        # When all timeframes agree strongly, allow more extreme probabilities
+        # reflecting the 96.6% BTC direction -> resolution correlation.
+        if consistency == 1.0 and abs(mom_signal) > 0.6:
+            override_bonus = (abs(mom_signal) - 0.6) * 0.375
+            effective_max = min(
+                self.STRONG_MOMENTUM_MAX_ADJUSTMENT,
+                self.MAX_ADJUSTMENT + override_bonus,
+            )
+
+        adjustment = max(-effective_max, min(effective_max, raw_adjustment))
         probability = 0.50 + adjustment
 
         # Dead zone: suppress marginal signals near 0.50

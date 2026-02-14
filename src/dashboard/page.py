@@ -170,7 +170,9 @@ a{color:#58a6ff}
     <div style="display:flex;gap:24px">
       <div style="flex:1">
         <div class="kv"><span class="k">Balance</span><span class="v" id="risk-balance">--</span></div>
-        <div class="kv"><span class="k">Daily P&amp;L</span><span class="v" id="risk-pnl">--</span></div>
+        <div class="kv"><span class="k">Realized P&amp;L</span><span class="v" id="risk-pnl">--</span></div>
+        <div class="kv"><span class="k">Unrealized P&amp;L</span><span class="v" id="risk-unrealized-pnl">--</span></div>
+        <div class="kv"><span class="k">Total P&amp;L</span><span class="v" id="risk-total-pnl">--</span></div>
         <div class="kv"><span class="k">Trades today</span><span class="v" id="risk-trades">--</span></div>
         <div class="kv"><span class="k">Last P&amp;L</span><span class="v" id="risk-last-pnl">--</span></div>
       </div>
@@ -370,6 +372,8 @@ a{color:#58a6ff}
     const risk = s.risk || {};
     $('risk-balance').textContent = risk.balance != null ? '$' + Number(risk.balance).toFixed(2) : '--';
     $('risk-pnl').textContent = risk.daily_pnl != null ? '$' + Number(risk.daily_pnl).toFixed(2) : '--';
+    $('risk-unrealized-pnl').textContent = risk.unrealized_pnl != null ? '$' + Number(risk.unrealized_pnl).toFixed(2) : '--';
+    $('risk-total-pnl').textContent = risk.total_pnl != null ? '$' + Number(risk.total_pnl).toFixed(2) : '--';
     $('risk-trades').textContent = risk.trades_today != null ? risk.trades_today : '--';
     $('risk-losses').textContent = risk.consecutive_losses != null ? risk.consecutive_losses : '--';
     $('risk-wins').textContent = risk.consecutive_wins != null ? risk.consecutive_wins : '--';
@@ -398,6 +402,12 @@ a{color:#58a6ff}
 
     if (risk.daily_pnl != null) {
       $('risk-pnl').style.color = risk.daily_pnl >= 0 ? '#3fb950' : '#f85149';
+    }
+    if (risk.unrealized_pnl != null) {
+      $('risk-unrealized-pnl').style.color = risk.unrealized_pnl >= 0 ? '#3fb950' : '#f85149';
+    }
+    if (risk.total_pnl != null) {
+      $('risk-total-pnl').style.color = risk.total_pnl >= 0 ? '#3fb950' : '#f85149';
     }
 
     // Decision log

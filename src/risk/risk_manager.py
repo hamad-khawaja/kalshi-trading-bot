@@ -142,11 +142,14 @@ class RiskManager:
         return RiskDecision(True, "OK", adjusted_count=count)
 
     def record_trade(self, pnl: Decimal) -> None:
-        """Record a completed trade for risk tracking."""
+        """Record a settled position for risk tracking.
+
+        Note: _trades_today is incremented at order fill time in bot.py,
+        not here, to avoid double-counting entries vs settlements.
+        """
         self._reset_daily_if_needed()
 
         self._daily_pnl += pnl
-        self._trades_today += 1
         self._total_settled += 1
         self._last_pnl = pnl
 

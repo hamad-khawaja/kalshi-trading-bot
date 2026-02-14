@@ -46,34 +46,72 @@ class CoinglassConfig(BaseModel):
     base_url: str = "https://open-api-v3.coinglass.com/api"
 
 
+class AveragingConfig(BaseModel):
+    enabled: bool = True
+    discount_tiers: list[float] = [0.10, 0.20, 0.35]  # % below avg entry
+    size_multipliers: list[float] = [1.0, 1.5, 2.0]    # multiplier per tier
+    max_adds_per_position: int = 3
+    min_time_to_expiry_seconds: float = 120.0
+    momentum_threshold: float = 0.003  # magnitude to consider "strong" momentum
+    dead_zone: float = 0.02  # buffer around 0.50 for thesis check
+
+
 class StrategyConfig(BaseModel):
     poll_interval_seconds: float = 4.0
     min_edge_threshold: float = 0.03
     max_edge_threshold: float = 0.25
     confidence_weight: float = 0.7
-    confidence_min: float = 0.45  # Minimum model confidence to trade
-    directional_max_spread: float = 0.25  # Skip directional trades when spread > this
+    confidence_min: float = 0.55  # Minimum model confidence to trade
+    directional_max_spread: float = 0.15  # Skip directional trades when spread > this
     directional_min_depth: int = 5  # Require at least this many contracts in orderbook
     use_statistical_fair_value: bool = True  # Use fair value when orderbook is thin
     thin_book_edge_multiplier: float = 1.5  # Require 1.5x edge on thin orderbooks
     use_market_maker: bool = True
     mm_min_spread: float = 0.05
     mm_max_spread: float = 0.30
-    mm_max_inventory: int = 37  # Stop MM when holding this many contracts
+    mm_max_inventory: int = 20  # Stop MM when holding this many contracts
     use_time_profiles: bool = True
     time_profile_lookback_days: int = 30
+    # FOMO exploitation parameters
+    fomo_enabled: bool = True
+    fomo_min_divergence: float = 0.18
+    fomo_edge_threshold: float = 0.06
+    fomo_momentum_min_magnitude: float = 0.003
+    fomo_momentum_consistency_required: bool = True
+    fomo_max_implied_prob: float = 0.85
+    fomo_min_implied_prob: float = 0.15
+    fomo_min_confidence: float = 0.70
+    fomo_min_score: float = 0.50
+    # Take-profit parameters
+    take_profit_enabled: bool = True
+    take_profit_min_profit_cents: float = 0.06
+    take_profit_min_hold_seconds: float = 20.0
+    take_profit_time_decay_start_seconds: float = 300.0
+    take_profit_time_decay_floor_cents: float = 0.03
+    # Edge persistence: require N consecutive cycles with same-side edge before entry
+    edge_confirmation_cycles: int = 2
+    # Thesis-break exit: sell position when model flips against us
+    thesis_break_enabled: bool = True
+    thesis_break_threshold: float = 0.02  # model must cross 0.50 +/- this to trigger exit
 
 
 class RiskConfig(BaseModel):
-    max_position_per_market: int = 10
-    max_total_exposure_dollars: float = 200.0
-    max_daily_loss_dollars: float = 30.0
+    max_position_per_market: int = 15
+    max_total_exposure_dollars: float = 50.0
+    max_daily_loss_dollars: float = 5.0
     max_concurrent_positions: int = 3
-    kelly_fraction: float = 0.25
+    kelly_fraction: float = 0.15
     min_balance_dollars: float = 50.0
-    max_trades_per_day: int = 50
+    max_trades_per_day: int = 40
     cooldown_after_streak_minutes: int = 30
-    max_consecutive_losses: int = 4
+    max_consecutive_losses: int = 3
+    # Entry cooldown: minimum seconds between fills on the same market
+    entry_cooldown_seconds: float = 30.0
+    # Per-cycle contract cap: max contracts placed in a single strategy cycle
+    max_contracts_per_cycle: int = 10
+    # Fee-aware position sizing at extreme prices
+    fee_extreme_price_threshold: float = 0.25
+    fee_extreme_kelly_multiplier: float = 1.0
 
 
 class FeatureConfig(BaseModel):
@@ -110,6 +148,7 @@ class BotSettings(BaseModel):
     features: FeatureConfig = FeatureConfig()
     logging: LoggingConfig = LoggingConfig()
     database: DatabaseConfig = DatabaseConfig()
+    averaging: AveragingConfig = AveragingConfig()
     dashboard: DashboardConfig = DashboardConfig()
 
     @model_validator(mode="before")
