@@ -33,6 +33,7 @@ class PositionSizer:
         current_exposure_dollars: Decimal,
         current_market_position: int = 0,
         vol_tracker: VolatilityTracker | None = None,
+        time_to_expiry: float | None = None,
     ) -> int:
         """Calculate position size in number of contracts.
 
@@ -70,6 +71,11 @@ class PositionSizer:
             vol_adjusted = vol_tracker.adjust_kelly_fraction(self._kelly_fraction)
             f *= vol_adjusted / self._kelly_fraction
 
+        # Zone-based Kelly scaling: cheap zones get more, expensive zones get less
+        if signal.entry_zone > 0 and signal.entry_zone <= len(self._config.zone_kelly_multipliers):
+            zone_mult = self._config.zone_kelly_multipliers[signal.entry_zone - 1]
+            f *= zone_mult
+
         # Scale by confidence (sqrt to avoid quadratic scaling with Kelly)
         f *= math.sqrt(signal.confidence)
 
@@ -86,6 +92,21 @@ class PositionSizer:
                 max_mult = self._config.fee_extreme_kelly_multiplier
                 multiplier = 1.0 + extremity * (max_mult - 1.0)
                 f *= min(multiplier, max_mult)
+
+        # Time-based scaling: reduce size when less time for take-profit
+        if (
+            self._config.time_scale_enabled
+            and time_to_expiry is not None
+            and signal.signal_type != "market_making"
+        ):
+            full_time = self._config.time_scale_full_seconds
+            min_mult = self._config.time_scale_min_multiplier
+            if time_to_expiry >= full_time:
+                time_mult = 1.0
+            else:
+                # Linear scale from 1.0 down to min_mult
+                time_mult = min_mult + (1.0 - min_mult) * (time_to_expiry / full_time)
+            f *= time_mult
 
         # Convert to dollar amount
         bet_dollars = f * float(balance_dollars)
@@ -107,6 +128,17 @@ class PositionSizer:
             current_market_position,
             price,
         )
+
+        # Minimum position size: skip tiny positions that statistically lose
+        min_size = self._config.min_position_size
+        if 0 < count < min_size:
+            logger.info(
+                "position_below_minimum",
+                ticker=signal.market_ticker,
+                count=count,
+                min_size=min_size,
+            )
+            count = 0
 
         if count > 0:
             logger.debug(

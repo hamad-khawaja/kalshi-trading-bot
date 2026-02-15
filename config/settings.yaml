@@ -4,8 +4,23 @@ kalshi:
   environment: prod  # demo | prod
   api_key_id: ""     # Override via KALSHI_API_KEY_ID env var
   private_key_path: ""  # Override via KALSHI_PRIVATE_KEY_PATH env var
-  series_ticker: "KXBTC15M"
+  series_ticker: "KXBTC15M"  # Kept for backward compat
   rate_limit_ms: 100
+  assets:
+    - series_ticker: "KXBTC15M"
+      symbol: "BTC"
+      primary_ws_url: "wss://ws-feed.exchange.coinbase.com"
+      primary_symbol: "BTC-USD"
+      secondary_ws_url: "wss://ws.kraken.com/v2"
+      secondary_symbol: "BTC/USD"
+      coinglass_symbol: "BTC"
+    - series_ticker: "KXETH15M"
+      symbol: "ETH"
+      primary_ws_url: "wss://ws-feed.exchange.coinbase.com"
+      primary_symbol: "ETH-USD"
+      secondary_ws_url: "wss://ws.kraken.com/v2"
+      secondary_symbol: "ETH/USD"
+      coinglass_symbol: "ETH"
 
 binance:
   ws_url: "wss://ws-feed.exchange.coinbase.com"
@@ -17,9 +32,11 @@ coinglass:
 
 strategy:
   poll_interval_seconds: 4
-  min_edge_threshold: 0.04      # 4% minimum edge (must clear fees + slippage)
-  max_edge_threshold: 0.15      # Reject large edges (model wrong, not opportunity)
-  confidence_min: 0.55          # Reject low-quality signals
+  min_edge_threshold: 0.05      # 5% minimum edge (was 0.04 — raise floor to filter noise)
+  max_edge_threshold: 0.12      # Tighter cap on suspicious edges (was 0.15)
+  confidence_min: 0.62          # Require higher confidence (was 0.58 — entered on weak signals)
+  edge_expiry_decay_enabled: true
+  edge_expiry_decay_max: 1.8    # At 1 min left, require 1.8x normal edge
   directional_max_spread: 0.15  # Skip wide-spread illiquid books
   mm_max_inventory: 20          # Don't accumulate huge MM positions
   confidence_weight: 0.7
@@ -33,19 +50,54 @@ strategy:
   fomo_momentum_consistency_required: true
   fomo_max_implied_prob: 0.85
   fomo_min_implied_prob: 0.15
+  # Trailing take-profit
+  trailing_take_profit_enabled: true
+  trailing_take_profit_activation_cents: 0.04  # Profit to activate trailing
+  trailing_take_profit_drop_cents: 0.03        # Exit when price drops this from peak
+  # Pre-expiry exit: sell before settlement
+  pre_expiry_exit_enabled: true
+  pre_expiry_exit_seconds: 90.0  # Sell with 90s left instead of gambling
   # Edge persistence
   edge_confirmation_cycles: 2     # Require 2 consecutive cycles with same-side edge
-  # Thesis-break exits
-  thesis_break_enabled: true
-  thesis_break_threshold: 0.02    # Model must cross 0.50 +/- this to exit
+  # Thesis-break exits — DISABLED: -$9.72 on 14 exits (21% WR), destroys take-profit gains
+  thesis_break_enabled: false
+  thesis_break_threshold: 0.08
+  thesis_break_min_hold_seconds: 120.0
+  # Pre-expiry exit: only exit if profitable or near-breakeven (don't sell losers at rock bottom)
+  pre_expiry_exit_min_pnl_cents: -0.03  # Only pre-expiry exit if PnL >= -$0.03/contract
+  # Entry filters
+  min_entry_price: 0.15             # Block entries below $0.15 (cheap contracts lose money)
+  yes_side_edge_multiplier: 1.2     # Require 20% more edge for YES entries (NO side is more profitable)
+  # Zone filter: block expensive directional trades
+  zone_filter_enabled: true
+  max_directional_price: 0.60
+  zone_edge_multipliers: [0.6, 0.8, 1.0]  # Zones 1, 2, 3 asymmetric edge
+  # Phase timing: gate trades by window phase
+  phase_filter_enabled: true
+  phase_observation_end: 180.0        # 3 min (was 5 — too restrictive, missed good edges)
+  phase_confirmation_end: 480.0       # 8 min
+  phase_active_end: 720.0             # 12 min
+  phase_late_end: 840.0               # 14 min
+  phase_late_edge_multiplier: 1.3
+  phase_late_confidence_boost: 0.05
+  # Overreaction / bounce-back detection
+  overreaction_enabled: true
+  overreaction_extreme_threshold: 0.20
+  overreaction_momentum_reversal_threshold: 0.002
+  # Settlement bias: use recent settlement outcomes as directional signal
+  settlement_bias_enabled: true
+  settlement_bias_weight: 0.08
+  # Cross-asset divergence: use other asset's implied prob as a lead signal
+  cross_asset_divergence_enabled: true
+  cross_asset_divergence_weight: 0.06
 
 risk:
-  max_position_per_market: 20    # Reduced from 50: limits damage from bad bets
+  max_position_per_market: 15    # Smaller positions (was 20)
   max_total_exposure_dollars: 50.0   # $100 paper bankroll / 2 (paper balance = exposure * 2)
-  max_daily_loss_dollars: 50.0       # 50% of bankroll
+  max_daily_loss_dollars: 20.0       # 20% of bankroll — hard stop
   max_concurrent_positions: 5
-  kelly_fraction: 0.25          # Quarter-Kelly for paper testing
-  min_balance_dollars: 25.0     # Emergency stop at 25% of bankroll
+  kelly_fraction: 0.35          # Quarter-Kelly is safer (was 0.50)
+  min_balance_dollars: 80.0     # Stop trading when balance drops to $80 (20% drawdown)
   max_trades_per_day: 1000       # Paper trading: no daily limit
   cooldown_after_streak_minutes: 30
   max_consecutive_losses: 5     # Paper: more room to test
@@ -54,10 +106,18 @@ risk:
   max_contracts_per_cycle: 10    # Max contracts placed in one 4s cycle
   # Fee-aware sizing at extreme prices
   fee_extreme_price_threshold: 0.25
-  fee_extreme_kelly_multiplier: 1.0  # Disable boost at extremes
+  fee_extreme_kelly_multiplier: 1.5  # Enable fee boost at extremes (was 1.0)
+  # Zone-based Kelly scaling
+  zone_kelly_multipliers: [1.3, 1.15, 1.0, 0.7, 0.5]
+  # Time-based position scaling
+  time_scale_enabled: true
+  time_scale_full_seconds: 480.0  # Full size above 8 min remaining
+  time_scale_min_multiplier: 0.4  # 40% size at expiry
+  # Minimum position size: skip tiny positions that statistically lose
+  min_position_size: 5             # Don't enter with fewer than 5 contracts
 
 averaging:
-  enabled: true
+  enabled: false                # Disabled until profitable (was true)
   discount_tiers: [0.10, 0.20, 0.35]  # % below avg entry per tier
   size_multipliers: [1.0, 1.5, 2.0]   # multiplier per tier
   max_adds_per_position: 3

@@ -28,7 +28,7 @@ class DashboardState:
         self.mode: str = ""
         self.start_time: datetime | None = None
 
-        # Pipeline stages
+        # Pipeline stages (last-written, kept for backward compat)
         self.market: dict[str, Any] = {}
         self.snapshot: dict[str, Any] = {}
         self.features: dict[str, float] = {}
@@ -39,6 +39,9 @@ class DashboardState:
         self.sizing: dict[str, Any] = {}
         self.last_trade: dict[str, Any] = {}
 
+        # Per-asset pipeline state: {"BTC": {market, snapshot, ...}, "ETH": {...}}
+        self.per_asset: dict[str, dict[str, Any]] = {}
+
         # Health / risk
         self.risk: dict[str, Any] = {}
         self.positions: list[dict[str, Any]] = []
@@ -46,6 +49,28 @@ class DashboardState:
 
         # Ring buffer of last 50 cycle outcomes
         self.recent_decisions: deque[dict[str, Any]] = deque(maxlen=50)
+
+        # Per-asset trade history (last 5 results per asset)
+        self.trade_history: dict[str, deque[dict[str, Any]]] = {}
+
+        # Kalshi settlement history (last 5 settled markets per asset)
+        self.settlement_history: dict[str, list[dict[str, Any]]] = {}
+
+    def add_trade_result(
+        self, asset: str, action: str, side: str, pnl: float, ticker: str
+    ) -> None:
+        """Record a completed trade result for the trade history panel."""
+        if asset not in self.trade_history:
+            self.trade_history[asset] = deque(maxlen=10)
+        self.trade_history[asset].append(
+            {
+                "time": datetime.now(timezone.utc).strftime("%H:%M:%S"),
+                "action": action,
+                "side": side,
+                "pnl": round(pnl, 2),
+                "ticker": ticker,
+            }
+        )
 
     def add_decision(
         self, cycle: int, decision_type: str, summary: str
@@ -88,9 +113,15 @@ class DashboardState:
             "signals": self.signals,
             "sizing": self.sizing,
             "last_trade": self.last_trade,
+            "per_asset": self.per_asset,
             "risk": self.risk,
             "positions": self.positions,
             "recent_decisions": list(self.recent_decisions),
+            "trade_history": {
+                asset: list(trades)
+                for asset, trades in self.trade_history.items()
+            },
+            "settlement_history": self.settlement_history,
         }
         return json.dumps(payload, default=str)
 

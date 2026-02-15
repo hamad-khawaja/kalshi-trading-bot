@@ -38,6 +38,7 @@ class PositionState:
         self.fees_paid = Decimal("0")
         self.realized_pnl = Decimal("0")
         self.order_ids: list[str] = []
+        self.high_water_bid: Decimal | None = None  # Best bid seen since entry
 
     @property
     def exposure_dollars(self) -> Decimal:
@@ -264,38 +265,105 @@ class PositionTracker:
 
         Returns list of market tickers that should be exited.
         Reasons for exit:
-        1. Time-based: < 30s to expiry, let it ride to settlement
-        2. Position in expired market
+        1. Time-based: expired market
         """
         exits = []
-        now = datetime.now(timezone.utc)
 
         for ticker, position in list(self._positions.items()):
             snapshot = snapshots.get(ticker)
             if snapshot is None:
                 continue
 
-            # Near expiry — let positions ride to settlement
-            # (binary contracts settle automatically)
             if snapshot.time_to_expiry_seconds <= 0:
                 exits.append(ticker)
 
         return exits
 
+    def check_pre_expiry_exits(
+        self,
+        snapshots: dict[str, MarketSnapshot],
+        pre_expiry_seconds: float = 90.0,
+        min_pnl_per_contract: float = -0.03,
+    ) -> list[tuple[str, str]]:
+        """Check for positions that should be sold before settlement.
+
+        Returns list of (ticker, sell_price) for positions within
+        pre_expiry_seconds of expiry. Only exits if position is profitable
+        or near-breakeven (PnL per contract >= min_pnl_per_contract).
+        Losing positions ride to settlement instead of selling at rock bottom.
+        """
+        results: list[tuple[str, str]] = []
+
+        for ticker, position in list(self._positions.items()):
+            snapshot = snapshots.get(ticker)
+            if snapshot is None:
+                continue
+
+            tte = snapshot.time_to_expiry_seconds
+            if tte <= 0 or tte > pre_expiry_seconds:
+                continue
+
+            ob = snapshot.orderbook
+            if position.side == "yes":
+                current_bid = ob.best_yes_bid
+            else:
+                current_bid = ob.best_no_bid
+
+            if current_bid is None or current_bid <= 0:
+                continue
+
+            # Only pre-expiry exit if PnL per contract is acceptable
+            # Losers ride to settlement — selling at 0.02-0.10 is worse than the binary gamble
+            pnl_per_contract = float(current_bid) - float(position.avg_entry_price)
+            if pnl_per_contract < min_pnl_per_contract:
+                logger.info(
+                    "pre_expiry_exit_skipped_losing",
+                    ticker=ticker,
+                    side=position.side,
+                    entry_price=float(position.avg_entry_price),
+                    exit_bid=float(current_bid),
+                    pnl_per_contract=round(pnl_per_contract, 4),
+                    min_pnl=min_pnl_per_contract,
+                    time_to_expiry=round(tte, 1),
+                )
+                continue
+
+            logger.info(
+                "pre_expiry_exit_signal",
+                ticker=ticker,
+                side=position.side,
+                count=position.count,
+                entry_price=float(position.avg_entry_price),
+                exit_bid=float(current_bid),
+                pnl_per_contract=round(pnl_per_contract, 4),
+                time_to_expiry=round(tte, 1),
+            )
+            results.append((ticker, str(current_bid)))
+
+        return results
+
     def check_thesis_breaks(
         self,
         predictions: dict[str, PredictionResult],
-        threshold: float = 0.02,
+        threshold: float = 0.05,
+        min_hold_seconds: float = 60.0,
     ) -> list[str]:
         """Return tickers where model has flipped against our position.
 
         For YES positions, thesis breaks when probability_yes < 0.50 - threshold.
         For NO positions, thesis breaks when probability_yes > 0.50 + threshold.
+        Requires minimum hold time before thesis break can fire.
         """
         breaks = []
+        now = datetime.now(timezone.utc)
         for ticker, position in list(self._positions.items()):
             prediction = predictions.get(ticker)
             if prediction is None:
+                continue
+
+            # Minimum hold time — don't exit on model noise
+            hold_seconds = (now - position.last_fill_time).total_seconds()
+            if hold_seconds < min_hold_seconds:
                 continue
 
             if position.side == "yes":
@@ -306,6 +374,7 @@ class PositionTracker:
                         side="yes",
                         model_prob=round(prediction.probability_yes, 4),
                         threshold=threshold,
+                        hold_seconds=round(hold_seconds, 1),
                         count=position.count,
                     )
                     breaks.append(ticker)
@@ -317,6 +386,7 @@ class PositionTracker:
                         side="no",
                         model_prob=round(prediction.probability_yes, 4),
                         threshold=threshold,
+                        hold_seconds=round(hold_seconds, 1),
                         count=position.count,
                     )
                     breaks.append(ticker)
@@ -330,6 +400,7 @@ class PositionTracker:
     ) -> list[tuple[str, str]]:
         """Check positions for take-profit opportunities.
 
+        Includes both fixed threshold take-profit and trailing take-profit.
         Returns list of (ticker, sell_price) for positions meeting take-profit conditions.
         """
         results: list[tuple[str, str]] = []
@@ -351,14 +422,45 @@ class PositionTracker:
             if current_bid is None:
                 continue
 
+            # Update high-water mark for trailing take-profit
+            if position.high_water_bid is None or current_bid > position.high_water_bid:
+                position.high_water_bid = current_bid
+
             # Compute unrealized profit per contract
             profit_per_contract = current_bid - position.avg_entry_price
-            if profit_per_contract <= 0:
-                continue
 
             # Check minimum hold time
             hold_seconds = (now - position.entry_time).total_seconds()
             if hold_seconds < strategy_config.take_profit_min_hold_seconds:
+                continue
+
+            # Trailing take-profit: if we've gained enough, exit when price drops from peak
+            if (
+                strategy_config.trailing_take_profit_enabled
+                and position.high_water_bid is not None
+                and profit_per_contract > 0
+            ):
+                peak_profit = float(position.high_water_bid - position.avg_entry_price)
+                activation = strategy_config.trailing_take_profit_activation_cents
+                drop_threshold = strategy_config.trailing_take_profit_drop_cents
+
+                if peak_profit >= activation:
+                    drop_from_peak = float(position.high_water_bid - current_bid)
+                    if drop_from_peak >= drop_threshold:
+                        results.append((ticker, str(current_bid)))
+                        logger.info(
+                            "trailing_take_profit_signal",
+                            ticker=ticker,
+                            side=position.side,
+                            entry_price=float(position.avg_entry_price),
+                            current_bid=float(current_bid),
+                            high_water=float(position.high_water_bid),
+                            peak_profit=round(peak_profit, 4),
+                            drop_from_peak=round(drop_from_peak, 4),
+                        )
+                        continue  # Skip fixed TP check — trailing already triggered
+
+            if profit_per_contract <= 0:
                 continue
 
             # Compute dynamic profit threshold with time decay
@@ -368,7 +470,7 @@ class PositionTracker:
             floor_cents = strategy_config.take_profit_time_decay_floor_cents
 
             if time_to_expiry < 30:
-                # Too close to expiry — let it ride to settlement
+                # Too close to expiry — pre-expiry exit handles this
                 continue
             elif time_to_expiry >= decay_start:
                 threshold = min_profit

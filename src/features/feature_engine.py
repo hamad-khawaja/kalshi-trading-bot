@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+import math
+from typing import Any
+
 import numpy as np
 
 from src.config import FeatureConfig
@@ -32,10 +35,17 @@ class FeatureEngine:
     normalized features suitable for model input.
     """
 
-    def __init__(self, config: FeatureConfig):
+    def __init__(
+        self,
+        config: FeatureConfig,
+        settlement_history: dict[str, list[dict[str, Any]]] | None = None,
+    ):
         self._config = config
         self._momentum_windows = config.momentum_windows  # [15, 60, 180, 600]
         self._vol_window = config.volatility_window  # 300 seconds
+        self._settlement_history: dict[str, list[dict[str, Any]]] = (
+            settlement_history if settlement_history is not None else {}
+        )
 
     def compute(self, snapshot: MarketSnapshot) -> FeatureVector:
         """Compute all features from a market snapshot."""
@@ -95,6 +105,10 @@ class FeatureEngine:
             ob.yes_levels, ob.no_levels, max_depth=5
         )
 
+        # Settlement bias from recent Kalshi outcomes
+        asset_symbol = self._extract_asset_symbol(snapshot.market_ticker)
+        settle_bias = self._compute_settlement_bias(asset_symbol)
+
         return FeatureVector(
             timestamp=snapshot.timestamp,
             market_ticker=snapshot.market_ticker,
@@ -125,6 +139,9 @@ class FeatureEngine:
             liquidation_intensity=self._compute_liquidation_intensity(snapshot),
             liquidation_imbalance=self._compute_liquidation_imbalance(snapshot),
             taker_buy_sell_ratio=self._compute_taker_ratio(snapshot),
+            settlement_bias=settle_bias,
+            time_elapsed_seconds=snapshot.time_elapsed_seconds,
+            window_phase=snapshot.window_phase,
         )
 
     @staticmethod
@@ -185,6 +202,51 @@ class FeatureEngine:
         estimated_ticks = max(1, window_seconds * 10)
         window = min(estimated_ticks, len(prices))
         return momentum(prices, window)
+
+    def _compute_settlement_bias(self, asset_symbol: str) -> float:
+        """Compute directional bias from recent settlement outcomes.
+
+        Reads the shared settlement_history dict (populated by the health check loop).
+        Uses exponential decay weighting so most recent settlements matter more.
+        Returns float in [-1, 1]: positive = recent YES bias.
+        """
+        settlements = self._settlement_history.get(asset_symbol, [])
+        if not settlements:
+            return 0.0
+
+        # Exponential decay: most recent settlement gets weight 1.0,
+        # each older one decays by factor 0.7
+        decay = 0.7
+        weighted_yes = 0.0
+        total_weight = 0.0
+        for i, market in enumerate(settlements):
+            result = market.get("result", "").lower()
+            if result not in ("yes", "no"):
+                continue
+            weight = decay ** i
+            weighted_yes += weight * (1.0 if result == "yes" else 0.0)
+            total_weight += weight
+
+        if total_weight == 0:
+            return 0.0
+
+        # Map [0, 1] → [-1, 1]
+        return (weighted_yes / total_weight) * 2.0 - 1.0
+
+    @staticmethod
+    def _extract_asset_symbol(market_ticker: str) -> str:
+        """Extract asset symbol from market ticker (e.g. 'KXBTC15M-...' → 'BTC')."""
+        # Strip 'KX' prefix, then take letters before digits
+        ticker = market_ticker
+        if ticker.startswith("KX"):
+            ticker = ticker[2:]
+        symbol = ""
+        for ch in ticker:
+            if ch.isalpha():
+                symbol += ch
+            else:
+                break
+        return symbol or "BTC"
 
     @staticmethod
     def _to_price_array(prices: list[Decimal]) -> np.ndarray:

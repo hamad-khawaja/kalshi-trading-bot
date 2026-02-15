@@ -10,12 +10,23 @@ import yaml
 from pydantic import BaseModel, model_validator
 
 
+class AssetConfig(BaseModel):
+    series_ticker: str        # "KXBTC15M" or "KXETH15M"
+    symbol: str               # "BTC" or "ETH"
+    primary_ws_url: str       # Coinbase WS for this asset
+    primary_symbol: str       # "BTC-USD" or "ETH-USD"
+    secondary_ws_url: str = ""
+    secondary_symbol: str = ""
+    coinglass_symbol: str = ""
+
+
 class KalshiConfig(BaseModel):
     environment: Literal["demo", "prod"] = "demo"
     api_key_id: str = ""
     private_key_path: str = ""
     series_ticker: str = "KXBTC15M"
     rate_limit_ms: int = 100
+    assets: list[AssetConfig] = []
 
     @property
     def base_url(self) -> str:
@@ -88,11 +99,49 @@ class StrategyConfig(BaseModel):
     take_profit_min_hold_seconds: float = 20.0
     take_profit_time_decay_start_seconds: float = 300.0
     take_profit_time_decay_floor_cents: float = 0.03
+    # Trailing take-profit: ratchet exit price up as position gains
+    trailing_take_profit_enabled: bool = True
+    trailing_take_profit_activation_cents: float = 0.04  # Profit needed to activate trailing
+    trailing_take_profit_drop_cents: float = 0.03  # Exit when price drops this much from peak
+    # Pre-expiry exit: sell before settlement instead of gambling
+    pre_expiry_exit_enabled: bool = True
+    pre_expiry_exit_seconds: float = 90.0  # Sell with this many seconds left
+    pre_expiry_exit_min_pnl_cents: float = -0.03  # Only pre-expiry exit if PnL >= this per contract
     # Edge persistence: require N consecutive cycles with same-side edge before entry
     edge_confirmation_cycles: int = 2
     # Thesis-break exit: sell position when model flips against us
     thesis_break_enabled: bool = True
-    thesis_break_threshold: float = 0.02  # model must cross 0.50 +/- this to trigger exit
+    thesis_break_threshold: float = 0.05  # model must cross 0.50 +/- this to trigger exit
+    thesis_break_min_hold_seconds: float = 60.0  # minimum hold before thesis break can fire
+    # Entry price filter: block cheap contracts with poor hit rates
+    min_entry_price: float = 0.15
+    # YES-side edge penalty: require more edge for YES (NO side is more profitable empirically)
+    yes_side_edge_multiplier: float = 1.4
+    # Zone filter: block expensive directional trades
+    zone_filter_enabled: bool = True
+    max_directional_price: float = 0.60
+    zone_edge_multipliers: list[float] = [0.6, 0.8, 1.0]  # Zones 1, 2, 3
+    # Expiry decay: require more edge as expiry approaches (model accuracy degrades)
+    edge_expiry_decay_enabled: bool = True
+    edge_expiry_decay_max: float = 1.8  # At 1 min left, require 1.8x normal edge
+    # Phase timing: gate trades by window phase
+    phase_filter_enabled: bool = True
+    phase_observation_end: float = 300.0
+    phase_confirmation_end: float = 480.0
+    phase_active_end: float = 720.0
+    phase_late_end: float = 840.0
+    phase_late_edge_multiplier: float = 1.3
+    phase_late_confidence_boost: float = 0.05
+    # Overreaction / bounce-back detection
+    overreaction_enabled: bool = True
+    overreaction_extreme_threshold: float = 0.20
+    overreaction_momentum_reversal_threshold: float = 0.002
+    # Settlement bias: use recent settlement outcomes as a directional signal
+    settlement_bias_enabled: bool = True
+    settlement_bias_weight: float = 0.08
+    # Cross-asset divergence: use other asset's implied prob as a lead signal
+    cross_asset_divergence_enabled: bool = True
+    cross_asset_divergence_weight: float = 0.06
 
 
 class RiskConfig(BaseModel):
@@ -112,6 +161,13 @@ class RiskConfig(BaseModel):
     # Fee-aware position sizing at extreme prices
     fee_extreme_price_threshold: float = 0.25
     fee_extreme_kelly_multiplier: float = 1.0
+    # Zone-based Kelly scaling
+    zone_kelly_multipliers: list[float] = [1.3, 1.15, 1.0, 0.7, 0.5]
+    # Time-based position scaling: reduce size when less time for take-profit
+    time_scale_enabled: bool = True
+    time_scale_full_seconds: float = 480.0  # Full size above this time remaining
+    time_scale_min_multiplier: float = 0.4  # Minimum scaling at expiry
+    min_position_size: int = 5  # Don't enter with fewer than this many contracts
 
 
 class FeatureConfig(BaseModel):
@@ -171,6 +227,25 @@ class BotSettings(BaseModel):
                 if not coinglass.get("api_key"):
                     coinglass["api_key"] = os.environ.get("COINGLASS_API_KEY", "")
                 values["coinglass"] = coinglass
+
+            # Backward compat: auto-populate assets from legacy binance/secondary_feed
+            kalshi = values.get("kalshi", {})
+            if isinstance(kalshi, dict) and not kalshi.get("assets"):
+                binance = values.get("binance", {})
+                secondary = values.get("secondary_feed", {})
+                series = kalshi.get("series_ticker", "KXBTC15M")
+                kalshi["assets"] = [
+                    {
+                        "series_ticker": series,
+                        "symbol": "BTC",
+                        "primary_ws_url": binance.get("ws_url", "wss://ws-feed.exchange.coinbase.com") if isinstance(binance, dict) else "wss://ws-feed.exchange.coinbase.com",
+                        "primary_symbol": binance.get("symbol", "BTC-USD") if isinstance(binance, dict) else "BTC-USD",
+                        "secondary_ws_url": secondary.get("ws_url", "") if isinstance(secondary, dict) else "",
+                        "secondary_symbol": secondary.get("symbol", "") if isinstance(secondary, dict) else "",
+                        "coinglass_symbol": "BTC",
+                    }
+                ]
+                values["kalshi"] = kalshi
         return values
 
 

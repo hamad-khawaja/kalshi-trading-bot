@@ -246,6 +246,28 @@ class KalshiRestClient:
             pass
         return None
 
+    async def get_settled_markets(
+        self, series_ticker: str, limit: int = 5
+    ) -> list[dict]:
+        """Get recently settled markets with their results."""
+        params = {
+            "series_ticker": series_ticker,
+            "status": "settled",
+            "limit": str(limit),
+        }
+        data = await self._request("GET", "/markets", params=params)
+        results = []
+        for m in data.get("markets", []):
+            results.append({
+                "ticker": m.get("ticker", ""),
+                "title": m.get("title", ""),
+                "yes_sub_title": m.get("yes_sub_title", ""),
+                "result": m.get("result", ""),
+                "close_time": m.get("close_time", ""),
+                "volume": m.get("volume", 0),
+            })
+        return results
+
     async def get_trades(self, ticker: str, limit: int = 100) -> list[dict]:
         """Get recent trades for a market."""
         params = {"ticker": ticker, "limit": str(limit)}

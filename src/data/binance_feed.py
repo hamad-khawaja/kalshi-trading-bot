@@ -137,13 +137,12 @@ class BinanceFeed:
 
     async def _coinbase_subscribe(self, ws: websockets.WebSocketClientProtocol) -> None:
         """Send Coinbase subscription message for ticker channel."""
-        product_id = "BTC-USD"
         sub_msg = json.dumps({
             "type": "subscribe",
-            "channels": [{"name": "ticker", "product_ids": [product_id]}],
+            "channels": [{"name": "ticker", "product_ids": [self._symbol]}],
         })
         await ws.send(sub_msg)
-        logger.info("coinbase_subscribed", product_id=product_id)
+        logger.info("coinbase_subscribed", product_id=self._symbol)
 
     async def _kraken_subscribe(self, ws: websockets.WebSocketClientProtocol) -> None:
         """Send Kraken v2 subscription message for trade channel."""
@@ -151,12 +150,12 @@ class BinanceFeed:
             "method": "subscribe",
             "params": {
                 "channel": "trade",
-                "symbol": ["BTC/USD"],
+                "symbol": [self._symbol],
                 "snapshot": False,
             },
         })
         await ws.send(sub_msg)
-        logger.info("kraken_subscribed", symbol="BTC/USD")
+        logger.info("kraken_subscribed", symbol=self._symbol)
 
     def _handle_message(self, raw_msg: str | bytes) -> None:
         """Parse an exchange message and store/dispatch."""

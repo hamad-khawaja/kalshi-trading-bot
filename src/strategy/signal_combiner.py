@@ -46,6 +46,8 @@ class SignalCombiner:
         )
         # Edge persistence: track consecutive cycles with same-side edge
         self._edge_streak: dict[str, tuple[str, int]] = {}  # ticker → (side, count)
+        # Phase 1 overreaction state: ticker → {direction, extreme}
+        self._phase1_state: dict[str, dict] = {}
 
     def evaluate(
         self,
@@ -70,6 +72,27 @@ class SignalCombiner:
             return []
 
         signals: list[TradeSignal] = []
+
+        # Phase timing logic
+        phase = snapshot.window_phase
+        phase_enabled = self._config.phase_filter_enabled
+
+        # Track Phase 1 overreaction state for bounce-back detection
+        if phase_enabled and self._config.overreaction_enabled and features is not None:
+            ticker = snapshot.market_ticker
+            if phase == 1:
+                # Record direction and extremity during observation phase
+                direction = 1 if features.momentum_180s > 0 else (-1 if features.momentum_180s < 0 else 0)
+                implied = float(snapshot.implied_yes_prob) if snapshot.implied_yes_prob is not None else 0.5
+                extreme_thresh = self._config.overreaction_extreme_threshold
+                extreme = implied < extreme_thresh or implied > (1.0 - extreme_thresh)
+                self._phase1_state[ticker] = {
+                    "direction": direction,
+                    "extreme": extreme,
+                }
+            elif phase > 2 and ticker in self._phase1_state:
+                # Clean up state past Phase 2
+                del self._phase1_state[ticker]
 
         # 1. Check for directional edge (highest priority)
         directional = self._edge_detector.detect(prediction, snapshot)
@@ -107,6 +130,64 @@ class SignalCombiner:
                             net_edge=directional.net_edge,
                         )
                         directional = None
+
+        # Phase gating for directional signals
+        if directional is not None and phase_enabled:
+            ticker = snapshot.market_ticker
+            if phase == 1:
+                # Observation phase: no directional trades
+                logger.info(
+                    "phase_blocked_directional",
+                    ticker=ticker,
+                    phase=1,
+                    side=directional.side,
+                    net_edge=directional.net_edge,
+                )
+                directional = None
+            elif phase == 2:
+                # Confirmation phase: only allow with bounce-back
+                p1 = self._phase1_state.get(ticker)
+                bounce_back = False
+                if p1 and features is not None and p1["direction"] != 0:
+                    reversal_thresh = self._config.overreaction_momentum_reversal_threshold
+                    # Check if 60s momentum reversed from Phase 1 direction
+                    if p1["direction"] > 0 and features.momentum_60s < -reversal_thresh:
+                        bounce_back = True
+                    elif p1["direction"] < 0 and features.momentum_60s > reversal_thresh:
+                        bounce_back = True
+                if bounce_back:
+                    logger.info(
+                        "phase2_bounce_back_confirmed",
+                        ticker=ticker,
+                        side=directional.side,
+                        net_edge=directional.net_edge,
+                        p1_direction=p1["direction"] if p1 else 0,
+                        mom_60s=features.momentum_60s if features else 0,
+                    )
+                else:
+                    logger.info(
+                        "phase2_no_bounce_back",
+                        ticker=ticker,
+                        side=directional.side,
+                        net_edge=directional.net_edge,
+                    )
+                    directional = None
+            elif phase == 4:
+                # Late phase: tighten thresholds
+                min_edge_late = self._config.min_edge_threshold * self._config.phase_late_edge_multiplier
+                min_conf_late = self._config.confidence_min + self._config.phase_late_confidence_boost
+                if directional.net_edge < min_edge_late or directional.confidence < min_conf_late:
+                    logger.info(
+                        "phase_late_tightened",
+                        ticker=ticker,
+                        phase=4,
+                        side=directional.side,
+                        net_edge=directional.net_edge,
+                        min_edge_late=round(min_edge_late, 4),
+                        confidence=directional.confidence,
+                        min_conf_late=round(min_conf_late, 4),
+                    )
+                    directional = None
 
         if directional is not None:
             # Edge persistence: require N consecutive cycles with same-side edge

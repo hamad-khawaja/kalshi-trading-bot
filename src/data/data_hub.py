@@ -8,7 +8,7 @@ from decimal import Decimal
 
 import structlog
 
-from src.config import BotSettings
+from src.config import AssetConfig, BotSettings, StrategyConfig
 from src.data.binance_feed import BinanceFeed
 from src.data.coinglass_client import CoinglassClient
 from src.data.kalshi_client import KalshiRestClient
@@ -33,33 +33,58 @@ class DataHub:
         self,
         kalshi_rest: KalshiRestClient,
         kalshi_ws: KalshiWebSocket,
-        binance: BinanceFeed,
+        feeds: dict[str, BinanceFeed],
         coinglass: CoinglassClient,
-        scanner: MarketScanner,
-        secondary_feed: BinanceFeed | None = None,
+        scanners: dict[str, MarketScanner],
+        secondary_feeds: dict[str, BinanceFeed] | None = None,
+        strategy_config: StrategyConfig | None = None,
+        asset_configs: list[AssetConfig] | None = None,
     ):
         self._kalshi_rest = kalshi_rest
         self._kalshi_ws = kalshi_ws
-        self._binance = binance
-        self._secondary_feed = secondary_feed
+        self._feeds = feeds
+        self._secondary_feeds = secondary_feeds or {}
         self._coinglass = coinglass
-        self._scanner = scanner
+        self._scanners = scanners
+        self._strategy_config = strategy_config or StrategyConfig()
+        self._asset_configs = asset_configs or []
+        # Build series_ticker -> symbol mapping for routing
+        self._series_to_symbol: dict[str, str] = {
+            ac.series_ticker: ac.symbol for ac in self._asset_configs
+        }
         self._orderbook_cache: dict[str, Orderbook] = {}
         self._ws_subscribed_tickers: set[str] = set()
         self._ws_seq: dict[str, int] = {}  # Last processed seq per ticker
 
+    def _ticker_to_symbol(self, market_ticker: str) -> str:
+        """Map a market ticker like 'KXBTC15M-...' to its asset symbol ('BTC').
+
+        Matches by checking if the ticker starts with a known series_ticker prefix.
+        Falls back to the first asset symbol if no match.
+        """
+        upper = market_ticker.upper()
+        for series, symbol in self._series_to_symbol.items():
+            if upper.startswith(series):
+                return symbol
+        # Fallback: return first asset symbol
+        if self._asset_configs:
+            return self._asset_configs[0].symbol
+        return "BTC"
+
     async def start(self) -> None:
         """Connect all data sources. Kalshi/Coinglass failures are non-fatal."""
-        # Binance is critical (BTC price), others are best-effort
-        await self._binance.connect()
+        # Price feeds are critical, others are best-effort
+        for symbol, feed in self._feeds.items():
+            await feed.connect()
+            logger.info("primary_feed_connected", symbol=symbol)
 
         best_effort = [
             ("kalshi_rest", self._kalshi_rest.connect()),
             ("kalshi_ws", self._kalshi_ws.connect()),
             ("coinglass", self._coinglass.connect()),
         ]
-        if self._secondary_feed:
-            best_effort.append(("secondary_feed", self._secondary_feed.connect()))
+        for symbol, feed in self._secondary_feeds.items():
+            best_effort.append((f"secondary_feed_{symbol}", feed.connect()))
 
         for name, coro in best_effort:
             try:
@@ -67,18 +92,19 @@ class DataHub:
             except Exception:
                 logger.warning("data_source_connect_failed", source=name)
 
-        logger.info("data_hub_started")
+        logger.info("data_hub_started", assets=list(self._feeds.keys()))
 
     async def stop(self) -> None:
         """Gracefully close all connections."""
         coros = [
             self._kalshi_rest.close(),
             self._kalshi_ws.close(),
-            self._binance.close(),
             self._coinglass.close(),
         ]
-        if self._secondary_feed:
-            coros.append(self._secondary_feed.close())
+        for feed in self._feeds.values():
+            coros.append(feed.close())
+        for feed in self._secondary_feeds.values():
+            coros.append(feed.close())
         await asyncio.gather(*coros, return_exceptions=True)
         logger.info("data_hub_stopped")
 
@@ -218,19 +244,26 @@ class DataHub:
     async def get_snapshot(self, market_ticker: str) -> MarketSnapshot | None:
         """Build a complete market snapshot for the strategy layer.
 
-        Returns None if critical data (BTC price) is unavailable.
+        Returns None if critical data (underlying price) is unavailable.
         """
         now = datetime.now(timezone.utc)
 
-        # BTC price data
-        btc_price = self._binance.latest_price
-        if btc_price is None:
-            logger.warning("snapshot_no_btc_price")
+        # Resolve asset symbol for this ticker
+        symbol = self._ticker_to_symbol(market_ticker)
+        feed = self._feeds.get(symbol)
+        if feed is None:
+            logger.warning("snapshot_no_feed", symbol=symbol, ticker=market_ticker)
             return None
 
-        # Recent BTC price history
-        ticks_1min = self._binance.get_prices_since(60)
-        ticks_5min = self._binance.get_prices_since(300)
+        # Underlying price data
+        btc_price = feed.latest_price
+        if btc_price is None:
+            logger.warning("snapshot_no_btc_price", symbol=symbol)
+            return None
+
+        # Recent price history
+        ticks_1min = feed.get_prices_since(60)
+        ticks_5min = feed.get_prices_since(300)
         prices_1min = [t.price for t in ticks_1min]
         prices_5min = [t.price for t in ticks_5min]
         volumes_1min = [t.volume for t in ticks_1min]
@@ -245,8 +278,12 @@ class DataHub:
                 logger.warning("snapshot_orderbook_error", ticker=market_ticker)
                 orderbook = Orderbook(ticker=market_ticker, timestamp=now)
 
-        # Kalshi market info
-        market = self._scanner.active_markets.get(market_ticker)
+        # Kalshi market info — search across all scanners
+        market = None
+        for scanner in self._scanners.values():
+            market = scanner.active_markets.get(market_ticker)
+            if market:
+                break
         time_to_expiry = 0.0
         volume = 0
         strike_price = None
@@ -275,21 +312,21 @@ class DataHub:
                 price_window_seconds=300.0,
             )
 
-        # Cross-exchange data (Binance secondary feed)
+        # Cross-exchange data (secondary feed for this asset)
+        secondary_feed = self._secondary_feeds.get(symbol)
         binance_btc_price = None
         cross_exchange_spread = None
         cross_exchange_lead = None
-        if self._secondary_feed and self._secondary_feed.latest_price is not None:
-            binance_btc_price = self._secondary_feed.latest_price
-            # Spread: (binance - coinbase) / coinbase as percentage
+        if secondary_feed and secondary_feed.latest_price is not None:
+            binance_btc_price = secondary_feed.latest_price
+            # Spread: (secondary - primary) / primary as percentage
             cb_price = float(btc_price)
             bn_price = float(binance_btc_price)
             if cb_price > 0:
                 cross_exchange_spread = (bn_price - cb_price) / cb_price
             # Lead signal: compare short-term momentum across exchanges
-            # If Binance moved more than Coinbase recently, it's leading
-            bn_ticks = self._secondary_feed.get_prices_since(15)
-            cb_ticks = self._binance.get_prices_since(15)
+            bn_ticks = secondary_feed.get_prices_since(15)
+            cb_ticks = feed.get_prices_since(15)
             if len(bn_ticks) >= 2 and len(cb_ticks) >= 2:
                 bn_start = float(bn_ticks[0].price)
                 bn_end = float(bn_ticks[-1].price)
@@ -298,27 +335,28 @@ class DataHub:
                 if bn_start > 0 and cb_start > 0:
                     bn_mom = (bn_end - bn_start) / bn_start
                     cb_mom = (cb_end - cb_start) / cb_start
-                    # Positive lead = Binance moving up faster (bullish)
+                    # Positive lead = secondary moving up faster (bullish)
                     cross_exchange_lead = bn_mom - cb_mom
 
-        # Coinglass data (cached, non-blocking)
+        # Coinglass data (cached, non-blocking) — per-asset symbol
+        cg_symbol = symbol  # "BTC" or "ETH"
         funding_rate = None
         open_interest = None
         oi_change = None
         long_short = None
         try:
-            fr = await self._coinglass.get_funding_rate()
+            fr = await self._coinglass.get_funding_rate(cg_symbol)
             funding_rate = fr.rate
         except Exception:
             pass
         try:
-            oi = await self._coinglass.get_open_interest()
+            oi = await self._coinglass.get_open_interest(cg_symbol)
             open_interest = oi.value
             oi_change = oi.change_24h
         except Exception:
             pass
         try:
-            lsr = await self._coinglass.get_long_short_ratio()
+            lsr = await self._coinglass.get_long_short_ratio(cg_symbol)
             long_short = lsr.ratio
         except Exception:
             pass
@@ -327,22 +365,36 @@ class DataHub:
         liq_long_usd = None
         liq_short_usd = None
         try:
-            liq = await self._coinglass.get_liquidation_data()
+            liq = await self._coinglass.get_liquidation_data(cg_symbol)
             liq_long_usd = liq.long_usd
             liq_short_usd = liq.short_usd
         except Exception:
             pass
 
-        # Taker buy/sell volume (real-time from Binance secondary feed)
+        # Taker buy/sell volume (real-time from secondary feed)
         taker_buy = None
         taker_sell = None
-        if self._secondary_feed:
-            buy, sell = self._secondary_feed.get_taker_volume_since(300)  # 5 min window
+        if secondary_feed:
+            buy, sell = secondary_feed.get_taker_volume_since(300)  # 5 min window
             if buy > 0 or sell > 0:
-                # Convert from BTC to USD
+                # Convert from base asset to USD
                 price_usd = float(btc_price)
                 taker_buy = buy * price_usd
                 taker_sell = sell * price_usd
+
+        # Compute time elapsed and window phase
+        time_elapsed = max(0.0, 900.0 - time_to_expiry)
+        cfg = self._strategy_config
+        if time_elapsed < cfg.phase_observation_end:
+            window_phase = 1
+        elif time_elapsed < cfg.phase_confirmation_end:
+            window_phase = 2
+        elif time_elapsed < cfg.phase_active_end:
+            window_phase = 3
+        elif time_elapsed < cfg.phase_late_end:
+            window_phase = 4
+        else:
+            window_phase = 5
 
         return MarketSnapshot(
             timestamp=now,
@@ -368,5 +420,7 @@ class DataHub:
             taker_buy_volume=taker_buy,
             taker_sell_volume=taker_sell,
             time_to_expiry_seconds=time_to_expiry,
+            time_elapsed_seconds=time_elapsed,
+            window_phase=window_phase,
             volume=volume,
         )

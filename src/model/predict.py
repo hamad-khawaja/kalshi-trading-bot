@@ -45,25 +45,27 @@ class HeuristicModel(ProbabilityModel):
 
     # Signal weights — proven signals (momentum, mean reversion) weighted higher;
     # noisy/broken signals reduced, dead signals (Coinglass) zeroed out.
-    MOMENTUM_WEIGHT = 0.25
+    MOMENTUM_WEIGHT = 0.30  # Core signal: BTC direction → resolution 96.6%
     TECHNICAL_WEIGHT = 0.14  # BB, MACD, ROC, vol-mom composite
-    ORDERFLOW_WEIGHT = 0.08  # Kalshi retail book = noise
-    MEAN_REVERSION_WEIGHT = 0.20  # RSI reversals strong on 15-min
+    ORDERFLOW_WEIGHT = 0.06  # Kalshi retail book = noise
+    MEAN_REVERSION_WEIGHT = 0.10  # Reduced: was fighting momentum, keeping model at 0.50
     FUNDING_WEIGHT = 0.00  # Coinglass broken, always returns 0
-    TIME_DECAY_WEIGHT = 0.14
+    TIME_DECAY_WEIGHT = 0.10
     CROSS_EXCHANGE_WEIGHT = 0.05  # Coinbase IS the oracle, Binance lead weak
     LIQUIDATION_WEIGHT = 0.00  # Coinglass broken, always returns 0
-    TAKER_FLOW_WEIGHT = 0.14  # Net aggressive buying/selling
+    TAKER_FLOW_WEIGHT = 0.10  # Reduced: strong but noisy, was dominating
+    SETTLEMENT_BIAS_WEIGHT = 0.08  # Recent settlement outcome momentum
+    CROSS_ASSET_DIVERGENCE_WEIGHT = 0.07  # Cross-asset implied probability divergence
 
     # Maximum adjustment from 0.50 base
-    MAX_ADJUSTMENT = 0.15
+    MAX_ADJUSTMENT = 0.18  # Raised from 0.15: allow model to express stronger conviction
 
     # Maximum adjustment when strong multi-timeframe momentum is detected.
     # Reflects empirical finding: BTC direction -> resolution 96.6% of time
     STRONG_MOMENTUM_MAX_ADJUSTMENT = 0.35
 
     # Dead zone: suppress marginal signals near 0.50
-    DEAD_ZONE = 0.03
+    DEAD_ZONE = 0.05  # Raised: suppress marginal signals, require real conviction
 
     # EMA smoothing alpha (0 = fully smooth, 1 = no smoothing)
     EMA_ALPHA = 0.5
@@ -176,7 +178,16 @@ class HeuristicModel(ProbabilityModel):
         # Net aggressive buying (taker buys > sells) is bullish
         taker_signal = features.taker_buy_sell_ratio  # Already [-1, 1]
 
-        # --- 9. Time decay signal ---
+        # --- 9. Settlement bias signal ---
+        # Recent YES settlements = positive bias, NO settlements = negative
+        settlement_signal = features.settlement_bias  # Already [-1, 1]
+
+        # --- 10. Cross-asset divergence signal ---
+        # When the other asset's implied probability diverges from this one,
+        # the lagging asset tends to catch up.
+        cross_asset_signal = features.cross_asset_divergence  # Already [-1, 1]
+
+        # --- 11. Time decay signal ---
         # Reduced weight: dampen signals near expiry but don't negate them
         time_decay_signal = 0.0
         if features.time_to_expiry_normalized < 0.3:
@@ -200,6 +211,8 @@ class HeuristicModel(ProbabilityModel):
         cx_w = self.CROSS_EXCHANGE_WEIGHT * m.get("cross_exchange", 1.0)
         liq_w = self.LIQUIDATION_WEIGHT * m.get("liquidation", 1.0)
         tk_w = self.TAKER_FLOW_WEIGHT * m.get("taker_flow", 1.0)
+        sb_w = self.SETTLEMENT_BIAS_WEIGHT * m.get("settlement_bias", 1.0)
+        ca_w = self.CROSS_ASSET_DIVERGENCE_WEIGHT * m.get("cross_asset", 1.0)
 
         # Re-normalize so weights sum to the original total
         original_total = (
@@ -212,8 +225,10 @@ class HeuristicModel(ProbabilityModel):
             + self.CROSS_EXCHANGE_WEIGHT
             + self.LIQUIDATION_WEIGHT
             + self.TAKER_FLOW_WEIGHT
+            + self.SETTLEMENT_BIAS_WEIGHT
+            + self.CROSS_ASSET_DIVERGENCE_WEIGHT
         )
-        adjusted_total = mom_w + tech_w + flow_w + mr_w + fund_w + td_w + cx_w + liq_w + tk_w
+        adjusted_total = mom_w + tech_w + flow_w + mr_w + fund_w + td_w + cx_w + liq_w + tk_w + sb_w + ca_w
         if adjusted_total > 0:
             scale = original_total / adjusted_total
             mom_w *= scale
@@ -225,6 +240,8 @@ class HeuristicModel(ProbabilityModel):
             cx_w *= scale
             liq_w *= scale
             tk_w *= scale
+            sb_w *= scale
+            ca_w *= scale
 
         # --- Combine signals ---
         raw_adjustment = (
@@ -236,6 +253,8 @@ class HeuristicModel(ProbabilityModel):
             + cx_w * cross_exchange_signal
             + liq_w * liquidation_signal
             + tk_w * taker_signal
+            + sb_w * settlement_signal
+            + ca_w * cross_asset_signal
             + td_w * time_decay_signal
         )
 
@@ -282,6 +301,8 @@ class HeuristicModel(ProbabilityModel):
             "cross_exchange_signal": round(cross_exchange_signal, 4),
             "liquidation_signal": round(liquidation_signal, 4),
             "taker_signal": round(taker_signal, 4),
+            "settlement_signal": round(settlement_signal, 4),
+            "cross_asset_signal": round(cross_asset_signal, 4),
             "time_decay_signal": round(time_decay_signal, 4),
             "consistency": round(consistency, 4),
             "raw_adjustment": round(raw_adjustment, 4),

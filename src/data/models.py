@@ -231,6 +231,8 @@ class MarketSnapshot(BaseModel):
     taker_buy_volume: float | None = None
     taker_sell_volume: float | None = None
     time_to_expiry_seconds: float = 0.0
+    time_elapsed_seconds: float = 0.0
+    window_phase: int = 0  # 1-5
     volume: int = 0
 
 
@@ -249,6 +251,7 @@ class TradeSignal(BaseModel):
     suggested_count: int = 0
     timestamp: datetime
     signal_type: Literal["directional", "market_making", "fomo", "averaging"] = "directional"
+    entry_zone: int = 0  # Risk zone 1-5 (0 = unknown/MM)
 
 
 class CompletedTrade(BaseModel):
@@ -300,6 +303,10 @@ class FeatureVector(BaseModel):
     liquidation_intensity: float = 0.0
     liquidation_imbalance: float = 0.0
     taker_buy_sell_ratio: float = 0.0
+    settlement_bias: float = 0.0  # [-1, 1]: positive = recent YES bias
+    cross_asset_divergence: float = 0.0  # [-1, 1]: positive = other asset more bullish
+    time_elapsed_seconds: float = 0.0
+    window_phase: int = 0  # 1-5
 
     def to_array(self) -> list[float]:
         """Convert to flat list for model input, replacing None with 0."""
@@ -331,6 +338,8 @@ class FeatureVector(BaseModel):
             self.liquidation_intensity,
             self.liquidation_imbalance,
             self.taker_buy_sell_ratio,
+            self.settlement_bias,
+            self.cross_asset_divergence,
         ]
 
     @staticmethod
@@ -364,6 +373,8 @@ class FeatureVector(BaseModel):
             "liquidation_intensity",
             "liquidation_imbalance",
             "taker_buy_sell_ratio",
+            "settlement_bias",
+            "cross_asset_divergence",
         ]
 
 
