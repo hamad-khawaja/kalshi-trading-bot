@@ -10,82 +10,62 @@ Automated trading bot for [Kalshi](https://kalshi.com) prediction markets, targe
 
 ```mermaid
 flowchart TB
-    subgraph WS["WebSocket Feeds"]
-        CB["Coinbase WS\n(Primary Price)"]
-        KR["Kraken WS\n(Secondary Price)"]
-        KWS["Kalshi WS\n(Orderbook Deltas,\nFills, Trades)"]
-    end
-
-    subgraph REST["REST APIs"]
-        KREST["Kalshi REST\n/markets · /orderbook\n/balance · /orders\n/positions"]
-        CG["Coinglass REST\n/funding · /openInterest\n/longShortRate\n/liquidation"]
+    subgraph SOURCES["Data Sources"]
+        CB["Coinbase WS"]
+        KR["Kraken WS"]
+        KWS["Kalshi WS"]
+        KREST["Kalshi REST"]
+        CG["Coinglass REST"]
     end
 
     subgraph DATA["Data Layer"]
-        MS["Market Scanner\nDiscover active\n15-min contracts"]
-        DH["DataHub\nAggregate all sources\ninto MarketSnapshot"]
-        TP["Time Profiler\nHistorical klines\nfor vol context"]
+        MS["Market Scanner"]
+        DH["DataHub"]
+        TP["Time Profiler"]
     end
 
-    CB -->|"BTC/ETH ticks\n+ taker direction"| DH
-    KR -->|"Cross-exchange\nprice + lead signal"| DH
-    KWS -->|"Orderbook deltas\nimplied probability"| DH
-    KREST -->|"Market metadata\norderbook snapshots"| DH
-    CG -->|"Funding, OI\nLiq, L/S ratio"| DH
-    MS -->|"Active tickers"| DH
-    TP -.->|"Hourly klines"| DH
+    CB & KR & KWS & KREST & CG --> DH
+    MS --> DH
+    TP -.-> DH
 
     subgraph STRATEGY["Strategy Pipeline"]
-        FE["Feature Engine\n29 features from snapshot"]
-        PM["Heuristic Model\n11 weighted signals → P(YES)"]
-        SC["Signal Combiner\nPrioritize signal types"]
-
-        subgraph SIGNALS["Signal Detectors"]
-            ED["Edge Detector\nModel vs market\nprobability mismatch"]
-            FD["FOMO Detector\nContrarian bet\nvs retail panic"]
-            MM["Market Maker\nSpread capture\non wide books"]
-            AV["Averager\nPyramid into\ndiscounted positions"]
-        end
+        FE["Feature Engine"] --> PM["Heuristic Model"] --> SC["Signal Combiner"]
+        SC --> ED["Edge Detector"]
+        SC --> FD["FOMO Detector"]
+        SC --> MM["Market Maker"]
+        SC --> AV["Averager"]
     end
 
-    DH -->|"MarketSnapshot"| FE
-    FE -->|"FeatureVector"| PM
-    PM -->|"PredictionResult\nP(YES), confidence"| SC
-    SC --> ED & FD & MM & AV
+    DH --> FE
 
     subgraph RISK["Risk & Sizing"]
-        PS["Position Sizer\nFractional Kelly\nzone + time scaling"]
-        RM["Risk Manager\n9 safety checks\nbefore every trade"]
-        VT["Volatility Tracker\nRegime detection\nnormal / high / extreme"]
+        PS["Position Sizer"]
+        RM["Risk Manager"]
+        VT["Volatility Tracker"]
     end
 
-    ED & FD & MM & AV -->|"TradeSignal"| PS
-    PS -->|"Sized signal"| RM
-    VT -.->|"Vol regime"| RM
+    ED & FD & MM & AV --> PS --> RM
+    VT -.-> RM
 
-    subgraph EXEC["Execution Layer"]
-        OM["Order Manager\nSubmit / cancel\npaper + live mode"]
-        PT["Position Tracker\nEntry, exit, P&L\ntake-profit, thesis-break"]
+    subgraph EXEC["Execution"]
+        OM["Order Manager"]
+        PT["Position Tracker"]
     end
 
-    RM -->|"Approved"| OM
-    OM -->|"Order fills"| PT
-    OM -->|"POST /orders"| KREST
-    PT -->|"Exit signals"| OM
+    RM --> OM <--> PT
+    OM --> KREST
 
     subgraph MONITOR["Monitoring"]
-        DS["Dashboard Server\nSSE → Browser\nreal-time state"]
-        DB["SQLite Database\ntrades, predictions\noutcomes, ticks"]
+        DS["Dashboard (SSE)"]
+        DB["SQLite"]
     end
 
     PT --> DB
-    DH & FE & PM & ED & RM & PT -->|"Pipeline state"| DS
+    DH & PM & PT --> DS
 
-    style WS fill:#1a2733,stroke:#58a6ff,color:#c9d1d9
-    style REST fill:#1a2733,stroke:#d2a8ff,color:#c9d1d9
+    style SOURCES fill:#1a2733,stroke:#58a6ff,color:#c9d1d9
     style DATA fill:#0d1117,stroke:#30363d,color:#c9d1d9
     style STRATEGY fill:#0d1117,stroke:#30363d,color:#c9d1d9
-    style SIGNALS fill:#161b22,stroke:#30363d,color:#c9d1d9
     style RISK fill:#0d1117,stroke:#30363d,color:#c9d1d9
     style EXEC fill:#0d1117,stroke:#30363d,color:#c9d1d9
     style MONITOR fill:#0d1117,stroke:#30363d,color:#c9d1d9
