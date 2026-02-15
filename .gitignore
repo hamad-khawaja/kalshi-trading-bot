@@ -2,6 +2,9 @@
 *.pem
 config/paper_key.pem
 
+# CSV data files
+*.csv
+
 # Database files
 data/*.db
 data/*.db-shm

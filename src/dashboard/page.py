@@ -6,7 +6,7 @@ HTML_PAGE = """\
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Kalshi BTC Bot</title>
+<title>Kalshi Trading Bot</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{background:#0d1117;color:#c9d1d9;font-family:'SF Mono',SFMono-Regular,Consolas,'Liberation Mono',Menlo,monospace;font-size:13px}
@@ -16,6 +16,20 @@ a{color:#58a6ff}
 .header .meta{display:flex;gap:16px;font-size:12px;color:#8b949e}
 .status-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:4px;vertical-align:middle}
 .status-dot.live{background:#3fb950} .status-dot.disconnected{background:#f85149}
+.tab-bar{display:flex;gap:0;background:#161b22;border-bottom:1px solid #30363d;padding:0 16px}
+.tab-btn{padding:8px 20px;font-size:13px;font-weight:600;color:#8b949e;background:transparent;border:none;border-bottom:2px solid transparent;cursor:pointer;font-family:inherit;transition:color .2s,border-color .2s}
+.tab-btn:hover{color:#c9d1d9}
+.tab-btn.active{color:#f0f6fc;border-bottom-color:#58a6ff}
+.tab-btn .tab-dot{display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:6px}
+.tab-dot.btc{background:#f7931a} .tab-dot.eth{background:#627eea}
+
+/* Summary bar */
+.summary-bar{display:flex;gap:1px;background:#30363d;padding:1px}
+.stat-card{flex:1;background:#0d1117;padding:14px 16px;text-align:center}
+.stat-card .stat-value{font-size:26px;font-weight:700;color:#f0f6fc;font-variant-numeric:tabular-nums}
+.stat-card .stat-label{font-size:11px;text-transform:uppercase;color:#8b949e;margin-top:4px;letter-spacing:0.5px}
+.stat-value.pos{color:#3fb950} .stat-value.neg{color:#f85149} .stat-value.neutral{color:#8b949e}
+
 .grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:1px;background:#30363d;padding:1px}
 .grid>.panel{background:#0d1117;padding:12px}
 .wide{grid-column:span 2} .full{grid-column:span 3}
@@ -23,7 +37,7 @@ a{color:#58a6ff}
 .val{font-size:22px;font-weight:700;color:#f0f6fc}
 .sub{font-size:11px;color:#8b949e;margin-top:2px}
 .bar-row{display:flex;align-items:center;gap:6px;margin:3px 0}
-.bar-label{width:72px;text-align:right;font-size:11px;color:#8b949e;flex-shrink:0}
+.bar-label{width:48px;text-align:right;font-size:11px;color:#8b949e;flex-shrink:0}
 .bar-track{flex:1;height:14px;background:#21262d;border-radius:3px;position:relative;overflow:hidden}
 .bar-fill{height:100%;border-radius:3px;transition:width .4s ease}
 .bar-val{position:absolute;right:4px;top:0;line-height:14px;font-size:10px;color:#c9d1d9}
@@ -43,12 +57,23 @@ a{color:#58a6ff}
 .feat-cell{display:flex;justify-content:space-between;padding:3px 6px;background:#161b22;border-radius:3px;font-size:11px}
 .feat-cell .fn{color:#8b949e} .feat-cell .fv{font-weight:600}
 .fv.high-pos{color:#3fb950} .fv.low-pos{color:#56d364} .fv.neutral{color:#8b949e} .fv.low-neg{color:#ffa657} .fv.high-neg{color:#f85149}
-#log{max-height:220px;overflow-y:auto;font-size:11px;line-height:1.8}
+#log{max-height:180px;overflow-y:auto;font-size:11px;line-height:1.8}
 .log-entry{padding:2px 6px;border-radius:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .log-entry.trade-log{background:#1a3a1a;color:#3fb950}
 .log-entry.reject-log{background:#2a1a1a;color:#f85149}
 .log-entry.no-market-log{background:#161b22;color:#8b949e}
-.pos-row{display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #21262d;font-size:12px}
+.pos-row{display:flex;justify-content:space-between;align-items:center;padding:6px 8px;border-radius:4px;font-size:12px;background:#161b22;margin-bottom:4px}
+.pos-row.pos-yes{border-left:3px solid #3fb950} .pos-row.pos-no{border-left:3px solid #f85149}
+.pos-side{font-weight:700;font-size:11px;padding:2px 6px;border-radius:3px}
+.pos-side.yes{background:#1a3a1a;color:#3fb950} .pos-side.no{background:#2a1a1a;color:#f85149}
+.trade-hist-list{display:flex;flex-direction:column;gap:4px}
+.trade-hist-row{display:flex;align-items:center;gap:8px;padding:5px 8px;background:#161b22;border-radius:4px;font-size:12px}
+.trade-arrow{font-size:18px;font-weight:700;width:22px;text-align:center}
+.trade-arrow.win{color:#3fb950} .trade-arrow.loss{color:#f85149}
+.trade-pnl{font-weight:600;min-width:60px;text-align:right}
+.trade-pnl.win{color:#3fb950} .trade-pnl.loss{color:#f85149}
+.trade-meta{color:#8b949e;font-size:11px}
+.trade-action{color:#c9d1d9;font-weight:500;text-transform:capitalize}
 #reconnect-banner{display:none;position:fixed;top:0;left:0;right:0;background:#da3633;color:#fff;text-align:center;padding:6px;font-size:12px;font-weight:600;z-index:999}
 .countdown{font-size:20px;font-weight:700;margin-top:4px;font-variant-numeric:tabular-nums}
 .countdown.urgent{color:#f85149;animation:pulse 1s ease-in-out infinite}
@@ -62,13 +87,31 @@ a{color:#58a6ff}
 .btc-arrow{font-size:16px}
 .stat-highlight{font-size:18px;font-weight:700}
 .stat-highlight.win{color:#3fb950} .stat-highlight.loss{color:#f85149} .stat-highlight.neutral{color:#8b949e}
+
+/* Collapsible features */
+.collapsible-header{cursor:pointer;display:flex;align-items:center;gap:6px;user-select:none}
+.collapsible-header .toggle-arrow{transition:transform .2s;font-size:10px;color:#8b949e}
+.collapsible-header .toggle-arrow.open{transform:rotate(90deg)}
+.collapsible-body{overflow:hidden;transition:max-height .3s ease;max-height:0}
+.collapsible-body.open{max-height:600px}
+
+/* Compact settlement badges */
+.settle-inline{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.settle-badge{display:inline-flex;align-items:center;gap:3px;padding:2px 8px;background:#161b22;border-radius:3px;font-size:11px;white-space:nowrap}
+.settle-badge.yes{color:#3fb950} .settle-badge.no{color:#f85149}
+
+/* Highlighted positions panel */
+#p-pos-risk{border:1px solid #30363d;border-left:3px solid #58a6ff}
+
+/* Section divider within combined panel */
+.panel-divider{border:none;border-top:1px solid #21262d;margin:8px 0}
 </style>
 </head>
 <body>
 <div id="reconnect-banner">Disconnected — reconnecting&hellip;</div>
 
 <div class="header">
-  <h1>KALSHI BTC BOT</h1>
+  <h1>KALSHI TRADING BOT</h1>
   <div class="meta">
     <span><span class="status-dot live" id="status-dot"></span><span id="conn-status">Live</span></span>
     <span>Cycle #<span id="cycle">0</span></span>
@@ -77,8 +120,33 @@ a{color:#58a6ff}
   </div>
 </div>
 
+<div class="tab-bar" id="tab-bar">
+  <button class="tab-btn active" data-asset="BTC"><span class="tab-dot btc"></span>BTC</button>
+  <button class="tab-btn" data-asset="ETH"><span class="tab-dot eth"></span>ETH</button>
+</div>
+
+<!-- Summary Bar -->
+<div class="summary-bar">
+  <div class="stat-card">
+    <div class="stat-value" id="sum-balance">--</div>
+    <div class="stat-label">Balance</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value" id="sum-pnl">--</div>
+    <div class="stat-label">Total P&amp;L</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value" id="sum-trades">--</div>
+    <div class="stat-label">Trades Today</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value" id="sum-winrate">--</div>
+    <div class="stat-label">Win Rate</div>
+  </div>
+</div>
+
 <div class="grid">
-  <!-- Row 1: Market | BTC Price | Prediction -->
+  <!-- Row 1: Market | Price | Prediction -->
   <div class="panel" id="p-market">
     <h2>Market</h2>
     <div class="val" id="market-ticker">--</div>
@@ -88,7 +156,7 @@ a{color:#58a6ff}
   </div>
 
   <div class="panel" id="p-btc">
-    <h2>BTC Prices</h2>
+    <h2 id="price-header">BTC Prices</h2>
     <div class="btc-ticker">
       <div class="val" id="btc-price">--</div>
       <span class="btc-arrow" id="btc-arrow"></span>
@@ -113,7 +181,7 @@ a{color:#58a6ff}
     <div style="margin-top:8px" id="signal-bars"></div>
   </div>
 
-  <!-- Row 2: Edge Analysis | Orderbook -->
+  <!-- Row 2: Edge Analysis (wide) | Positions + Risk (1 col) -->
   <div class="panel wide" id="p-edge">
     <h2>Edge Analysis</h2>
     <div style="display:flex;gap:24px">
@@ -131,21 +199,32 @@ a{color:#58a6ff}
           <div class="edge-marker" id="edge-marker" style="left:0"></div>
         </div>
         <div id="edge-verdict" class="verdict no-market">Waiting for data&hellip;</div>
+        <div style="margin-top:8px">
+          <div class="kv"><span class="k">YES bid</span><span class="v" id="ob-yes-bid">--</span></div>
+          <div class="kv"><span class="k">NO bid</span><span class="v" id="ob-no-bid">--</span></div>
+          <div class="kv"><span class="k">Spread</span><span class="v" id="ob-spread">--</span></div>
+          <div class="kv"><span class="k">Fair value</span><span class="v" id="ob-fair-value" style="color:#58a6ff">--</span></div>
+        </div>
       </div>
     </div>
   </div>
 
-  <div class="panel" id="p-orderbook">
-    <h2>Orderbook</h2>
-    <div class="kv"><span class="k">YES bid</span><span class="v" id="ob-yes-bid">--</span></div>
-    <div class="kv"><span class="k">NO bid</span><span class="v" id="ob-no-bid">--</span></div>
-    <div class="kv"><span class="k">Spread</span><span class="v" id="ob-spread">--</span></div>
-    <div class="kv"><span class="k">YES depth</span><span class="v" id="ob-yes-depth">--</span></div>
-    <div class="kv"><span class="k">NO depth</span><span class="v" id="ob-no-depth">--</span></div>
-    <div class="kv"><span class="k">OB implied</span><span class="v" id="ob-implied">--</span></div>
-    <div class="kv"><span class="k">Strike</span><span class="v" id="ob-strike">--</span></div>
-    <div class="kv"><span class="k">Fair value</span><span class="v" id="ob-fair-value" style="color:#58a6ff">--</span></div>
+  <div class="panel" id="p-pos-risk">
+    <h2>Positions &amp; Risk</h2>
+    <div id="positions-list"><span class="sub">No open positions</span></div>
+    <hr class="panel-divider">
+    <div class="kv"><span class="k">Exposure</span><span class="v" id="risk-exposure">--</span></div>
+    <div class="kv"><span class="k">Vol regime</span><span class="v" id="risk-vol">--</span></div>
+    <div class="kv"><span class="k">Consec. wins</span><span class="v" id="risk-wins">--</span></div>
+    <div class="kv"><span class="k">Consec. losses</span><span class="v" id="risk-losses">--</span></div>
+    <div class="kv"><span class="k">Last P&amp;L</span><span class="v" id="risk-last-pnl">--</span></div>
     <div style="margin-top:6px;border-top:1px solid #21262d;padding-top:4px">
+      <div class="kv"><span class="k">YES depth</span><span class="v" id="ob-yes-depth">--</span></div>
+      <div class="kv"><span class="k">NO depth</span><span class="v" id="ob-no-depth">--</span></div>
+      <div class="kv"><span class="k">OB implied</span><span class="v" id="ob-implied">--</span></div>
+      <div class="kv"><span class="k">Strike</span><span class="v" id="ob-strike">--</span></div>
+    </div>
+    <div style="margin-top:4px;border-top:1px solid #21262d;padding-top:4px">
       <div class="kv"><span class="k">Liq Long</span><span class="v" id="liq-long" style="color:#f85149">--</span></div>
       <div class="kv"><span class="k">Liq Short</span><span class="v" id="liq-short" style="color:#3fb950">--</span></div>
       <div class="kv"><span class="k">Taker Buy</span><span class="v" id="taker-buy" style="color:#3fb950">--</span></div>
@@ -153,40 +232,55 @@ a{color:#58a6ff}
     </div>
   </div>
 
-  <!-- Row 3: Features -->
-  <div class="panel full" id="p-features">
-    <h2>Features</h2>
-    <div class="feat-grid" id="feat-grid"></div>
-  </div>
-
-  <!-- Row 4: Positions | Risk -->
-  <div class="panel" id="p-positions">
-    <h2>Positions &amp; Orders</h2>
-    <div id="positions-list"><span class="sub">No open positions</span></div>
-  </div>
-
-  <div class="panel wide" id="p-risk">
-    <h2>Risk Status</h2>
-    <div style="display:flex;gap:24px">
-      <div style="flex:1">
-        <div class="kv"><span class="k">Balance</span><span class="v" id="risk-balance">--</span></div>
-        <div class="kv"><span class="k">Realized P&amp;L</span><span class="v" id="risk-pnl">--</span></div>
-        <div class="kv"><span class="k">Unrealized P&amp;L</span><span class="v" id="risk-unrealized-pnl">--</span></div>
-        <div class="kv"><span class="k">Total P&amp;L</span><span class="v" id="risk-total-pnl">--</span></div>
-        <div class="kv"><span class="k">Trades today</span><span class="v" id="risk-trades">--</span></div>
-        <div class="kv"><span class="k">Last P&amp;L</span><span class="v" id="risk-last-pnl">--</span></div>
+  <!-- Row 3: Settlements (full width, compact inline) -->
+  <div class="panel full" id="p-settlements">
+    <h2>Kalshi Settlements</h2>
+    <div style="display:flex;flex-direction:column;gap:6px">
+      <div style="display:flex;align-items:center;gap:8px">
+        <span class="tab-dot btc" style="flex-shrink:0"></span>
+        <span style="font-weight:600;color:#f0f6fc;width:28px;flex-shrink:0">BTC</span>
+        <div id="settle-hist-BTC" class="settle-inline"><span class="sub">Loading&hellip;</span></div>
       </div>
-      <div style="flex:1">
-        <div class="kv"><span class="k">Win rate</span><span class="v" id="risk-winrate">--</span></div>
-        <div class="kv"><span class="k">Consec. wins</span><span class="v" id="risk-wins">--</span></div>
-        <div class="kv"><span class="k">Consec. losses</span><span class="v" id="risk-losses">--</span></div>
-        <div class="kv"><span class="k">Vol regime</span><span class="v" id="risk-vol">--</span></div>
-        <div class="kv"><span class="k">Exposure</span><span class="v" id="risk-exposure">--</span></div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span class="tab-dot eth" style="flex-shrink:0"></span>
+        <span style="font-weight:600;color:#f0f6fc;width:28px;flex-shrink:0">ETH</span>
+        <div id="settle-hist-ETH" class="settle-inline"><span class="sub">Loading&hellip;</span></div>
       </div>
     </div>
   </div>
 
-  <!-- Row 5: Decision log -->
+  <!-- Row 4: Recent Trades (full width) -->
+  <div class="panel full" id="p-trade-history">
+    <h2>Recent Trades</h2>
+    <div style="display:flex;gap:32px">
+      <div style="flex:1">
+        <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px">
+          <span class="tab-dot btc"></span><span style="font-weight:600;color:#f0f6fc">BTC</span>
+        </div>
+        <div id="trade-hist-BTC" class="trade-hist-list"><span class="sub">No trades yet</span></div>
+      </div>
+      <div style="width:1px;background:#30363d"></div>
+      <div style="flex:1">
+        <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px">
+          <span class="tab-dot eth"></span><span style="font-weight:600;color:#f0f6fc">ETH</span>
+        </div>
+        <div id="trade-hist-ETH" class="trade-hist-list"><span class="sub">No trades yet</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Row 5: Features (collapsible, collapsed by default) -->
+  <div class="panel full" id="p-features">
+    <div class="collapsible-header" id="features-toggle">
+      <span class="toggle-arrow" id="features-arrow">&#9654;</span>
+      <h2 style="margin-bottom:0">Features</h2>
+    </div>
+    <div class="collapsible-body" id="features-body">
+      <div class="feat-grid" id="feat-grid" style="margin-top:8px"></div>
+    </div>
+  </div>
+
+  <!-- Row 6: Decision log (full width, last 15) -->
   <div class="panel full" id="p-log">
     <h2>Decision Log</h2>
     <div id="log"></div>
@@ -196,6 +290,31 @@ a{color:#58a6ff}
 <script>
 (function(){
   const $ = id => document.getElementById(id);
+
+  // Active asset tab
+  let activeAsset = 'BTC';
+  // Per-asset price tracking for delta display
+  const priceState = {};  // { BTC: {prev, first}, ETH: {prev, first} }
+  // Latest full state for re-render on tab switch
+  let latestState = null;
+
+  // Tab click handlers
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      activeAsset = btn.dataset.asset;
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      if (latestState) render(latestState);
+    });
+  });
+
+  // Features collapsible toggle
+  let featuresOpen = false;
+  $('features-toggle').addEventListener('click', () => {
+    featuresOpen = !featuresOpen;
+    $('features-body').classList.toggle('open', featuresOpen);
+    $('features-arrow').classList.toggle('open', featuresOpen);
+  });
 
   let evtSource = null;
   let reconnectTimer = null;
@@ -209,7 +328,11 @@ a{color:#58a6ff}
       $('conn-status').textContent = 'Live';
     };
     evtSource.onmessage = e => {
-      try { render(JSON.parse(e.data)); } catch(err) { console.error('render error', err); }
+      try {
+        const data = JSON.parse(e.data);
+        latestState = data;
+        render(data);
+      } catch(err) { console.error('render error', err); }
     };
     evtSource.onerror = () => {
       $('reconnect-banner').style.display = 'block';
@@ -227,30 +350,48 @@ a{color:#58a6ff}
     $('uptime').textContent = fmtDuration(s.uptime_seconds || 0);
     $('mode').textContent = s.mode || '--';
 
+    // Auto-detect available assets from per_asset keys and add tabs dynamically
+    const pa = s.per_asset || {};
+    updateTabBar(Object.keys(pa));
+
+    // Pick per-asset data for the active tab
+    const assetData = pa[activeAsset] || {};
+    const m = assetData.market || s.market || {};
+    const snap = assetData.snapshot || s.snapshot || {};
+    const pred = assetData.prediction || s.prediction || {};
+    const edge = assetData.edge || s.edge || {};
+    const feats = assetData.features || s.features || {};
+
+    // --- Summary Bar (shared data from risk) ---
+    const risk = s.risk || {};
+    renderSummaryBar(risk);
+
+    // Update price panel header
+    $('price-header').textContent = activeAsset + ' Prices';
+
     // Market
-    const m = s.market || {};
     $('market-ticker').textContent = m.ticker || '--';
     $('market-title').textContent = m.yes_sub_title || m.title || '--';
     $('market-volume').textContent = m.volume != null ? 'Vol: ' + fmtVol(m.volume) : '--';
-    // Store close_time for the live countdown
     if (m.close_time) { window._closeTime = new Date(m.close_time).getTime(); }
     else { window._closeTime = null; }
 
-    // BTC Price with live ticker
-    const snap = s.snapshot || {};
+    // Price with live ticker (per-asset tracking)
     const newPrice = snap.btc_price || null;
+    if (!priceState[activeAsset]) priceState[activeAsset] = {prev: null, first: null};
+    const ps = priceState[activeAsset];
     if (newPrice) {
       $('btc-price').textContent = '$' + Number(newPrice).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2});
-      if (window._prevBtcPrice != null && window._prevBtcPrice !== newPrice) {
-        const diff = newPrice - window._prevBtcPrice;
-        const pctChange = ((newPrice - window._firstBtcPrice) / window._firstBtcPrice * 100);
+      if (ps.prev != null && ps.prev !== newPrice) {
+        const diff = newPrice - ps.prev;
+        const pctChange = ((newPrice - ps.first) / ps.first * 100);
         const arrow = $('btc-arrow');
         const delta = $('btc-delta');
         if (diff > 0) {
-          arrow.textContent = '\u25B2'; arrow.className = 'btc-arrow';  arrow.style.color = '#3fb950';
+          arrow.textContent = '\\u25B2'; arrow.className = 'btc-arrow'; arrow.style.color = '#3fb950';
           delta.className = 'btc-delta up';
         } else if (diff < 0) {
-          arrow.textContent = '\u25BC'; arrow.className = 'btc-arrow'; arrow.style.color = '#f85149';
+          arrow.textContent = '\\u25BC'; arrow.className = 'btc-arrow'; arrow.style.color = '#f85149';
           delta.className = 'btc-delta down';
         } else {
           arrow.textContent = ''; delta.className = 'btc-delta flat';
@@ -258,10 +399,12 @@ a{color:#58a6ff}
         const sign = pctChange >= 0 ? '+' : '';
         delta.textContent = sign + pctChange.toFixed(3) + '% (' + (diff >= 0 ? '+' : '') + diff.toFixed(2) + ')';
       }
-      if (!window._firstBtcPrice) window._firstBtcPrice = newPrice;
-      window._prevBtcPrice = newPrice;
+      if (!ps.first) ps.first = newPrice;
+      ps.prev = newPrice;
     } else {
       $('btc-price').textContent = '--';
+      $('btc-arrow').textContent = '';
+      $('btc-delta').textContent = '';
     }
 
     // Three labeled prices
@@ -284,20 +427,17 @@ a{color:#58a6ff}
     } else { $('cross-lead').textContent = '--'; }
 
     // Prediction
-    const pred = s.prediction || {};
     $('pred-prob').textContent = pred.probability != null ? 'P(YES) = ' + pct(pred.probability) : '--';
     $('pred-conf').textContent = 'Confidence: ' + pct(pred.confidence);
     renderSignalBars(pred.signals || {});
 
     // Edge
-    const edge = s.edge || {};
     $('edge-side').textContent = edge.side || '--';
     $('edge-raw').textContent = edge.raw_edge != null ? edge.raw_edge.toFixed(4) : '--';
     $('edge-fee').textContent = edge.fee_drag != null ? edge.fee_drag.toFixed(4) : '--';
     $('edge-net').textContent = edge.net_edge != null ? edge.net_edge.toFixed(4) : '--';
     $('edge-thresh').textContent = edge.min_threshold != null ? edge.min_threshold.toFixed(4) : '--';
 
-    // Edge bar: show net_edge relative to max_edge scale of 0.10
     const maxScale = 0.10;
     const netE = edge.net_edge || 0;
     const thresh = edge.min_threshold || 0;
@@ -308,18 +448,16 @@ a{color:#58a6ff}
     ef.style.background = netE >= thresh && thresh > 0 ? '#3fb950' : '#f85149';
     $('edge-marker').style.left = threshPct + '%';
 
-    // Verdict
     const vd = $('edge-verdict');
     vd.textContent = edge.decision || 'Waiting for data...';
     if (edge.passed) { vd.className = 'verdict trade'; }
     else if (edge.decision) { vd.className = 'verdict no-trade'; }
     else { vd.className = 'verdict no-market'; }
-    // Show fair value indicator in edge panel
     if (edge.using_fair_value) {
       $('edge-side').textContent = (edge.side || '--') + ' (FV)';
     }
 
-    // Orderbook
+    // Orderbook (now split between edge panel and pos-risk panel)
     const ob = snap.orderbook || {};
     $('ob-yes-bid').textContent = ob.best_yes_bid || '--';
     $('ob-no-bid').textContent = ob.best_no_bid || '--';
@@ -337,7 +475,6 @@ a{color:#58a6ff}
       fv.style.color = '#8b949e';
     }
 
-    // Liquidation & Taker data
     const fmtUsdK = v => v != null ? '$' + (v >= 1000000 ? (v/1000000).toFixed(1) + 'M' : v >= 1000 ? (v/1000).toFixed(0) + 'K' : v.toFixed(0)) : '--';
     $('liq-long').textContent = fmtUsdK(snap.liquidation_long_usd);
     $('liq-short').textContent = fmtUsdK(snap.liquidation_short_usd);
@@ -345,7 +482,6 @@ a{color:#58a6ff}
     $('taker-sell').textContent = fmtUsdK(snap.taker_sell_volume);
 
     // Features
-    const feats = s.features || {};
     const fg = $('feat-grid');
     fg.innerHTML = '';
     for (const [k,v] of Object.entries(feats)) {
@@ -356,40 +492,31 @@ a{color:#58a6ff}
       fg.appendChild(cell);
     }
 
+    // --- Shared sections (all assets) ---
+
     // Positions
     const positions = s.positions || [];
     const pl = $('positions-list');
     if (positions.length === 0) {
       pl.innerHTML = '<span class="sub">No open positions</span>';
     } else {
-      pl.innerHTML = positions.map(p =>
-        '<div class="pos-row"><span>' + p.ticker + '</span><span>' +
-        p.side + ' x' + p.count + ' @ ' + p.avg_price + '</span></div>'
-      ).join('');
+      pl.innerHTML = positions.map(p => {
+        const isYes = p.side.toLowerCase() === 'yes';
+        const rowCls = isYes ? 'pos-yes' : 'pos-no';
+        const sideCls = isYes ? 'yes' : 'no';
+        return '<div class="pos-row ' + rowCls + '">' +
+          '<span style="color:#c9d1d9">' + p.ticker + '</span>' +
+          '<span><span class="pos-side ' + sideCls + '">' + p.side.toUpperCase() + '</span> x' + p.count + ' @ ' + p.avg_price + '</span>' +
+          '</div>';
+      }).join('');
     }
 
-    // Risk
-    const risk = s.risk || {};
-    $('risk-balance').textContent = risk.balance != null ? '$' + Number(risk.balance).toFixed(2) : '--';
-    $('risk-pnl').textContent = risk.daily_pnl != null ? '$' + Number(risk.daily_pnl).toFixed(2) : '--';
-    $('risk-unrealized-pnl').textContent = risk.unrealized_pnl != null ? '$' + Number(risk.unrealized_pnl).toFixed(2) : '--';
-    $('risk-total-pnl').textContent = risk.total_pnl != null ? '$' + Number(risk.total_pnl).toFixed(2) : '--';
-    $('risk-trades').textContent = risk.trades_today != null ? risk.trades_today : '--';
+    // Risk stats (combined panel, balance removed — in summary bar)
     $('risk-losses').textContent = risk.consecutive_losses != null ? risk.consecutive_losses : '--';
     $('risk-wins').textContent = risk.consecutive_wins != null ? risk.consecutive_wins : '--';
     $('risk-vol').textContent = risk.vol_regime || '--';
     $('risk-exposure').textContent = risk.exposure != null ? '$' + Number(risk.exposure).toFixed(2) : '--';
 
-    // Win rate
-    if (risk.total_settled != null && risk.total_settled > 0) {
-      $('risk-winrate').textContent = (risk.win_rate * 100).toFixed(1) + '% (' + risk.total_settled + ' settled)';
-      $('risk-winrate').style.color = risk.win_rate >= 0.5 ? '#3fb950' : '#f85149';
-    } else {
-      $('risk-winrate').textContent = '--';
-      $('risk-winrate').style.color = '#8b949e';
-    }
-
-    // Last PnL
     const lp = $('risk-last-pnl');
     if (risk.last_pnl != null) {
       const sign = risk.last_pnl >= 0 ? '+' : '';
@@ -400,22 +527,57 @@ a{color:#58a6ff}
       lp.style.color = '#8b949e';
     }
 
-    if (risk.daily_pnl != null) {
-      $('risk-pnl').style.color = risk.daily_pnl >= 0 ? '#3fb950' : '#f85149';
-    }
-    if (risk.unrealized_pnl != null) {
-      $('risk-unrealized-pnl').style.color = risk.unrealized_pnl >= 0 ? '#3fb950' : '#f85149';
-    }
-    if (risk.total_pnl != null) {
-      $('risk-total-pnl').style.color = risk.total_pnl >= 0 ? '#3fb950' : '#f85149';
+    // Kalshi settlement history (compact inline badges)
+    const settleHist = s.settlement_history || {};
+    for (const asset of ['BTC', 'ETH']) {
+      const el = $('settle-hist-' + asset);
+      const markets = settleHist[asset] || [];
+      if (markets.length === 0) {
+        el.innerHTML = '<span class="sub">Loading&hellip;</span>';
+      } else {
+        el.innerHTML = markets.map(m => {
+          const isYes = m.result === 'yes';
+          const arrow = isYes ? '\\u25B2' : '\\u25BC';
+          const cls = isYes ? 'yes' : 'no';
+          const label = m.result.toUpperCase();
+          const time = m.close_time ? new Date(m.close_time).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : '';
+          return '<span class="settle-badge ' + cls + '">' + arrow + label + ' ' + time + '</span>';
+        }).join('');
+      }
     }
 
-    // Decision log
+    // Trade history (last 5 per asset)
+    const tradeHist = s.trade_history || {};
+    for (const asset of ['BTC', 'ETH']) {
+      const el = $('trade-hist-' + asset);
+      const trades = tradeHist[asset] || [];
+      if (trades.length === 0) {
+        el.innerHTML = '<span class="sub">No trades yet</span>';
+      } else {
+        el.innerHTML = trades.slice().reverse().map(t => {
+          const isWin = t.pnl >= 0;
+          const arrow = isWin ? '\\u25B2' : '\\u25BC';
+          const cls = isWin ? 'win' : 'loss';
+          const sign = isWin ? '+' : '';
+          const action = t.action.replace('_', ' ');
+          return '<div class="trade-hist-row">' +
+            '<span class="trade-arrow ' + cls + '">' + arrow + '</span>' +
+            '<span class="trade-action">' + action + '</span>' +
+            '<span style="color:#8b949e">' + t.side.toUpperCase() + '</span>' +
+            '<span class="trade-pnl ' + cls + '">' + sign + '$' + t.pnl.toFixed(2) + '</span>' +
+            '<span class="trade-meta">' + t.time + '</span>' +
+            '</div>';
+        }).join('');
+      }
+    }
+
+    // Decision log (last 15 entries)
     const decisions = s.recent_decisions || [];
     const logDiv = $('log');
     logDiv.innerHTML = '';
-    for (let i = decisions.length - 1; i >= 0; i--) {
-      const d = decisions[i];
+    const logEntries = decisions.slice(-15);
+    for (let i = logEntries.length - 1; i >= 0; i--) {
+      const d = logEntries[i];
       const el = document.createElement('div');
       const cls = d.type === 'trade' ? 'trade-log' : d.type === 'no_market' ? 'no-market-log' : 'reject-log';
       el.className = 'log-entry ' + cls;
@@ -424,9 +586,69 @@ a{color:#58a6ff}
     }
   }
 
+  // Render summary bar stats
+  function renderSummaryBar(risk) {
+    const bal = $('sum-balance');
+    if (risk.balance != null) {
+      bal.textContent = '$' + Number(risk.balance).toFixed(2);
+      bal.className = 'stat-value' + (risk.total_pnl > 0 ? ' pos' : risk.total_pnl < 0 ? ' neg' : '');
+    } else {
+      bal.textContent = '--';
+      bal.className = 'stat-value neutral';
+    }
+
+    const pnl = $('sum-pnl');
+    if (risk.total_pnl != null) {
+      const sign = risk.total_pnl >= 0 ? '+' : '';
+      pnl.textContent = sign + '$' + Number(risk.total_pnl).toFixed(2);
+      pnl.className = 'stat-value' + (risk.total_pnl >= 0 ? ' pos' : ' neg');
+    } else {
+      pnl.textContent = '--';
+      pnl.className = 'stat-value neutral';
+    }
+
+    const trades = $('sum-trades');
+    trades.textContent = risk.trades_today != null ? risk.trades_today : '--';
+    trades.className = 'stat-value';
+
+    const wr = $('sum-winrate');
+    if (risk.total_settled != null && risk.total_settled > 0) {
+      wr.textContent = (risk.win_rate * 100).toFixed(1) + '%';
+      wr.className = 'stat-value' + (risk.win_rate >= 0.5 ? ' pos' : ' neg');
+    } else {
+      wr.textContent = '--';
+      wr.className = 'stat-value neutral';
+    }
+  }
+
+  // Dynamically add/update tab buttons for discovered assets
+  const knownAssets = new Set(['BTC', 'ETH']);
+  const dotColors = {BTC:'#f7931a', ETH:'#627eea'};
+  function updateTabBar(assets) {
+    for (const a of assets) {
+      if (knownAssets.has(a)) continue;
+      knownAssets.add(a);
+      const btn = document.createElement('button');
+      btn.className = 'tab-btn';
+      btn.dataset.asset = a;
+      const dot = document.createElement('span');
+      dot.className = 'tab-dot';
+      dot.style.background = dotColors[a] || '#8b949e';
+      btn.appendChild(dot);
+      btn.appendChild(document.createTextNode(a));
+      btn.addEventListener('click', () => {
+        activeAsset = a;
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        if (latestState) render(latestState);
+      });
+      $('tab-bar').appendChild(btn);
+    }
+  }
+
   function renderSignalBars(signals) {
-    const names = ['momentum', 'technical', 'flow', 'mean_reversion', 'funding', 'cross_exchange', 'liquidation', 'taker_flow', 'time_decay'];
-    const labels = ['Momentum', 'Technical', 'Flow', 'MeanRev', 'Funding', 'X-Exchange', 'Liquidation', 'TakerFlow', 'TimeDec'];
+    const names = ['momentum', 'technical', 'flow', 'mean_reversion', 'funding', 'cross_exchange', 'liquidation', 'taker_flow', 'settlement', 'cross_asset', 'time_decay'];
+    const labels = ['Mom', 'Tech', 'Flow', 'MRev', 'Fund', 'XExch', 'Liq', 'Takr', 'Settl', 'XAst', 'TDec'];
     const container = $('signal-bars');
     container.innerHTML = '';
     for (let i = 0; i < names.length; i++) {

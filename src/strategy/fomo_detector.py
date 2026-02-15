@@ -246,6 +246,7 @@ class FomoDetector:
             suggested_count=0,
             timestamp=datetime.now(timezone.utc),
             signal_type="fomo",
+            entry_zone=EdgeDetector.classify_zone(trade_price),
         )
 
     def _analyze_momentum(

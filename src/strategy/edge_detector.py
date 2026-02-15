@@ -35,6 +35,27 @@ class EdgeDetector:
         self._time_profiler = time_profiler
         self.last_analysis: dict = {}
 
+    @staticmethod
+    def classify_zone(entry_price: float) -> int:
+        """Classify entry price into risk zone 1-5.
+
+        Zone 1: <0.20 (cheapest, best risk:reward)
+        Zone 2: <0.40
+        Zone 3: <0.60
+        Zone 4: <0.80
+        Zone 5: >=0.80 (most expensive, worst risk:reward)
+        """
+        if entry_price < 0.20:
+            return 1
+        elif entry_price < 0.40:
+            return 2
+        elif entry_price < 0.60:
+            return 3
+        elif entry_price < 0.80:
+            return 4
+        else:
+            return 5
+
     def detect(
         self,
         prediction: PredictionResult,
@@ -126,6 +147,60 @@ class EdgeDetector:
 
         net_edge = raw_edge - fee_drag
 
+        # Classify risk zone for this trade
+        zone = self.classify_zone(trade_price)
+
+        # Min entry price filter: block cheap contracts with poor hit rates
+        if trade_price < self._config.min_entry_price:
+            logger.info(
+                "min_price_blocked",
+                ticker=snapshot.market_ticker,
+                side=side,
+                entry_price=round(trade_price, 4),
+                min_price=self._config.min_entry_price,
+            )
+            self.last_analysis = {
+                "side": side,
+                "raw_edge": round(raw_edge, 4),
+                "fee_drag": round(fee_drag, 4),
+                "net_edge": round(net_edge, 4),
+                "model_prob": round(model_prob, 4),
+                "implied_prob": round(implied, 4),
+                "confidence": round(prediction.confidence, 4),
+                "edge_passed": False,
+                "confidence_ok": False,
+                "passed": False,
+                "using_fair_value": using_fair_value,
+                "decision": f"NO TRADE: entry price {trade_price:.2f} < min {self._config.min_entry_price:.2f}",
+            }
+            return None
+
+        # Zone filter: block expensive directional trades (Zone 4-5)
+        if self._config.zone_filter_enabled and trade_price > self._config.max_directional_price:
+            logger.info(
+                "zone_filter_blocked",
+                ticker=snapshot.market_ticker,
+                side=side,
+                entry_price=round(trade_price, 4),
+                zone=zone,
+                net_edge=round(net_edge, 4),
+            )
+            self.last_analysis = {
+                "side": side,
+                "raw_edge": round(raw_edge, 4),
+                "fee_drag": round(fee_drag, 4),
+                "net_edge": round(net_edge, 4),
+                "model_prob": round(model_prob, 4),
+                "implied_prob": round(implied, 4),
+                "confidence": round(prediction.confidence, 4),
+                "edge_passed": False,
+                "confidence_ok": False,
+                "passed": False,
+                "using_fair_value": using_fair_value,
+                "decision": f"NO TRADE: zone {zone} blocked (price={trade_price:.2f} > max {self._config.max_directional_price:.2f})",
+            }
+            return None
+
         # Apply volatility-adjusted thresholds when tracker is available
         if self._vol_tracker is not None:
             min_threshold = self._vol_tracker.adjust_edge_threshold(
@@ -155,9 +230,34 @@ class EdgeDetector:
             min_threshold *= thin_mult
             max_threshold *= thin_mult
 
+        # Asymmetric edge thresholds: cheap zones need less edge
+        if self._config.zone_filter_enabled and zone <= len(self._config.zone_edge_multipliers):
+            zone_mult = self._config.zone_edge_multipliers[zone - 1]
+            min_threshold *= zone_mult
+            max_threshold *= zone_mult
+
+        # Time-decay: require progressively more edge as expiry approaches
+        # Rationale: model accuracy degrades near expiry, so apparent edge is less trustworthy
+        if self._config.edge_expiry_decay_enabled:
+            tte = snapshot.time_to_expiry_seconds
+            full_time = 900.0  # 15 min window
+            if tte < full_time * 0.5:  # last 7.5 min
+                # Linear scale: 1.0x at 7.5min → decay_max_multiplier at 1min
+                fraction_remaining = max(tte, 60.0) / (full_time * 0.5)
+                decay_mult = 1.0 + (self._config.edge_expiry_decay_max - 1.0) * (1.0 - fraction_remaining)
+                min_threshold *= decay_mult
+                max_threshold *= decay_mult
+
+        # YES-side penalty: require more edge for YES entries (NO side is empirically more profitable)
+        if side == "yes" and self._config.yes_side_edge_multiplier > 1.0:
+            min_threshold *= self._config.yes_side_edge_multiplier
+            max_threshold *= self._config.yes_side_edge_multiplier
+
         # Capture analysis state for dashboard
         fv_label = " [fair value]" if using_fair_value else ""
-        edge_passed = min_threshold <= net_edge <= max_threshold
+        cheap_zone_bypass = self._config.zone_filter_enabled and zone <= 2
+        cheap_zone_cap = max_threshold * 2.0 if cheap_zone_bypass else max_threshold
+        edge_passed = net_edge >= min_threshold and (net_edge <= max_threshold or (cheap_zone_bypass and net_edge <= cheap_zone_cap))
         confidence_ok = prediction.confidence >= self._config.confidence_min
         if not edge_passed:
             if net_edge < min_threshold:
@@ -192,14 +292,35 @@ class EdgeDetector:
             return None
 
         if net_edge > max_threshold:
-            logger.warning(
-                "edge_too_large",
-                net_edge=net_edge,
-                model_prob=model_prob,
-                implied=implied,
-                ticker=snapshot.market_ticker,
-            )
-            return None
+            # Cheap zones (1-2): allow higher edge but still cap at 2x max_threshold
+            if self._config.zone_filter_enabled and zone <= 2:
+                cheap_zone_cap = max_threshold * 2.0
+                if net_edge > cheap_zone_cap:
+                    logger.warning(
+                        "edge_too_large_even_cheap",
+                        net_edge=net_edge,
+                        cap=cheap_zone_cap,
+                        zone=zone,
+                        ticker=snapshot.market_ticker,
+                    )
+                    return None
+                logger.info(
+                    "edge_large_cheap_zone_allowed",
+                    net_edge=round(net_edge, 4),
+                    max_threshold=round(max_threshold, 4),
+                    zone=zone,
+                    ticker=snapshot.market_ticker,
+                )
+            else:
+                logger.warning(
+                    "edge_too_large",
+                    net_edge=net_edge,
+                    model_prob=model_prob,
+                    implied=implied,
+                    zone=zone,
+                    ticker=snapshot.market_ticker,
+                )
+                return None
 
         # Confidence gate
         if prediction.confidence < self._config.confidence_min:
@@ -297,6 +418,7 @@ class EdgeDetector:
             suggested_count=0,  # Filled in by position sizer
             timestamp=datetime.now(timezone.utc),
             signal_type="directional",
+            entry_zone=zone,
         )
 
     @staticmethod

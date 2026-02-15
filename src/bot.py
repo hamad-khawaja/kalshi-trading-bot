@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import math
 import signal
 import sys
 from datetime import datetime, timezone
@@ -12,7 +13,7 @@ from pathlib import Path
 
 import structlog
 
-from src.config import BinanceConfig, BotSettings, load_settings
+from src.config import AssetConfig, BinanceConfig, BotSettings, KalshiConfig, load_settings
 from src.data.binance_feed import BinanceFeed
 from src.data.time_profile import TimeProfiler
 from src.data.coinglass_client import CoinglassClient
@@ -62,6 +63,9 @@ class TradingBot:
         # Prediction cache for thesis-break checks in monitor loop
         self._last_predictions: dict[str, object] = {}  # ticker → PredictionResult
 
+        # Thesis-break cooldown: don't re-enter markets after getting stopped out
+        self._thesis_break_markets: set[str] = set()
+
         # Data layer
         self._auth = KalshiAuth(
             settings.kalshi.api_key_id,
@@ -69,29 +73,53 @@ class TradingBot:
         )
         self._kalshi_rest = KalshiRestClient(settings.kalshi, self._auth)
         self._kalshi_ws = KalshiWebSocket(settings.kalshi, self._auth)
-        self._binance = BinanceFeed(settings.binance)
-        self._secondary_feed: BinanceFeed | None = None
-        if settings.secondary_feed.enabled:
-            self._secondary_feed = BinanceFeed(
-                BinanceConfig(
-                    ws_url=settings.secondary_feed.ws_url,
-                    symbol=settings.secondary_feed.symbol,
-                )
-            )
         self._coinglass = CoinglassClient(settings.coinglass)
-        self._scanner = MarketScanner(self._kalshi_rest, settings.kalshi)
+
+        # Per-asset price feeds and scanners
+        self._feeds: dict[str, BinanceFeed] = {}
+        self._secondary_feeds: dict[str, BinanceFeed] = {}
+        self._scanners: dict[str, MarketScanner] = {}
+
+        for asset in settings.kalshi.assets:
+            # Primary price feed
+            self._feeds[asset.symbol] = BinanceFeed(
+                BinanceConfig(ws_url=asset.primary_ws_url, symbol=asset.primary_symbol)
+            )
+            # Secondary price feed (optional)
+            if asset.secondary_ws_url:
+                self._secondary_feeds[asset.symbol] = BinanceFeed(
+                    BinanceConfig(ws_url=asset.secondary_ws_url, symbol=asset.secondary_symbol)
+                )
+            # Market scanner with per-asset series_ticker
+            scanner_config = settings.kalshi.model_copy(update={"series_ticker": asset.series_ticker})
+            self._scanners[asset.symbol] = MarketScanner(self._kalshi_rest, scanner_config)
+
         self._data_hub = DataHub(
             self._kalshi_rest,
             self._kalshi_ws,
-            self._binance,
-            self._coinglass,
-            self._scanner,
-            secondary_feed=self._secondary_feed,
+            feeds=self._feeds,
+            coinglass=self._coinglass,
+            scanners=self._scanners,
+            secondary_feeds=self._secondary_feeds,
+            strategy_config=settings.strategy,
+            asset_configs=settings.kalshi.assets,
         )
         self._db = Database(settings.database.path)
 
-        # Feature engine
-        self._feature_engine = FeatureEngine(settings.features)
+        # Dashboard (must be before feature engine which references settlement_history)
+        self._dashboard_state = DashboardState()
+        self._dashboard_state.mode = settings.mode
+        self._dashboard_server = DashboardServer(
+            self._dashboard_state,
+            settings.dashboard.host,
+            settings.dashboard.port,
+        ) if settings.dashboard.enabled else None
+
+        # Feature engine (pass shared settlement_history dict reference)
+        self._feature_engine = FeatureEngine(
+            settings.features,
+            settlement_history=self._dashboard_state.settlement_history,
+        )
 
         # Model
         self._model: ProbabilityModel = HeuristicModel()
@@ -126,25 +154,17 @@ class TradingBot:
             self._kalshi_rest, self._db, paper_mode=(settings.mode == "paper")
         )
 
-        # Dashboard
-        self._dashboard_state = DashboardState()
-        self._dashboard_state.mode = settings.mode
-        self._dashboard_server = DashboardServer(
-            self._dashboard_state,
-            settings.dashboard.host,
-            settings.dashboard.port,
-        ) if settings.dashboard.enabled else None
-
     async def start(self) -> None:
         """Main entry point: connect, subscribe, and run concurrent loops."""
         self._running = True
         self._start_time = datetime.now(timezone.utc)
 
+        asset_symbols = [a.symbol for a in self._settings.kalshi.assets]
         logger.info(
             "bot_starting",
             mode=self._settings.mode,
             environment=self._settings.kalshi.environment,
-            series=self._settings.kalshi.series_ticker,
+            assets=asset_symbols,
         )
 
         # Setup signal handlers
@@ -161,20 +181,43 @@ class TradingBot:
         # Connect data sources
         await self._data_hub.start()
 
-        # Fetch time profiles
+        # Fetch time profiles (once per asset)
         if self._time_profiler is not None:
-            await self._time_profiler.fetch_hourly_klines()
+            for asset in self._settings.kalshi.assets:
+                binance_symbol = asset.symbol + "USDT"  # e.g. "BTCUSDT", "ETHUSDT"
+                await self._time_profiler.fetch_hourly_klines(binance_symbol)
 
-        # Initial market scan
-        await self._scanner.scan()
+        # Initial market scan — all scanners
+        total_active = 0
+        for scanner in self._scanners.values():
+            await scanner.scan()
+            for ticker in scanner.active_markets:
+                await self._data_hub.subscribe_market(ticker)
+            total_active += len(scanner.active_markets)
 
-        # Subscribe to active markets
-        for ticker in self._scanner.active_markets:
-            await self._data_hub.subscribe_market(ticker)
+        # Initial settlement history fetch so the feature is available from cycle 1
+        try:
+            for asset in self._settings.kalshi.assets:
+                settled = await self._kalshi_rest.get_settled_markets(
+                    asset.series_ticker, limit=5
+                )
+                self._dashboard_state.settlement_history[asset.symbol] = settled
+            logger.info("initial_settlement_history_loaded")
+        except Exception:
+            logger.warning("initial_settlement_history_failed")
+
+        # Fetch initial balance so it appears on dashboard immediately
+        try:
+            initial_balance = await self._get_balance(force=True)
+            self._push_risk_to_dashboard(float(initial_balance))
+            logger.info("initial_balance_fetched", balance=float(initial_balance))
+        except Exception:
+            logger.warning("initial_balance_fetch_failed")
 
         logger.info(
             "bot_started",
-            active_markets=len(self._scanner.active_markets),
+            active_markets=total_active,
+            assets=asset_symbols,
         )
 
         # Run concurrent tasks
@@ -219,18 +262,31 @@ class TradingBot:
                 await asyncio.sleep(interval)
 
     async def _run_one_cycle(self) -> None:
-        """Execute one strategy cycle."""
+        """Execute one strategy cycle across all assets."""
         self._cycle_count += 1
         ds = self._dashboard_state
         ds.cycle = self._cycle_count
 
-        # Get current market
-        market = self._scanner.get_current_market()
-        if market is None:
+        # Collect current market from each scanner
+        markets_to_process = []
+        for scanner in self._scanners.values():
+            m = scanner.get_current_market()
+            if m:
+                markets_to_process.append(m)
+
+        if not markets_to_process:
             ds.add_decision(self._cycle_count, "no_market", "No active market")
             return
 
+        for market in markets_to_process:
+            await self._process_market(market)
+
+    async def _process_market(self, market) -> None:
+        """Process a single market within a strategy cycle."""
+        ds = self._dashboard_state
         ticker = market.ticker
+        # Resolve asset symbol for per-asset dashboard state
+        asset_symbol = self._data_hub._ticker_to_symbol(ticker)
         close_time = market.close_time or market.expected_expiration_time or market.expiration_time
         ds.market = {
             "ticker": ticker,
@@ -261,6 +317,8 @@ class TradingBot:
             "liquidation_short_usd": snapshot.liquidation_short_usd,
             "taker_buy_volume": snapshot.taker_buy_volume,
             "taker_sell_volume": snapshot.taker_sell_volume,
+            "time_elapsed": snapshot.time_elapsed_seconds,
+            "window_phase": snapshot.window_phase,
             "orderbook": {
                 "best_yes_bid": str(ob.best_yes_bid) if ob.best_yes_bid else None,
                 "best_no_bid": str(ob.best_no_bid) if ob.best_no_bid else None,
@@ -273,6 +331,14 @@ class TradingBot:
 
         # Compute features
         features = self._feature_engine.compute(snapshot)
+
+        # Cross-asset implied probability divergence
+        if self._settings.strategy.cross_asset_divergence_enabled:
+            other_prob = self._get_other_asset_implied_prob(asset_symbol)
+            if other_prob is not None and snapshot.implied_yes_prob is not None:
+                this_implied = float(snapshot.implied_yes_prob)
+                raw_divergence = other_prob - this_implied
+                features.cross_asset_divergence = math.tanh(raw_divergence / 0.15)
 
         ds.features = {
             name: getattr(features, name, 0.0) or 0.0
@@ -304,6 +370,8 @@ class TradingBot:
                 "cross_exchange": prediction.features_used.get("cross_exchange_signal", 0),
                 "liquidation": prediction.features_used.get("liquidation_signal", 0),
                 "taker_flow": prediction.features_used.get("taker_signal", 0),
+                "settlement": prediction.features_used.get("settlement_signal", 0),
+                "cross_asset": prediction.features_used.get("cross_asset_signal", 0),
                 "time_decay": prediction.features_used.get("time_decay_signal", 0),
             },
         }
@@ -342,6 +410,27 @@ class TradingBot:
             if fomo_analysis:
                 ds.fomo = fomo_analysis
 
+        # Write per-asset dashboard state for tabbed UI
+        ds.per_asset[asset_symbol] = {
+            "market": ds.market,
+            "snapshot": ds.snapshot,
+            "features": dict(ds.features),
+            "prediction": dict(ds.prediction),
+            "edge": dict(ds.edge) if ds.edge else {},
+            "fomo": dict(ds.fomo) if ds.fomo else {},
+        }
+
+        # Thesis-break cooldown: block buy signals for markets we got stopped out of
+        if ticker in self._thesis_break_markets and signals:
+            buy_signals = [s for s in signals if s.action == "buy" and s.signal_type != "market_making"]
+            if buy_signals:
+                logger.info(
+                    "thesis_break_cooldown_blocked",
+                    ticker=ticker,
+                    blocked_count=len(buy_signals),
+                )
+                signals = [s for s in signals if s.action != "buy" or s.signal_type == "market_making"]
+
         if not signals:
             # --- Averaging: check existing position for discount add ---
             if self._averager:
@@ -356,6 +445,27 @@ class TradingBot:
             if not signals:
                 reason = edge_analysis.get("decision", "No signal generated") if edge_analysis else "No signal generated"
                 ds.add_decision(self._cycle_count, "reject", reason)
+                return
+
+        # Guard: don't buy opposite side when already holding a position
+        existing_pos = self._position_tracker.get_position(ticker)
+        if existing_pos and existing_pos.count > 0:
+            held_side = existing_pos.side
+            before_count = len(signals)
+            signals = [s for s in signals if not (s.action == "buy" and s.side != held_side)]
+            blocked = before_count - len(signals)
+            if blocked > 0:
+                logger.info(
+                    "opposite_side_blocked",
+                    ticker=ticker,
+                    held_side=held_side,
+                    blocked_count=blocked,
+                )
+            if not signals:
+                ds.add_decision(
+                    self._cycle_count, "reject",
+                    f"Opposite-side guard: holding {held_side.upper()}",
+                )
                 return
 
         ds.signals = [
@@ -429,6 +539,7 @@ class TradingBot:
                 self._position_tracker.total_exposure_dollars,
                 effective_position,
                 vol_tracker=self._vol_tracker,
+                time_to_expiry=snapshot.time_to_expiry_seconds,
             )
 
             # Apply averaging tier multiplier
@@ -507,8 +618,32 @@ class TradingBot:
                         price=signal_item.suggested_price_dollars,
                         edge=signal_item.net_edge,
                         model_prob=round(prediction.probability_yes, 4),
+                        signal_type=signal_item.signal_type,
                         cycle=self._cycle_count,
                     )
+                    # Log trade to database
+                    try:
+                        from src.data.models import CompletedTrade
+                        fee = EdgeDetector.compute_fee_dollars(
+                            order_state.filled_count,
+                            float(signal_item.suggested_price_dollars),
+                            is_maker=True,
+                        )
+                        completed = CompletedTrade(
+                            order_id=order_id,
+                            market_ticker=ticker,
+                            side=signal_item.side,
+                            action="buy",
+                            count=order_state.filled_count,
+                            price_dollars=Decimal(signal_item.suggested_price_dollars),
+                            fees_dollars=fee,
+                            model_probability=signal_item.model_probability,
+                            implied_probability=signal_item.implied_probability,
+                            entry_time=datetime.now(timezone.utc),
+                        )
+                        await self._db.insert_trade(completed)
+                    except Exception:
+                        logger.warning("trade_logging_failed", ticker=ticker)
                     ds.last_trade = {
                         "ticker": ticker,
                         "side": signal_item.side,
@@ -569,10 +704,17 @@ class TradingBot:
                 if not self._running:
                     break
 
-                prev_tickers = set(self._scanner.active_markets.keys())
-                prev_count = len(prev_tickers)
-                await self._scanner.scan()
-                new_tickers = set(self._scanner.active_markets.keys())
+                # Scan all scanners and aggregate tickers
+                prev_tickers: set[str] = set()
+                for scanner in self._scanners.values():
+                    prev_tickers.update(scanner.active_markets.keys())
+
+                for scanner in self._scanners.values():
+                    await scanner.scan()
+
+                new_tickers: set[str] = set()
+                for scanner in self._scanners.values():
+                    new_tickers.update(scanner.active_markets.keys())
 
                 # If a market disappeared (expired), start fast polling
                 lost = prev_tickers - new_tickers
@@ -599,6 +741,7 @@ class TradingBot:
 
     async def _position_monitor_loop(self) -> None:
         """Monitor positions and handle exits every 10 seconds."""
+        ds = self._dashboard_state
         while self._running:
             try:
                 await asyncio.sleep(10)
@@ -659,6 +802,28 @@ class TradingBot:
                                     pnl=float(pnl),
                                 )
                                 self._risk_manager.record_trade(pnl)
+                                ds.add_trade_result(
+                                    self._data_hub._ticker_to_symbol(exit_ticker),
+                                    "settle", pos.side, float(pnl), exit_ticker,
+                                )
+                                # Log settlement to database
+                                try:
+                                    from src.data.models import CompletedTrade
+                                    completed = CompletedTrade(
+                                        order_id="settlement",
+                                        market_ticker=exit_ticker,
+                                        side=pos.side,
+                                        action="settle",
+                                        count=pos.count,
+                                        price_dollars=pos.avg_entry_price,
+                                        fees_dollars=Decimal("0"),
+                                        pnl_dollars=pnl,
+                                        entry_time=pos.entry_time,
+                                        exit_time=datetime.now(timezone.utc),
+                                    )
+                                    await self._db.insert_trade(completed)
+                                except Exception:
+                                    logger.warning("settlement_logging_failed", ticker=exit_ticker)
                                 actually_settled.append(exit_ticker)
                             else:
                                 # Result not available yet — keep position, retry next cycle
@@ -685,11 +850,103 @@ class TradingBot:
                                 pnl=float(pnl),
                             )
                             self._risk_manager.record_trade(pnl)
+                            ds.add_trade_result(
+                                self._data_hub._ticker_to_symbol(exit_ticker),
+                                "settle", pos.side, float(pnl), exit_ticker,
+                            )
+                            # Log settlement to database
+                            try:
+                                from src.data.models import CompletedTrade
+                                completed = CompletedTrade(
+                                    order_id="settlement",
+                                    market_ticker=exit_ticker,
+                                    side=pos.side,
+                                    action="settle",
+                                    count=pos.count,
+                                    price_dollars=pos.avg_entry_price,
+                                    fees_dollars=Decimal("0"),
+                                    pnl_dollars=pnl,
+                                    entry_time=pos.entry_time,
+                                    exit_time=datetime.now(timezone.utc),
+                                )
+                                await self._db.insert_trade(completed)
+                            except Exception:
+                                logger.warning("settlement_logging_failed", ticker=exit_ticker)
                             actually_settled.append(exit_ticker)
 
                     if actually_settled:
                         self._position_tracker.remove_expired_positions(actually_settled)
                         self._update_dashboard_positions()
+
+                # Check for pre-expiry exits (sell before settlement)
+                if self._settings.strategy.pre_expiry_exit_enabled:
+                    pe_signals = self._position_tracker.check_pre_expiry_exits(
+                        snapshots,
+                        pre_expiry_seconds=self._settings.strategy.pre_expiry_exit_seconds,
+                        min_pnl_per_contract=self._settings.strategy.pre_expiry_exit_min_pnl_cents,
+                    )
+                    for pe_ticker, sell_price in pe_signals:
+                        pos = self._position_tracker.get_position(pe_ticker)
+                        if not pos:
+                            continue
+                        from src.data.models import TradeSignal
+
+                        sell_signal = TradeSignal(
+                            market_ticker=pe_ticker,
+                            side=pos.side,
+                            action="sell",
+                            raw_edge=0.0,
+                            net_edge=0.0,
+                            model_probability=0.0,
+                            implied_probability=0.0,
+                            confidence=1.0,
+                            suggested_price_dollars=sell_price,
+                            suggested_count=pos.count,
+                            timestamp=datetime.now(timezone.utc),
+                            signal_type="directional",
+                        )
+                        order_id = await self._order_manager.submit(sell_signal, pos.count)
+                        if order_id:
+                            entry_cost = pos.avg_entry_price * pos.count
+                            exit_revenue = Decimal(sell_price) * pos.count
+                            sell_fee = EdgeDetector.compute_fee_dollars(
+                                pos.count, float(sell_price), is_maker=False
+                            )
+                            pnl = exit_revenue - entry_cost - sell_fee
+                            logger.info(
+                                "pre_expiry_exit_executed",
+                                ticker=pe_ticker,
+                                side=pos.side,
+                                count=pos.count,
+                                entry_price=float(pos.avg_entry_price),
+                                exit_price=sell_price,
+                                pnl=float(pnl),
+                            )
+                            self._risk_manager.record_trade(pnl)
+                            ds.add_trade_result(
+                                self._data_hub._ticker_to_symbol(pe_ticker),
+                                "pre_expiry", pos.side, float(pnl), pe_ticker,
+                            )
+                            # Log pre-expiry exit to database
+                            try:
+                                from src.data.models import CompletedTrade
+                                completed = CompletedTrade(
+                                    order_id=order_id,
+                                    market_ticker=pe_ticker,
+                                    side=pos.side,
+                                    action="pre_expiry_exit",
+                                    count=pos.count,
+                                    price_dollars=Decimal(sell_price),
+                                    fees_dollars=sell_fee,
+                                    pnl_dollars=pnl,
+                                    entry_time=pos.entry_time,
+                                    exit_time=datetime.now(timezone.utc),
+                                )
+                                await self._db.insert_trade(completed)
+                            except Exception:
+                                logger.warning("trade_logging_failed", ticker=pe_ticker)
+                            self._position_tracker.remove_expired_positions([pe_ticker])
+                            self._update_dashboard_positions()
 
                 # Check for take-profit opportunities
                 if self._settings.strategy.take_profit_enabled:
@@ -735,6 +992,28 @@ class TradingBot:
                                 fee=float(sell_fee),
                             )
                             self._risk_manager.record_trade(pnl)
+                            ds.add_trade_result(
+                                self._data_hub._ticker_to_symbol(tp_ticker),
+                                "take_profit", pos.side, float(pnl), tp_ticker,
+                            )
+                            # Log take-profit to database
+                            try:
+                                from src.data.models import CompletedTrade
+                                completed = CompletedTrade(
+                                    order_id=order_id,
+                                    market_ticker=tp_ticker,
+                                    side=pos.side,
+                                    action="take_profit",
+                                    count=pos.count,
+                                    price_dollars=Decimal(sell_price),
+                                    fees_dollars=sell_fee,
+                                    pnl_dollars=pnl,
+                                    entry_time=pos.entry_time,
+                                    exit_time=datetime.now(timezone.utc),
+                                )
+                                await self._db.insert_trade(completed)
+                            except Exception:
+                                logger.warning("trade_logging_failed", ticker=tp_ticker)
                             self._position_tracker.remove_expired_positions([tp_ticker])
                             self._update_dashboard_positions()
 
@@ -743,6 +1022,7 @@ class TradingBot:
                     thesis_breaks = self._position_tracker.check_thesis_breaks(
                         self._last_predictions,
                         threshold=self._settings.strategy.thesis_break_threshold,
+                        min_hold_seconds=self._settings.strategy.thesis_break_min_hold_seconds,
                     )
                     for tb_ticker in thesis_breaks:
                         pos = self._position_tracker.get_position(tb_ticker)
@@ -794,7 +1074,30 @@ class TradingBot:
                                 pnl=float(pnl),
                             )
                             self._risk_manager.record_trade(pnl)
+                            ds.add_trade_result(
+                                self._data_hub._ticker_to_symbol(tb_ticker),
+                                "thesis_break", pos.side, float(pnl), tb_ticker,
+                            )
+                            # Log thesis-break exit to database
+                            try:
+                                from src.data.models import CompletedTrade
+                                completed = CompletedTrade(
+                                    order_id=order_id,
+                                    market_ticker=tb_ticker,
+                                    side=pos.side,
+                                    action="thesis_break",
+                                    count=pos.count,
+                                    price_dollars=Decimal(sell_price),
+                                    fees_dollars=sell_fee,
+                                    pnl_dollars=pnl,
+                                    entry_time=pos.entry_time,
+                                    exit_time=datetime.now(timezone.utc),
+                                )
+                                await self._db.insert_trade(completed)
+                            except Exception:
+                                logger.warning("trade_logging_failed", ticker=tb_ticker)
                             self._position_tracker.remove_expired_positions([tb_ticker])
+                            self._thesis_break_markets.add(tb_ticker)
                             self._update_dashboard_positions()
 
                 # Check for fills on resting orders (live mode only)
@@ -829,13 +1132,15 @@ class TradingBot:
                 logger.exception("position_monitor_error")
 
     async def _coinglass_poll_loop(self) -> None:
-        """Refresh Coinglass data every 30 seconds."""
+        """Refresh Coinglass data every 30 seconds for all assets."""
         while self._running:
             try:
                 await asyncio.sleep(30)
                 if not self._running:
                     break
-                await self._coinglass.refresh_all()
+                for asset in self._settings.kalshi.assets:
+                    cg_sym = asset.coinglass_symbol or asset.symbol
+                    await self._coinglass.refresh_all(cg_sym)
             except asyncio.CancelledError:
                 break
             except Exception:
@@ -848,7 +1153,8 @@ class TradingBot:
                 await asyncio.sleep(6 * 3600)
                 if not self._running:
                     break
-                await self._time_profiler.fetch_hourly_klines()
+                for asset in self._settings.kalshi.assets:
+                    await self._time_profiler.fetch_hourly_klines(asset.symbol + "USDT")
                 logger.info("time_profile_refreshed")
             except asyncio.CancelledError:
                 break
@@ -857,15 +1163,30 @@ class TradingBot:
 
     async def _health_check_loop(self) -> None:
         """Log bot health status every 60 seconds."""
+        first_run = True
         while self._running:
             try:
-                await asyncio.sleep(60)
+                if first_run:
+                    # First tick after 5s so startup balance is already pushed
+                    await asyncio.sleep(5)
+                    first_run = False
+                else:
+                    await asyncio.sleep(60)
                 if not self._running:
                     break
 
                 balance = await self._get_balance()
                 positions = self._position_tracker.get_all_positions()
 
+                # Count active markets across all scanners
+                total_active_markets = sum(
+                    len(s.active_markets) for s in self._scanners.values()
+                )
+                # Collect prices from all feeds
+                feed_prices = {
+                    sym: float(f.latest_price or 0)
+                    for sym, f in self._feeds.items()
+                }
                 logger.info(
                     "health_check",
                     uptime_seconds=(
@@ -878,31 +1199,15 @@ class TradingBot:
                     positions=len(positions),
                     daily_pnl=float(self._risk_manager.daily_pnl),
                     trades_today=self._risk_manager.trades_today,
-                    active_markets=len(self._scanner.active_markets),
+                    active_markets=total_active_markets,
                     cycles=self._cycle_count,
-                    btc_price=float(self._binance.latest_price or 0),
+                    feed_prices=feed_prices,
                     vol_regime=self._vol_tracker.current_regime,
                     consecutive_losses=self._risk_manager.consecutive_losses,
                 )
 
                 # Update dashboard risk/position state
-                effective_balance = float(balance + self._risk_manager.daily_pnl) if self._settings.mode == "paper" else float(balance)
-                prev_unrealized = self._dashboard_state.risk.get("unrealized_pnl", 0.0)
-                daily_pnl = float(self._risk_manager.daily_pnl)
-                self._dashboard_state.risk = {
-                    "balance": effective_balance,
-                    "daily_pnl": daily_pnl,
-                    "unrealized_pnl": prev_unrealized,
-                    "total_pnl": daily_pnl + prev_unrealized,
-                    "trades_today": self._risk_manager.trades_today,
-                    "consecutive_losses": self._risk_manager.consecutive_losses,
-                    "consecutive_wins": self._risk_manager.consecutive_wins,
-                    "win_rate": self._risk_manager.win_rate,
-                    "total_settled": self._risk_manager.total_settled,
-                    "last_pnl": float(self._risk_manager.last_pnl) if self._risk_manager.last_pnl is not None else None,
-                    "vol_regime": self._vol_tracker.current_regime,
-                    "exposure": float(self._position_tracker.total_exposure_dollars),
-                }
+                self._push_risk_to_dashboard(float(balance))
                 self._dashboard_state.positions = [
                     {
                         "ticker": p.market_ticker,
@@ -912,6 +1217,16 @@ class TradingBot:
                     }
                     for p in positions
                 ]
+
+                # Fetch recent Kalshi settlement results for dashboard
+                try:
+                    for asset in self._settings.kalshi.assets:
+                        settled = await self._kalshi_rest.get_settled_markets(
+                            asset.series_ticker, limit=5
+                        )
+                        self._dashboard_state.settlement_history[asset.symbol] = settled
+                except Exception:
+                    pass  # Non-critical
 
             except asyncio.CancelledError:
                 break
@@ -925,7 +1240,8 @@ class TradingBot:
         Pass force=True to bypass cache (e.g. after a trade).
         """
         if self._settings.mode == "paper":
-            return Decimal(str(self._settings.risk.max_total_exposure_dollars * 2))
+            paper_start = Decimal(str(self._settings.risk.max_total_exposure_dollars * 2))
+            return paper_start + self._risk_manager.daily_pnl
 
         import time
         now = time.monotonic()
@@ -946,6 +1262,57 @@ class TradingBot:
             # Return stale cache if available, otherwise 0
             return self._cached_balance if self._cached_balance is not None else Decimal("0")
 
+    def _get_other_asset_implied_prob(self, current_symbol: str) -> float | None:
+        """Get the implied YES probability from the other asset's orderbook cache.
+
+        Returns None when only one asset is active or data is unavailable.
+        """
+        for symbol, scanner in self._scanners.items():
+            if symbol == current_symbol:
+                continue
+            market = scanner.get_current_market()
+            if market is None:
+                continue
+            ob = self._data_hub._orderbook_cache.get(market.ticker)
+            if ob is None:
+                continue
+            implied = ob.implied_yes_prob
+            if implied is not None:
+                return float(implied)
+        return None
+
+    def _push_risk_to_dashboard(self, balance: float | None = None) -> None:
+        """Build and push risk stats to dashboard state.
+
+        If *balance* is None, uses the cached balance (paper mode calculates it,
+        live mode falls back to the last cached value).
+        """
+        if balance is None:
+            if self._settings.mode == "paper":
+                paper_start = Decimal(str(self._settings.risk.max_total_exposure_dollars * 2))
+                balance = float(paper_start + self._risk_manager.daily_pnl)
+            elif self._cached_balance is not None:
+                balance = float(self._cached_balance)
+            else:
+                balance = self._dashboard_state.risk.get("balance", 0.0)
+
+        prev_unrealized = self._dashboard_state.risk.get("unrealized_pnl", 0.0)
+        daily_pnl = float(self._risk_manager.daily_pnl)
+        self._dashboard_state.risk = {
+            "balance": balance,
+            "daily_pnl": daily_pnl,
+            "unrealized_pnl": prev_unrealized,
+            "total_pnl": daily_pnl + prev_unrealized,
+            "trades_today": self._risk_manager.trades_today,
+            "consecutive_losses": self._risk_manager.consecutive_losses,
+            "consecutive_wins": self._risk_manager.consecutive_wins,
+            "win_rate": self._risk_manager.win_rate,
+            "total_settled": self._risk_manager.total_settled,
+            "last_pnl": float(self._risk_manager.last_pnl) if self._risk_manager.last_pnl is not None else None,
+            "vol_regime": self._vol_tracker.current_regime,
+            "exposure": float(self._position_tracker.total_exposure_dollars),
+        }
+
     def _update_dashboard_positions(self) -> None:
         """Push current positions and risk stats to the dashboard immediately."""
         positions = self._position_tracker.get_all_positions()
@@ -958,25 +1325,7 @@ class TradingBot:
             }
             for p in positions
         ]
-        paper_start = Decimal(str(self._settings.risk.max_total_exposure_dollars * 2))
-        balance = float(paper_start + self._risk_manager.daily_pnl) if self._settings.mode == "paper" else 0.0
-        # Preserve unrealized_pnl/total_pnl from position monitor if already set
-        prev_unrealized = self._dashboard_state.risk.get("unrealized_pnl", 0.0)
-        prev_total = self._dashboard_state.risk.get("total_pnl", float(self._risk_manager.daily_pnl))
-        self._dashboard_state.risk = {
-            "balance": balance,
-            "daily_pnl": float(self._risk_manager.daily_pnl),
-            "unrealized_pnl": prev_unrealized,
-            "total_pnl": prev_total,
-            "trades_today": self._risk_manager.trades_today,
-            "consecutive_losses": self._risk_manager.consecutive_losses,
-            "consecutive_wins": self._risk_manager.consecutive_wins,
-            "win_rate": self._risk_manager.win_rate,
-            "total_settled": self._risk_manager.total_settled,
-            "last_pnl": float(self._risk_manager.last_pnl) if self._risk_manager.last_pnl is not None else None,
-            "vol_regime": self._vol_tracker.current_regime,
-            "exposure": float(self._position_tracker.total_exposure_dollars),
-        }
+        self._push_risk_to_dashboard()
 
     async def shutdown(self) -> None:
         """Graceful shutdown: cancel orders, close connections, persist state."""
@@ -1162,7 +1511,7 @@ def main() -> None:
         "kalshi_btc_bot_starting",
         mode=settings.mode,
         environment=settings.kalshi.environment,
-        series=settings.kalshi.series_ticker,
+        assets=[a.symbol for a in settings.kalshi.assets],
         min_edge=settings.strategy.min_edge_threshold,
         kelly_fraction=settings.risk.kelly_fraction,
     )

@@ -98,11 +98,11 @@ class TimeProfiler:
     def profiles(self) -> dict[int, HourlyProfile]:
         return self._profiles
 
-    async def fetch_hourly_klines(self) -> None:
+    async def fetch_hourly_klines(self, symbol: str = "BTCUSDT") -> None:
         """Fetch hourly klines from Binance and build per-hour profiles."""
         limit = self._lookback_days * 24
         params = {
-            "symbol": "BTCUSDT",
+            "symbol": symbol,
             "interval": "1h",
             "limit": min(limit, 1000),
         }
