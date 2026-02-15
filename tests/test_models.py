@@ -190,21 +190,16 @@ class TestMarketScanner:
 class TestFeatureVector:
     def test_to_array_length(self, sample_feature_vector):
         arr = sample_feature_vector.to_array()
-        assert len(arr) == 27
+        assert len(arr) == 23
 
     def test_feature_names_length(self):
         names = FeatureVector.feature_names()
-        assert len(names) == 27
+        assert len(names) == 23
 
-    def test_to_array_handles_none(self):
+    def test_to_array_handles_defaults(self):
         fv = FeatureVector(
             timestamp=datetime.now(timezone.utc),
             market_ticker="test",
-            funding_rate=None,
-            funding_rate_z_score=None,
-            open_interest_change=None,
-            long_short_ratio=None,
         )
         arr = fv.to_array()
-        # None values should be replaced with 0.0
         assert all(isinstance(v, float) for v in arr)

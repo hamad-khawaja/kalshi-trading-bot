@@ -12,7 +12,6 @@ from src.data.models import MarketSnapshot, Orderbook, OrderbookLevel
 from src.features.feature_engine import FeatureEngine
 from src.features.indicators import (
     bollinger_band_position,
-    funding_rate_z_score,
     macd_signal,
     mean_reversion_z_score,
     momentum,
@@ -204,21 +203,6 @@ class TestTimeDecayFactor:
 
     def test_over_clamp(self):
         assert time_decay_factor(1800, 900) == 1.0
-
-
-class TestFundingRateZScore:
-    def test_at_mean(self):
-        history = np.array([0.01, 0.01, 0.01, 0.01])
-        assert funding_rate_z_score(0.01, history) == 0.0
-
-    def test_above_mean(self):
-        # Need some variance in history for non-zero std
-        history = np.array([0.01, 0.012, 0.008, 0.011, 0.009])
-        result = funding_rate_z_score(0.02, history)
-        assert result > 0
-
-    def test_insufficient_data(self):
-        assert funding_rate_z_score(0.01, np.array([0.01])) == 0.0
 
 
 class TestMeanReversionZScore:
@@ -423,4 +407,4 @@ class TestFeatureEngine:
         arr = sample_feature_vector.to_array()
         names = sample_feature_vector.feature_names()
         assert len(arr) == len(names)
-        assert len(arr) == 27
+        assert len(arr) == 23

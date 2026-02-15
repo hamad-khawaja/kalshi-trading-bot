@@ -143,6 +143,10 @@ a{color:#58a6ff}
     <div class="stat-value" id="sum-winrate">--</div>
     <div class="stat-label">Win Rate</div>
   </div>
+  <div class="stat-card">
+    <div class="stat-value neg" id="sum-fees">--</div>
+    <div class="stat-label">Fees Paid</div>
+  </div>
 </div>
 
 <div class="grid">
@@ -225,8 +229,6 @@ a{color:#58a6ff}
       <div class="kv"><span class="k">Strike</span><span class="v" id="ob-strike">--</span></div>
     </div>
     <div style="margin-top:4px;border-top:1px solid #21262d;padding-top:4px">
-      <div class="kv"><span class="k">Liq Long</span><span class="v" id="liq-long" style="color:#f85149">--</span></div>
-      <div class="kv"><span class="k">Liq Short</span><span class="v" id="liq-short" style="color:#3fb950">--</span></div>
       <div class="kv"><span class="k">Taker Buy</span><span class="v" id="taker-buy" style="color:#3fb950">--</span></div>
       <div class="kv"><span class="k">Taker Sell</span><span class="v" id="taker-sell" style="color:#f85149">--</span></div>
     </div>
@@ -476,8 +478,6 @@ a{color:#58a6ff}
     }
 
     const fmtUsdK = v => v != null ? '$' + (v >= 1000000 ? (v/1000000).toFixed(1) + 'M' : v >= 1000 ? (v/1000).toFixed(0) + 'K' : v.toFixed(0)) : '--';
-    $('liq-long').textContent = fmtUsdK(snap.liquidation_long_usd);
-    $('liq-short').textContent = fmtUsdK(snap.liquidation_short_usd);
     $('taker-buy').textContent = fmtUsdK(snap.taker_buy_volume);
     $('taker-sell').textContent = fmtUsdK(snap.taker_sell_volume);
 
@@ -619,6 +619,15 @@ a{color:#58a6ff}
       wr.textContent = '--';
       wr.className = 'stat-value neutral';
     }
+
+    const fees = $('sum-fees');
+    if (risk.total_fees != null && risk.total_fees > 0) {
+      fees.textContent = '-$' + Number(risk.total_fees).toFixed(2);
+      fees.className = 'stat-value neg';
+    } else {
+      fees.textContent = '$0.00';
+      fees.className = 'stat-value neutral';
+    }
   }
 
   // Dynamically add/update tab buttons for discovered assets
@@ -647,7 +656,7 @@ a{color:#58a6ff}
   }
 
   function renderSignalBars(signals) {
-    const names = ['momentum', 'technical', 'flow', 'mean_reversion', 'funding', 'cross_exchange', 'liquidation', 'taker_flow', 'settlement', 'cross_asset', 'time_decay'];
+    const names = ['momentum', 'technical', 'flow', 'mean_reversion', 'cross_exchange', 'taker_flow', 'settlement', 'cross_asset', 'time_decay'];
     const labels = ['Mom', 'Tech', 'Flow', 'MRev', 'Fund', 'XExch', 'Liq', 'Takr', 'Settl', 'XAst', 'TDec'];
     const container = $('signal-bars');
     container.innerHTML = '';

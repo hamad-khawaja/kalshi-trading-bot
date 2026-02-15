@@ -10,7 +10,6 @@ import structlog
 
 from src.config import BotSettings, load_settings
 from src.data.binance_feed import BinanceFeed
-from src.data.coinglass_client import CoinglassClient
 from src.data.database import Database
 from src.data.kalshi_auth import KalshiAuth
 from src.data.kalshi_client import KalshiRestClient
@@ -36,7 +35,6 @@ class DataCollector:
         )
         self._kalshi = KalshiRestClient(settings.kalshi, self._auth)
         self._binance = BinanceFeed(settings.binance)
-        self._coinglass = CoinglassClient(settings.coinglass)
         self._scanner = MarketScanner(self._kalshi, settings.kalshi)
         self._db = Database(settings.database.path)
         self._running = False
@@ -57,7 +55,6 @@ class DataCollector:
         await self._db.connect()
         await self._kalshi.connect()
         await self._binance.connect()
-        await self._coinglass.connect()
 
         logger.info(
             "data_collection_started",
@@ -70,7 +67,6 @@ class DataCollector:
                 asyncio.create_task(self._collect_ticks(end_time)),
                 asyncio.create_task(self._collect_orderbooks(end_time)),
                 asyncio.create_task(self._collect_outcomes(end_time)),
-                asyncio.create_task(self._poll_coinglass(end_time)),
             ]
             await asyncio.gather(*tasks)
         except asyncio.CancelledError:
@@ -79,7 +75,6 @@ class DataCollector:
             self._running = False
             await self._binance.close()
             await self._kalshi.close()
-            await self._coinglass.close()
             await self._db.close()
             logger.info(
                 "data_collection_complete",
@@ -158,16 +153,6 @@ class DataCollector:
                 logger.exception("outcome_collection_error")
 
             await asyncio.sleep(60)
-
-    async def _poll_coinglass(self, end_time: float) -> None:
-        """Refresh Coinglass data periodically."""
-        while self._running and datetime.now(timezone.utc).timestamp() < end_time:
-            try:
-                await self._coinglass.refresh_all()
-            except Exception:
-                pass
-            await asyncio.sleep(30)
-
 
 async def main() -> None:
     """Standalone data collection entry point."""

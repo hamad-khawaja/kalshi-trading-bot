@@ -172,39 +172,6 @@ class Position(BaseModel):
     realized_pnl: Decimal = Decimal("0")
 
 
-class FundingRate(BaseModel):
-    """Aggregate BTC funding rate data."""
-
-    rate: float = 0.0
-    timestamp: datetime | None = None
-
-
-class OpenInterest(BaseModel):
-    """Aggregate BTC open interest data."""
-
-    value: float = 0.0
-    change_24h: float = 0.0
-    timestamp: datetime | None = None
-
-
-class LongShortRatio(BaseModel):
-    """Aggregate BTC long/short ratio."""
-
-    ratio: float = 1.0
-    long_pct: float = 50.0
-    short_pct: float = 50.0
-    timestamp: datetime | None = None
-
-
-class LiquidationData(BaseModel):
-    """Aggregated BTC liquidation data."""
-
-    long_usd: float = 0.0
-    short_usd: float = 0.0
-    total_usd: float = 0.0
-    timestamp: datetime | None = None
-
-
 class MarketSnapshot(BaseModel):
     """Immutable snapshot of all market data at a point in time."""
 
@@ -222,12 +189,6 @@ class MarketSnapshot(BaseModel):
     binance_btc_price: Decimal | None = None
     cross_exchange_spread: float | None = None
     cross_exchange_lead: float | None = None
-    funding_rate: float | None = None
-    open_interest: float | None = None
-    open_interest_change: float | None = None
-    long_short_ratio: float | None = None
-    liquidation_long_usd: float | None = None
-    liquidation_short_usd: float | None = None
     taker_buy_volume: float | None = None
     taker_sell_volume: float | None = None
     time_to_expiry_seconds: float = 0.0
@@ -287,10 +248,6 @@ class FeatureVector(BaseModel):
     spread: float = 0.0
     spread_ratio: float = 0.0
     time_to_expiry_normalized: float = 1.0
-    funding_rate: float | None = None
-    funding_rate_z_score: float | None = None
-    open_interest_change: float | None = None
-    long_short_ratio: float | None = None
     kalshi_volume: int = 0
     implied_probability: float = 0.5
     bollinger_position: float = 0.0
@@ -300,8 +257,6 @@ class FeatureVector(BaseModel):
     orderbook_depth_imbalance: float = 0.0
     cross_exchange_spread: float = 0.0
     cross_exchange_lead: float = 0.0
-    liquidation_intensity: float = 0.0
-    liquidation_imbalance: float = 0.0
     taker_buy_sell_ratio: float = 0.0
     settlement_bias: float = 0.0  # [-1, 1]: positive = recent YES bias
     cross_asset_divergence: float = 0.0  # [-1, 1]: positive = other asset more bullish
@@ -322,10 +277,6 @@ class FeatureVector(BaseModel):
             self.spread,
             self.spread_ratio,
             self.time_to_expiry_normalized,
-            self.funding_rate or 0.0,
-            self.funding_rate_z_score or 0.0,
-            self.open_interest_change or 0.0,
-            self.long_short_ratio or 0.0,
             float(self.kalshi_volume),
             self.implied_probability,
             self.bollinger_position,
@@ -335,8 +286,6 @@ class FeatureVector(BaseModel):
             self.orderbook_depth_imbalance,
             self.cross_exchange_spread,
             self.cross_exchange_lead,
-            self.liquidation_intensity,
-            self.liquidation_imbalance,
             self.taker_buy_sell_ratio,
             self.settlement_bias,
             self.cross_asset_divergence,
@@ -357,10 +306,6 @@ class FeatureVector(BaseModel):
             "spread",
             "spread_ratio",
             "time_to_expiry_normalized",
-            "funding_rate",
-            "funding_rate_z_score",
-            "open_interest_change",
-            "long_short_ratio",
             "kalshi_volume",
             "implied_probability",
             "bollinger_position",
@@ -370,8 +315,6 @@ class FeatureVector(BaseModel):
             "orderbook_depth_imbalance",
             "cross_exchange_spread",
             "cross_exchange_lead",
-            "liquidation_intensity",
-            "liquidation_imbalance",
             "taker_buy_sell_ratio",
             "settlement_bias",
             "cross_asset_divergence",

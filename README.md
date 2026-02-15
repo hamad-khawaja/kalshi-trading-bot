@@ -1,8 +1,10 @@
 # Kalshi Trading Bot
 
-Automated trading bot for [Kalshi](https://kalshi.com) prediction markets, targeting **15-minute price movement contracts** (`KXBTC15M`, `KXETH15M`). Monitors real-time price feeds from multiple exchanges, estimates settlement probability via an 11-signal heuristic model, identifies mispriced contracts, and executes trades with strict risk management.
+Automated trading bot for [Kalshi](https://kalshi.com) prediction markets, targeting **15-minute price movement contracts** (`KXBTC15M`, `KXETH15M`). Monitors real-time price feeds from multiple exchanges, estimates settlement probability via a 9-signal heuristic model, identifies mispriced contracts, and executes trades with strict risk management.
 
 **Multi-asset** · **Real-time dashboard** · **Paper & live modes** · **Fee-aware Kelly sizing**
+
+![Dashboard](dashboard.jpg)
 
 ---
 
@@ -15,7 +17,6 @@ flowchart TB
         KR["Kraken WS"]
         KWS["Kalshi WS"]
         KREST["Kalshi REST"]
-        CG["Coinglass REST"]
     end
 
     subgraph DATA["Data Layer"]
@@ -24,7 +25,7 @@ flowchart TB
         TP["Time Profiler"]
     end
 
-    CB & KR & KWS & KREST & CG --> DH
+    CB & KR & KWS & KREST --> DH
     MS --> DH
     TP -.-> DH
 
@@ -86,8 +87,6 @@ flowchart LR
         CA["Cross-Asset 7%\nOther asset divergence"]
         FL["Order Flow 6%\nKalshi book imbalance"]
         XE["Cross-Exchange 5%\nBinance lead-lag"]
-        FU["Funding 0%\nDisabled"]
-        LQ["Liquidation 0%\nDisabled"]
     end
 
     subgraph MODEL["Model"]
@@ -115,7 +114,6 @@ flowchart LR
     BOT --> S["Strategy Loop\nevery 4s"]
     BOT --> MS["Market Scan\nevery 1-10s"]
     BOT --> PM["Position Monitor\nevery 10s"]
-    BOT --> CG["Coinglass Poll\nevery 30s"]
     BOT --> HC["Health Check\n5s then 60s"]
     BOT --> TP["Time Profile\nevery 1h"]
 
@@ -137,7 +135,6 @@ flowchart LR
 | **Python 3.11+** | `python3 --version` |
 | **Kalshi account** | [kalshi.com](https://kalshi.com) |
 | **Kalshi API key** | RSA key pair (see below) |
-| **Coinglass API key** | *Optional* — funding rate data |
 
 ### Setup
 
@@ -155,7 +152,6 @@ pip install -e .
 # 3. Environment variables
 export KALSHI_API_KEY_ID="your-api-key-id"
 export KALSHI_PRIVATE_KEY_PATH="/path/to/kalshi_key.pem"
-export COINGLASS_API_KEY="your-coinglass-key"  # optional
 
 # 4. Run (paper mode, safe default)
 kalshi-bot --dry-run
@@ -189,9 +185,9 @@ kalshi-bot --mode live --env prod --max-exposure 1000 --max-daily-loss 200
 
 ### Main Loop (every ~4 seconds)
 
-1. **Snapshot** — Aggregate prices (Coinbase, Kraken), Kalshi orderbook, Coinglass derivatives data
-2. **Features** — Compute 29 features: momentum, technicals, order flow, cross-exchange signals, time decay
-3. **Predict** — 11 weighted signals → P(YES) estimate with confidence score
+1. **Snapshot** — Aggregate prices (Coinbase, Kraken), Kalshi orderbook
+2. **Features** — Compute 23 features: momentum, technicals, order flow, cross-exchange signals, time decay
+3. **Predict** — 9 weighted signals → P(YES) estimate with confidence score
 4. **Edge** — Compare model probability vs Kalshi implied probability, subtract fees
 5. **Risk** — 9 independent safety checks (daily loss, exposure cap, streak limits, vol regime)
 6. **Execute** — Kelly-sized limit order if edge > threshold and all risk checks pass
@@ -244,7 +240,7 @@ Real-time browser dashboard at `http://localhost:8080` via Server-Sent Events (S
 
 **Summary bar** — Balance, Total P&L, Trades Today, Win Rate at a glance
 **Per-asset tabs** — BTC/ETH with independent market, price, prediction, and edge panels
-**Live data** — Countdown timer, price ticker with delta, 11 signal bars, orderbook stats
+**Live data** — Countdown timer, price ticker with delta, 9 signal bars, orderbook stats
 **Positions** — Color-coded YES/NO with risk stats
 **Settlements** — Compact inline badges showing recent market outcomes
 **Trade history** — Per-asset with P&L coloring
@@ -280,7 +276,6 @@ kalshi:
       primary_symbol: "BTC-USD"
       secondary_ws_url: "wss://ws.kraken.com/v2"
       secondary_symbol: "BTC/USD"
-      coinglass_symbol: "BTC"
     - series_ticker: "KXETH15M"
       symbol: "ETH"
       # ...
@@ -301,17 +296,17 @@ kalshi:
 │   │   ├── kalshi_client.py       # Kalshi REST client (markets, orders, balance)
 │   │   ├── kalshi_ws.py           # Kalshi WS (orderbook deltas, fills)
 │   │   ├── kalshi_auth.py         # RSA-PSS authentication
-│   │   ├── coinglass_client.py    # Funding, OI, liquidations, L/S ratio
+
 │   │   ├── data_hub.py            # Unified aggregator → MarketSnapshot
 │   │   ├── market_scanner.py      # Active market discovery
 │   │   ├── time_profile.py        # Historical kline profiling
 │   │   ├── database.py            # SQLite persistence (async)
 │   │   └── models.py              # Data models (Tick, Snapshot, Order, etc.)
 │   ├── features/
-│   │   ├── feature_engine.py      # Snapshot → 29 features
+│   │   ├── feature_engine.py      # Snapshot → 23 features
 │   │   └── indicators.py          # RSI, BB, MACD, ROC, VWAP
 │   ├── model/
-│   │   ├── predict.py             # Heuristic model (11 signals → P(YES))
+│   │   ├── predict.py             # Heuristic model (9 signals → P(YES))
 │   │   ├── calibrate.py           # Probability calibration
 │   │   └── train.py               # LightGBM training pipeline
 │   ├── strategy/

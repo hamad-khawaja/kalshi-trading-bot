@@ -130,10 +130,6 @@ class BacktestFeatureEngine:
             spread=spread_val,
             spread_ratio=spread_r,
             time_to_expiry_normalized=time_norm,
-            funding_rate=None,
-            funding_rate_z_score=None,
-            open_interest_change=None,
-            long_short_ratio=None,
             kalshi_volume=100,  # Synthetic
             implied_probability=implied_prob,
             bollinger_position=bb_pos,
@@ -143,8 +139,6 @@ class BacktestFeatureEngine:
             orderbook_depth_imbalance=depth_imbalance,
             cross_exchange_spread=0.0,
             cross_exchange_lead=0.0,
-            liquidation_intensity=0.0,
-            liquidation_imbalance=0.0,
             taker_buy_sell_ratio=taker_ratio,
         )
 

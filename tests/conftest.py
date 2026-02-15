@@ -10,7 +10,6 @@ import pytest
 from src.config import (
     BinanceConfig,
     BotSettings,
-    CoinglassConfig,
     DatabaseConfig,
     FeatureConfig,
     KalshiConfig,
@@ -71,10 +70,6 @@ def sample_snapshot(now: datetime, sample_orderbook: Orderbook) -> MarketSnapsho
         orderbook=sample_orderbook,
         implied_yes_prob=Decimal("0.51"),
         spread=Decimal("0.02"),
-        funding_rate=0.0001,
-        open_interest=50000.0,
-        open_interest_change=2.5,
-        long_short_ratio=1.05,
         time_to_expiry_seconds=600.0,
         volume=250,
     )
@@ -97,10 +92,6 @@ def sample_feature_vector(now: datetime) -> FeatureVector:
         spread=0.02,
         spread_ratio=0.04,
         time_to_expiry_normalized=0.67,
-        funding_rate=0.0001,
-        funding_rate_z_score=0.5,
-        open_interest_change=2.5,
-        long_short_ratio=1.05,
         kalshi_volume=250,
         implied_probability=0.51,
         bollinger_position=0.1,
@@ -135,7 +126,6 @@ def bot_settings() -> BotSettings:
             rate_limit_ms=10,
         ),
         binance=BinanceConfig(),
-        coinglass=CoinglassConfig(),
         strategy=StrategyConfig(
             poll_interval_seconds=4,
             min_edge_threshold=0.03,

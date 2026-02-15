@@ -10,7 +10,6 @@ import structlog
 
 from src.config import AssetConfig, BotSettings, StrategyConfig
 from src.data.binance_feed import BinanceFeed
-from src.data.coinglass_client import CoinglassClient
 from src.data.kalshi_client import KalshiRestClient
 from src.data.kalshi_ws import KalshiWebSocket
 from src.data.market_scanner import MarketScanner
@@ -25,8 +24,7 @@ class DataHub:
 
     Combines data from:
     - Kalshi REST + WebSocket (orderbooks, market data)
-    - Binance WebSocket (BTC price)
-    - Coinglass REST (funding rates, open interest)
+    - Coinbase/Kraken WebSocket (price feeds)
     """
 
     def __init__(
@@ -34,7 +32,6 @@ class DataHub:
         kalshi_rest: KalshiRestClient,
         kalshi_ws: KalshiWebSocket,
         feeds: dict[str, BinanceFeed],
-        coinglass: CoinglassClient,
         scanners: dict[str, MarketScanner],
         secondary_feeds: dict[str, BinanceFeed] | None = None,
         strategy_config: StrategyConfig | None = None,
@@ -44,7 +41,6 @@ class DataHub:
         self._kalshi_ws = kalshi_ws
         self._feeds = feeds
         self._secondary_feeds = secondary_feeds or {}
-        self._coinglass = coinglass
         self._scanners = scanners
         self._strategy_config = strategy_config or StrategyConfig()
         self._asset_configs = asset_configs or []
@@ -72,7 +68,7 @@ class DataHub:
         return "BTC"
 
     async def start(self) -> None:
-        """Connect all data sources. Kalshi/Coinglass failures are non-fatal."""
+        """Connect all data sources. Kalshi failures are non-fatal."""
         # Price feeds are critical, others are best-effort
         for symbol, feed in self._feeds.items():
             await feed.connect()
@@ -81,7 +77,6 @@ class DataHub:
         best_effort = [
             ("kalshi_rest", self._kalshi_rest.connect()),
             ("kalshi_ws", self._kalshi_ws.connect()),
-            ("coinglass", self._coinglass.connect()),
         ]
         for symbol, feed in self._secondary_feeds.items():
             best_effort.append((f"secondary_feed_{symbol}", feed.connect()))
@@ -99,7 +94,6 @@ class DataHub:
         coros = [
             self._kalshi_rest.close(),
             self._kalshi_ws.close(),
-            self._coinglass.close(),
         ]
         for feed in self._feeds.values():
             coros.append(feed.close())
@@ -338,39 +332,6 @@ class DataHub:
                     # Positive lead = secondary moving up faster (bullish)
                     cross_exchange_lead = bn_mom - cb_mom
 
-        # Coinglass data (cached, non-blocking) — per-asset symbol
-        cg_symbol = symbol  # "BTC" or "ETH"
-        funding_rate = None
-        open_interest = None
-        oi_change = None
-        long_short = None
-        try:
-            fr = await self._coinglass.get_funding_rate(cg_symbol)
-            funding_rate = fr.rate
-        except Exception:
-            pass
-        try:
-            oi = await self._coinglass.get_open_interest(cg_symbol)
-            open_interest = oi.value
-            oi_change = oi.change_24h
-        except Exception:
-            pass
-        try:
-            lsr = await self._coinglass.get_long_short_ratio(cg_symbol)
-            long_short = lsr.ratio
-        except Exception:
-            pass
-
-        # Liquidation data (from Coinglass, cached)
-        liq_long_usd = None
-        liq_short_usd = None
-        try:
-            liq = await self._coinglass.get_liquidation_data(cg_symbol)
-            liq_long_usd = liq.long_usd
-            liq_short_usd = liq.short_usd
-        except Exception:
-            pass
-
         # Taker buy/sell volume (real-time from secondary feed)
         taker_buy = None
         taker_sell = None
@@ -411,12 +372,6 @@ class DataHub:
             binance_btc_price=binance_btc_price,
             cross_exchange_spread=cross_exchange_spread,
             cross_exchange_lead=cross_exchange_lead,
-            funding_rate=funding_rate,
-            open_interest=open_interest,
-            open_interest_change=oi_change,
-            long_short_ratio=long_short,
-            liquidation_long_usd=liq_long_usd,
-            liquidation_short_usd=liq_short_usd,
             taker_buy_volume=taker_buy,
             taker_sell_volume=taker_sell,
             time_to_expiry_seconds=time_to_expiry,

@@ -123,10 +123,6 @@ class FeatureEngine:
             spread=spread_val,
             spread_ratio=sr,
             time_to_expiry_normalized=time_norm,
-            funding_rate=snapshot.funding_rate,
-            funding_rate_z_score=None,  # Requires historical data
-            open_interest_change=snapshot.open_interest_change,
-            long_short_ratio=snapshot.long_short_ratio,
             kalshi_volume=snapshot.volume,
             implied_probability=implied_prob,
             bollinger_position=bb_pos,
@@ -136,44 +132,11 @@ class FeatureEngine:
             orderbook_depth_imbalance=ob_depth,
             cross_exchange_spread=snapshot.cross_exchange_spread or 0.0,
             cross_exchange_lead=snapshot.cross_exchange_lead or 0.0,
-            liquidation_intensity=self._compute_liquidation_intensity(snapshot),
-            liquidation_imbalance=self._compute_liquidation_imbalance(snapshot),
             taker_buy_sell_ratio=self._compute_taker_ratio(snapshot),
             settlement_bias=settle_bias,
             time_elapsed_seconds=snapshot.time_elapsed_seconds,
             window_phase=snapshot.window_phase,
         )
-
-    @staticmethod
-    def _compute_liquidation_intensity(snapshot: MarketSnapshot) -> float:
-        """Compute liquidation intensity as a normalized spike indicator.
-
-        High values indicate liquidation cascades.
-        Normalized using a baseline of $1M in 15 minutes (typical calm period).
-        """
-        long_usd = snapshot.liquidation_long_usd or 0.0
-        short_usd = snapshot.liquidation_short_usd or 0.0
-        total = long_usd + short_usd
-        if total <= 0:
-            return 0.0
-        # Normalize: $1M baseline, tanh for smooth clamping
-        import math
-        return math.tanh(total / 1_000_000)
-
-    @staticmethod
-    def _compute_liquidation_imbalance(snapshot: MarketSnapshot) -> float:
-        """Compute liquidation imbalance: (short - long) / total.
-
-        Positive = more short liquidations = price going up (bullish).
-        Negative = more long liquidations = price going down (bearish).
-        Returns [-1, 1].
-        """
-        long_usd = snapshot.liquidation_long_usd or 0.0
-        short_usd = snapshot.liquidation_short_usd or 0.0
-        total = long_usd + short_usd
-        if total <= 0:
-            return 0.0
-        return (short_usd - long_usd) / total
 
     @staticmethod
     def _compute_taker_ratio(snapshot: MarketSnapshot) -> float:

@@ -138,22 +138,6 @@ def time_decay_factor(
     return max(0.0, min(1.0, seconds_to_expiry / total_window))
 
 
-def funding_rate_z_score(
-    current_rate: float, historical_rates: np.ndarray
-) -> float:
-    """How extreme the current funding rate is vs recent history.
-
-    Returns z-score. Positive = funding is higher than usual.
-    """
-    if len(historical_rates) < 2:
-        return 0.0
-    mean = float(np.mean(historical_rates))
-    std = float(np.std(historical_rates))
-    if std == 0:
-        return 0.0
-    return (current_rate - mean) / std
-
-
 def mean_reversion_z_score(prices: np.ndarray, window: int = 60) -> float:
     """Z-score of current price vs rolling mean — mean reversion signal.
 

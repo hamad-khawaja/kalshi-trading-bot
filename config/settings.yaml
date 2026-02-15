@@ -13,22 +13,16 @@ kalshi:
       primary_symbol: "BTC-USD"
       secondary_ws_url: "wss://ws.kraken.com/v2"
       secondary_symbol: "BTC/USD"
-      coinglass_symbol: "BTC"
     - series_ticker: "KXETH15M"
       symbol: "ETH"
       primary_ws_url: "wss://ws-feed.exchange.coinbase.com"
       primary_symbol: "ETH-USD"
       secondary_ws_url: "wss://ws.kraken.com/v2"
       secondary_symbol: "ETH/USD"
-      coinglass_symbol: "ETH"
 
 binance:
   ws_url: "wss://ws-feed.exchange.coinbase.com"
   symbol: "BTC-USD"
-
-coinglass:
-  api_key: ""  # Override via COINGLASS_API_KEY env var
-  base_url: "https://open-api-v3.coinglass.com/api"
 
 strategy:
   poll_interval_seconds: 4
@@ -42,10 +36,16 @@ strategy:
   confidence_weight: 0.7
   use_market_maker: true
   mm_min_spread: 0.05           # Minimum spread ($) for market-making
-  # FOMO exploitation
-  fomo_enabled: true
-  fomo_min_divergence: 0.12       # Min gap between implied and model prob
-  fomo_edge_threshold: 0.02       # Lower edge threshold (96.6% empirical edge)
+  # Stop-loss: exit when position drops beyond threshold
+  stop_loss_enabled: true
+  stop_loss_pct: 0.35              # Exit when loss > 35% of entry price
+  stop_loss_min_bid: 0.05          # Don't sell if bid is below $0.05
+  # FOMO exploitation — DISABLED: 0/3 trades, all stopped out (-$1.41 total)
+  fomo_enabled: false
+  fomo_min_divergence: 0.20        # Require bigger gap (was 0.12)
+  fomo_edge_threshold: 0.08        # Require more edge after fees (was 0.02)
+  fomo_min_score: 0.65             # Higher composite score (was 0.50)
+  fomo_min_confidence: 0.80        # Higher confidence (was 0.70)
   fomo_momentum_min_magnitude: 0.003
   fomo_momentum_consistency_required: true
   fomo_max_implied_prob: 0.85
@@ -54,6 +54,8 @@ strategy:
   trailing_take_profit_enabled: true
   trailing_take_profit_activation_cents: 0.04  # Profit to activate trailing
   trailing_take_profit_drop_cents: 0.03        # Exit when price drops this from peak
+  # Take-profit cooldown: block re-entry after TP
+  take_profit_cooldown_seconds: 900.0          # 15 min — block for rest of window
   # Pre-expiry exit: sell before settlement
   pre_expiry_exit_enabled: true
   pre_expiry_exit_seconds: 90.0  # Sell with 90s left instead of gambling
@@ -92,18 +94,18 @@ strategy:
   cross_asset_divergence_weight: 0.06
 
 risk:
-  max_position_per_market: 15    # Smaller positions (was 20)
+  max_position_per_market: 10    # Smaller positions (was 15)
   max_total_exposure_dollars: 50.0   # $100 paper bankroll / 2 (paper balance = exposure * 2)
   max_daily_loss_dollars: 20.0       # 20% of bankroll — hard stop
   max_concurrent_positions: 5
-  kelly_fraction: 0.35          # Quarter-Kelly is safer (was 0.50)
+  kelly_fraction: 0.20          # Reduce risk (was 0.35)
   min_balance_dollars: 80.0     # Stop trading when balance drops to $80 (20% drawdown)
   max_trades_per_day: 1000       # Paper trading: no daily limit
   cooldown_after_streak_minutes: 30
   max_consecutive_losses: 5     # Paper: more room to test
   # Entry discipline
   entry_cooldown_seconds: 30     # Min seconds between fills on same market
-  max_contracts_per_cycle: 10    # Max contracts placed in one 4s cycle
+  max_contracts_per_cycle: 7     # Smaller per-cycle cap (was 10)
   # Fee-aware sizing at extreme prices
   fee_extreme_price_threshold: 0.25
   fee_extreme_kelly_multiplier: 1.5  # Enable fee boost at extremes (was 1.0)
@@ -114,7 +116,7 @@ risk:
   time_scale_full_seconds: 480.0  # Full size above 8 min remaining
   time_scale_min_multiplier: 0.4  # 40% size at expiry
   # Minimum position size: skip tiny positions that statistically lose
-  min_position_size: 5             # Don't enter with fewer than 5 contracts
+  min_position_size: 3             # Allow smaller entries (was 5)
 
 averaging:
   enabled: false                # Disabled until profitable (was true)

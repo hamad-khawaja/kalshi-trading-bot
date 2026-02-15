@@ -16,7 +16,6 @@ import structlog
 from src.config import AssetConfig, BinanceConfig, BotSettings, KalshiConfig, load_settings
 from src.data.binance_feed import BinanceFeed
 from src.data.time_profile import TimeProfiler
-from src.data.coinglass_client import CoinglassClient
 from src.data.data_hub import DataHub
 from src.data.database import Database
 from src.data.kalshi_auth import KalshiAuth
@@ -45,8 +44,7 @@ class TradingBot:
     1. strategy_loop — core trading logic every N seconds
     2. market_scan_loop — discover new markets every 60s
     3. position_monitor_loop — check exits every 10s
-    4. coinglass_poll_loop — refresh funding/OI data every 30s
-    5. health_check_loop — log bot status every 60s
+    4. health_check_loop — log bot status every 60s
     """
 
     def __init__(self, settings: BotSettings):
@@ -66,6 +64,12 @@ class TradingBot:
         # Thesis-break cooldown: don't re-enter markets after getting stopped out
         self._thesis_break_markets: set[str] = set()
 
+        # Take-profit cooldown: block re-entry after TP for rest of window
+        self._take_profit_markets: dict[str, datetime] = {}  # ticker → exit time
+
+        # Fee tracking for dashboard
+        self._total_fees: Decimal = Decimal("0")
+
         # Data layer
         self._auth = KalshiAuth(
             settings.kalshi.api_key_id,
@@ -73,7 +77,6 @@ class TradingBot:
         )
         self._kalshi_rest = KalshiRestClient(settings.kalshi, self._auth)
         self._kalshi_ws = KalshiWebSocket(settings.kalshi, self._auth)
-        self._coinglass = CoinglassClient(settings.coinglass)
 
         # Per-asset price feeds and scanners
         self._feeds: dict[str, BinanceFeed] = {}
@@ -98,7 +101,6 @@ class TradingBot:
             self._kalshi_rest,
             self._kalshi_ws,
             feeds=self._feeds,
-            coinglass=self._coinglass,
             scanners=self._scanners,
             secondary_feeds=self._secondary_feeds,
             strategy_config=settings.strategy,
@@ -225,7 +227,6 @@ class TradingBot:
             asyncio.create_task(self._strategy_loop(), name="strategy"),
             asyncio.create_task(self._market_scan_loop(), name="market_scan"),
             asyncio.create_task(self._position_monitor_loop(), name="position_monitor"),
-            asyncio.create_task(self._coinglass_poll_loop(), name="coinglass_poll"),
             asyncio.create_task(self._health_check_loop(), name="health_check"),
         ]
         if self._time_profiler is not None:
@@ -313,8 +314,6 @@ class TradingBot:
             "binance_btc_price": float(snapshot.binance_btc_price) if snapshot.binance_btc_price else None,
             "cross_exchange_spread": snapshot.cross_exchange_spread,
             "cross_exchange_lead": snapshot.cross_exchange_lead,
-            "liquidation_long_usd": snapshot.liquidation_long_usd,
-            "liquidation_short_usd": snapshot.liquidation_short_usd,
             "taker_buy_volume": snapshot.taker_buy_volume,
             "taker_sell_volume": snapshot.taker_sell_volume,
             "time_elapsed": snapshot.time_elapsed_seconds,
@@ -366,9 +365,7 @@ class TradingBot:
                 "technical": prediction.features_used.get("tech_signal", 0),
                 "flow": prediction.features_used.get("flow_signal", 0),
                 "mean_reversion": prediction.features_used.get("mr_signal", 0),
-                "funding": prediction.features_used.get("funding_signal", 0),
                 "cross_exchange": prediction.features_used.get("cross_exchange_signal", 0),
-                "liquidation": prediction.features_used.get("liquidation_signal", 0),
                 "taker_flow": prediction.features_used.get("taker_signal", 0),
                 "settlement": prediction.features_used.get("settlement_signal", 0),
                 "cross_asset": prediction.features_used.get("cross_asset_signal", 0),
@@ -419,6 +416,26 @@ class TradingBot:
             "edge": dict(ds.edge) if ds.edge else {},
             "fomo": dict(ds.fomo) if ds.fomo else {},
         }
+
+        # Take-profit cooldown: block re-entry after taking profit
+        tp_cooldown = self._settings.strategy.take_profit_cooldown_seconds
+        if ticker in self._take_profit_markets and tp_cooldown > 0:
+            tp_exit_time = self._take_profit_markets[ticker]
+            elapsed = (datetime.now(timezone.utc) - tp_exit_time).total_seconds()
+            if elapsed < tp_cooldown:
+                buy_signals = [s for s in signals if s.action == "buy" and s.signal_type != "market_making"]
+                if buy_signals:
+                    logger.info(
+                        "take_profit_cooldown_blocked",
+                        ticker=ticker,
+                        elapsed=round(elapsed, 1),
+                        cooldown=tp_cooldown,
+                        blocked_count=len(buy_signals),
+                    )
+                    signals = [s for s in signals if s.action != "buy" or s.signal_type == "market_making"]
+            else:
+                # Cooldown expired, remove from tracking
+                del self._take_profit_markets[ticker]
 
         # Thesis-break cooldown: block buy signals for markets we got stopped out of
         if ticker in self._thesis_break_markets and signals:
@@ -621,14 +638,20 @@ class TradingBot:
                         signal_type=signal_item.signal_type,
                         cycle=self._cycle_count,
                     )
+                    # Track buy fee in position for accurate PnL
+                    buy_fee = EdgeDetector.compute_fee_dollars(
+                        order_state.filled_count,
+                        float(signal_item.suggested_price_dollars),
+                        is_maker=True,
+                    )
+                    self._total_fees += buy_fee
+                    pos_after_fill = self._position_tracker.get_position(ticker)
+                    if pos_after_fill:
+                        pos_after_fill.fees_paid += buy_fee
                     # Log trade to database
                     try:
                         from src.data.models import CompletedTrade
-                        fee = EdgeDetector.compute_fee_dollars(
-                            order_state.filled_count,
-                            float(signal_item.suggested_price_dollars),
-                            is_maker=True,
-                        )
+                        fee = buy_fee
                         completed = CompletedTrade(
                             order_id=order_id,
                             market_ticker=ticker,
@@ -912,7 +935,8 @@ class TradingBot:
                             sell_fee = EdgeDetector.compute_fee_dollars(
                                 pos.count, float(sell_price), is_maker=False
                             )
-                            pnl = exit_revenue - entry_cost - sell_fee
+                            pnl = exit_revenue - entry_cost - sell_fee - pos.fees_paid
+                            self._total_fees += sell_fee
                             logger.info(
                                 "pre_expiry_exit_executed",
                                 ticker=pe_ticker,
@@ -980,7 +1004,8 @@ class TradingBot:
                             sell_fee = EdgeDetector.compute_fee_dollars(
                                 pos.count, float(sell_price), is_maker=False
                             )
-                            pnl = exit_revenue - entry_cost - sell_fee
+                            pnl = exit_revenue - entry_cost - sell_fee - pos.fees_paid
+                            self._total_fees += sell_fee
                             logger.info(
                                 "take_profit_executed",
                                 ticker=tp_ticker,
@@ -1015,6 +1040,79 @@ class TradingBot:
                             except Exception:
                                 logger.warning("trade_logging_failed", ticker=tp_ticker)
                             self._position_tracker.remove_expired_positions([tp_ticker])
+                            self._take_profit_markets[tp_ticker] = datetime.now(timezone.utc)
+                            self._update_dashboard_positions()
+
+                # Check for stop-loss exits
+                if self._settings.strategy.stop_loss_enabled:
+                    sl_signals = self._position_tracker.check_stop_loss(
+                        snapshots,
+                        stop_loss_pct=self._settings.strategy.stop_loss_pct,
+                        min_bid=self._settings.strategy.stop_loss_min_bid,
+                    )
+                    for sl_ticker, sell_price in sl_signals:
+                        pos = self._position_tracker.get_position(sl_ticker)
+                        if not pos:
+                            continue
+                        from src.data.models import TradeSignal
+
+                        sell_signal = TradeSignal(
+                            market_ticker=sl_ticker,
+                            side=pos.side,
+                            action="sell",
+                            raw_edge=0.0,
+                            net_edge=0.0,
+                            model_probability=0.0,
+                            implied_probability=0.0,
+                            confidence=1.0,
+                            suggested_price_dollars=sell_price,
+                            suggested_count=pos.count,
+                            timestamp=datetime.now(timezone.utc),
+                            signal_type="directional",
+                        )
+                        order_id = await self._order_manager.submit(sell_signal, pos.count)
+                        if order_id:
+                            entry_cost = pos.avg_entry_price * pos.count
+                            exit_revenue = Decimal(sell_price) * pos.count
+                            sell_fee = EdgeDetector.compute_fee_dollars(
+                                pos.count, float(sell_price), is_maker=False
+                            )
+                            pnl = exit_revenue - entry_cost - sell_fee - pos.fees_paid
+                            self._total_fees += sell_fee
+                            logger.info(
+                                "stop_loss_executed",
+                                ticker=sl_ticker,
+                                side=pos.side,
+                                count=pos.count,
+                                entry_price=float(pos.avg_entry_price),
+                                exit_price=sell_price,
+                                pnl=float(pnl),
+                                fee=float(sell_fee),
+                            )
+                            self._risk_manager.record_trade(pnl)
+                            ds.add_trade_result(
+                                self._data_hub._ticker_to_symbol(sl_ticker),
+                                "stop_loss", pos.side, float(pnl), sl_ticker,
+                            )
+                            # Log stop-loss to database
+                            try:
+                                from src.data.models import CompletedTrade
+                                completed = CompletedTrade(
+                                    order_id=order_id,
+                                    market_ticker=sl_ticker,
+                                    side=pos.side,
+                                    action="stop_loss",
+                                    count=pos.count,
+                                    price_dollars=Decimal(sell_price),
+                                    fees_dollars=sell_fee,
+                                    pnl_dollars=pnl,
+                                    entry_time=pos.entry_time,
+                                    exit_time=datetime.now(timezone.utc),
+                                )
+                                await self._db.insert_trade(completed)
+                            except Exception:
+                                logger.warning("trade_logging_failed", ticker=sl_ticker)
+                            self._position_tracker.remove_expired_positions([sl_ticker])
                             self._update_dashboard_positions()
 
                 # Check for thesis breaks — sell positions where model flipped
@@ -1063,7 +1161,8 @@ class TradingBot:
                             sell_fee = EdgeDetector.compute_fee_dollars(
                                 pos.count, float(sell_price), is_maker=False
                             )
-                            pnl = exit_revenue - entry_cost - sell_fee
+                            pnl = exit_revenue - entry_cost - sell_fee - pos.fees_paid
+                            self._total_fees += sell_fee
                             logger.info(
                                 "thesis_break_exit",
                                 ticker=tb_ticker,
@@ -1130,21 +1229,6 @@ class TradingBot:
                 break
             except Exception:
                 logger.exception("position_monitor_error")
-
-    async def _coinglass_poll_loop(self) -> None:
-        """Refresh Coinglass data every 30 seconds for all assets."""
-        while self._running:
-            try:
-                await asyncio.sleep(30)
-                if not self._running:
-                    break
-                for asset in self._settings.kalshi.assets:
-                    cg_sym = asset.coinglass_symbol or asset.symbol
-                    await self._coinglass.refresh_all(cg_sym)
-            except asyncio.CancelledError:
-                break
-            except Exception:
-                logger.exception("coinglass_poll_error")
 
     async def _time_profile_refresh_loop(self) -> None:
         """Re-fetch Binance klines every 6 hours to keep profiles fresh."""
@@ -1311,6 +1395,7 @@ class TradingBot:
             "last_pnl": float(self._risk_manager.last_pnl) if self._risk_manager.last_pnl is not None else None,
             "vol_regime": self._vol_tracker.current_regime,
             "exposure": float(self._position_tracker.total_exposure_dollars),
+            "total_fees": float(self._total_fees),
         }
 
     def _update_dashboard_positions(self) -> None:

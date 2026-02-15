@@ -17,7 +17,6 @@ class AssetConfig(BaseModel):
     primary_symbol: str       # "BTC-USD" or "ETH-USD"
     secondary_ws_url: str = ""
     secondary_symbol: str = ""
-    coinglass_symbol: str = ""
 
 
 class KalshiConfig(BaseModel):
@@ -50,11 +49,6 @@ class SecondaryFeedConfig(BaseModel):
     enabled: bool = True
     ws_url: str = "wss://ws.kraken.com/v2"
     symbol: str = "BTC/USD"
-
-
-class CoinglassConfig(BaseModel):
-    api_key: str = ""
-    base_url: str = "https://open-api-v3.coinglass.com/api"
 
 
 class AveragingConfig(BaseModel):
@@ -93,12 +87,17 @@ class StrategyConfig(BaseModel):
     fomo_min_implied_prob: float = 0.15
     fomo_min_confidence: float = 0.70
     fomo_min_score: float = 0.50
+    # Stop-loss parameters
+    stop_loss_enabled: bool = True
+    stop_loss_pct: float = 0.35  # Exit when loss > 35% of entry price
+    stop_loss_min_bid: float = 0.05  # Don't sell if bid is below $0.05
     # Take-profit parameters
     take_profit_enabled: bool = True
     take_profit_min_profit_cents: float = 0.06
     take_profit_min_hold_seconds: float = 20.0
     take_profit_time_decay_start_seconds: float = 300.0
     take_profit_time_decay_floor_cents: float = 0.03
+    take_profit_cooldown_seconds: float = 900.0  # Block re-entry after TP for rest of window
     # Trailing take-profit: ratchet exit price up as position gains
     trailing_take_profit_enabled: bool = True
     trailing_take_profit_activation_cents: float = 0.04  # Profit needed to activate trailing
@@ -198,7 +197,7 @@ class BotSettings(BaseModel):
     kalshi: KalshiConfig = KalshiConfig()
     binance: BinanceConfig = BinanceConfig()
     secondary_feed: SecondaryFeedConfig = SecondaryFeedConfig()
-    coinglass: CoinglassConfig = CoinglassConfig()
+
     strategy: StrategyConfig = StrategyConfig()
     risk: RiskConfig = RiskConfig()
     features: FeatureConfig = FeatureConfig()
@@ -222,12 +221,6 @@ class BotSettings(BaseModel):
                     )
                 values["kalshi"] = kalshi
 
-            coinglass = values.get("coinglass", {})
-            if isinstance(coinglass, dict):
-                if not coinglass.get("api_key"):
-                    coinglass["api_key"] = os.environ.get("COINGLASS_API_KEY", "")
-                values["coinglass"] = coinglass
-
             # Backward compat: auto-populate assets from legacy binance/secondary_feed
             kalshi = values.get("kalshi", {})
             if isinstance(kalshi, dict) and not kalshi.get("assets"):
@@ -242,7 +235,6 @@ class BotSettings(BaseModel):
                         "primary_symbol": binance.get("symbol", "BTC-USD") if isinstance(binance, dict) else "BTC-USD",
                         "secondary_ws_url": secondary.get("ws_url", "") if isinstance(secondary, dict) else "",
                         "secondary_symbol": secondary.get("symbol", "") if isinstance(secondary, dict) else "",
-                        "coinglass_symbol": "BTC",
                     }
                 ]
                 values["kalshi"] = kalshi

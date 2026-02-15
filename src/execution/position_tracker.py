@@ -503,6 +503,70 @@ class PositionTracker:
 
         return results
 
+    def check_stop_loss(
+        self,
+        snapshots: dict[str, MarketSnapshot],
+        stop_loss_pct: float = 0.35,
+        min_bid: float = 0.05,
+        min_hold_seconds: float = 30.0,
+    ) -> list[tuple[str, str]]:
+        """Check positions for stop-loss exits.
+
+        Returns list of (ticker, sell_price) for positions where:
+        - Loss exceeds stop_loss_pct of entry price
+        - Current bid >= min_bid (worth selling vs. fee)
+        - Position held for at least min_hold_seconds (avoid momentary dips)
+        """
+        results: list[tuple[str, str]] = []
+        now = datetime.now(timezone.utc)
+
+        for ticker, position in list(self._positions.items()):
+            snapshot = snapshots.get(ticker)
+            if snapshot is None:
+                continue
+
+            # Check minimum hold time
+            hold_seconds = (now - position.entry_time).total_seconds()
+            if hold_seconds < min_hold_seconds:
+                continue
+
+            ob = snapshot.orderbook
+            if position.side == "yes":
+                current_bid = ob.best_yes_bid
+            else:
+                current_bid = ob.best_no_bid
+
+            if current_bid is None:
+                continue
+
+            bid_float = float(current_bid)
+            entry_float = float(position.avg_entry_price)
+
+            # Skip if bid is too low to be worth selling
+            if bid_float < min_bid:
+                continue
+
+            # Compute loss percentage relative to entry
+            if entry_float <= 0:
+                continue
+            loss_pct = (entry_float - bid_float) / entry_float
+
+            if loss_pct >= stop_loss_pct:
+                logger.info(
+                    "stop_loss_signal",
+                    ticker=ticker,
+                    side=position.side,
+                    count=position.count,
+                    entry_price=entry_float,
+                    current_bid=bid_float,
+                    loss_pct=round(loss_pct, 4),
+                    threshold=stop_loss_pct,
+                    hold_seconds=round(hold_seconds, 1),
+                )
+                results.append((ticker, str(current_bid)))
+
+        return results
+
     def compute_unrealized_pnl(
         self, snapshots: dict[str, MarketSnapshot]
     ) -> Decimal:
