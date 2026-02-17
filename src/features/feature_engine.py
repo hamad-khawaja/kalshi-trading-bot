@@ -156,13 +156,14 @@ class FeatureEngine:
     def _compute_momentum(self, prices: np.ndarray, window_seconds: int) -> float:
         """Compute momentum using approximate tick count for window.
 
-        Binance sends ~5-20 trades per second for BTCUSDT,
+        Coinbase sends ~1-3 trades per second for BTC-USD,
         so we estimate tick count from seconds.
         """
         if len(prices) < 2:
             return 0.0
-        # Use approximately 10 ticks per second as estimate
-        estimated_ticks = max(1, window_seconds * 10)
+        # Use approximately 2 ticks per second as estimate (realistic for Coinbase)
+        estimated_ticks = max(1, window_seconds * 2)
+        # Fallback: when array is shorter than estimated ticks, use full array
         window = min(estimated_ticks, len(prices))
         return momentum(prices, window)
 

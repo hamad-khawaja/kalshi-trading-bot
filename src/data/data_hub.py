@@ -257,7 +257,7 @@ class DataHub:
 
         # Recent price history
         ticks_1min = feed.get_prices_since(60)
-        ticks_5min = feed.get_prices_since(300)
+        ticks_5min = feed.get_prices_since(900)
         prices_1min = [t.price for t in ticks_1min]
         prices_5min = [t.price for t in ticks_5min]
         volumes_1min = [t.volume for t in ticks_1min]

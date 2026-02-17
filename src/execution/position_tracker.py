@@ -509,6 +509,7 @@ class PositionTracker:
         stop_loss_pct: float = 0.35,
         min_bid: float = 0.05,
         min_hold_seconds: float = 30.0,
+        asset_stop_loss_pct: dict[str, float] | None = None,
     ) -> list[tuple[str, str]]:
         """Check positions for stop-loss exits.
 
@@ -551,7 +552,16 @@ class PositionTracker:
                 continue
             loss_pct = (entry_float - bid_float) / entry_float
 
-            if loss_pct >= stop_loss_pct:
+            # Per-asset stop-loss override
+            effective_sl = stop_loss_pct
+            if asset_stop_loss_pct:
+                ticker_upper = ticker.upper()
+                for asset, sl in asset_stop_loss_pct.items():
+                    if asset.upper() in ticker_upper:
+                        effective_sl = sl
+                        break
+
+            if loss_pct >= effective_sl:
                 logger.info(
                     "stop_loss_signal",
                     ticker=ticker,
@@ -560,7 +570,7 @@ class PositionTracker:
                     entry_price=entry_float,
                     current_bid=bid_float,
                     loss_pct=round(loss_pct, 4),
-                    threshold=stop_loss_pct,
+                    threshold=effective_sl,
                     hold_seconds=round(hold_seconds, 1),
                 )
                 results.append((ticker, str(current_bid)))

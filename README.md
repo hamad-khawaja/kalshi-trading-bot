@@ -8,124 +8,6 @@ Automated trading bot for [Kalshi](https://kalshi.com) prediction markets, targe
 
 ---
 
-## Architecture
-
-```mermaid
-flowchart TB
-    subgraph SOURCES["Data Sources"]
-        CB["Coinbase WS"]
-        KR["Kraken WS"]
-        KWS["Kalshi WS"]
-        KREST["Kalshi REST"]
-    end
-
-    subgraph DATA["Data Layer"]
-        MS["Market Scanner"]
-        DH["DataHub"]
-        TP["Time Profiler"]
-    end
-
-    CB & KR & KWS & KREST --> DH
-    MS --> DH
-    TP -.-> DH
-
-    subgraph STRATEGY["Strategy Pipeline"]
-        FE["Feature Engine"] --> PM["Heuristic Model"] --> SC["Signal Combiner"]
-        SC --> ED["Edge Detector"]
-        SC --> FD["FOMO Detector"]
-        SC --> MM["Market Maker"]
-        SC --> AV["Averager"]
-    end
-
-    DH --> FE
-
-    subgraph RISK["Risk & Sizing"]
-        PS["Position Sizer"]
-        RM["Risk Manager"]
-        VT["Volatility Tracker"]
-    end
-
-    ED & FD & MM & AV --> PS --> RM
-    VT -.-> RM
-
-    subgraph EXEC["Execution"]
-        OM["Order Manager"]
-        PT["Position Tracker"]
-    end
-
-    RM --> OM <--> PT
-    OM --> KREST
-
-    subgraph MONITOR["Monitoring"]
-        DS["Dashboard (SSE)"]
-        DB["SQLite"]
-    end
-
-    PT --> DB
-    DH & PM & PT --> DS
-
-    style SOURCES fill:#1a2733,stroke:#58a6ff,color:#c9d1d9
-    style DATA fill:#0d1117,stroke:#30363d,color:#c9d1d9
-    style STRATEGY fill:#0d1117,stroke:#30363d,color:#c9d1d9
-    style RISK fill:#0d1117,stroke:#30363d,color:#c9d1d9
-    style EXEC fill:#0d1117,stroke:#30363d,color:#c9d1d9
-    style MONITOR fill:#0d1117,stroke:#30363d,color:#c9d1d9
-```
-
-### Signal Model Detail
-
-```mermaid
-flowchart LR
-    subgraph INPUTS["Feature Inputs"]
-        direction TB
-        M["Momentum 30%\n15s · 60s · 180s · 600s"]
-        T["Technical 14%\nRSI · BB · MACD · ROC"]
-        TF["Taker Flow 10%\nNet aggressive buying"]
-        MR["Mean Reversion 10%\nRSI extremes\nsuppressed in trends"]
-        TD["Time Decay 10%\nDampen near expiry"]
-        SB["Settlement 8%\nRecent YES/NO bias"]
-        CA["Cross-Asset 7%\nOther asset divergence"]
-        FL["Order Flow 6%\nKalshi book imbalance"]
-        XE["Cross-Exchange 5%\nBinance lead-lag"]
-    end
-
-    subgraph MODEL["Model"]
-        direction TB
-        WS["Weighted Sum\nclamp ±0.18\nboost ±0.35 on\nconsensus"]
-        EMA["EMA Smooth\nalpha = 0.5"]
-        CONF["Confidence\nspread + vol +\ntime + depth"]
-    end
-
-    M & T & TF & MR & TD & SB & CA & FL & XE --> WS
-    WS --> EMA
-    EMA -->|"P(YES)"| OUT["PredictionResult"]
-    CONF -->|"Confidence"| OUT
-
-    style INPUTS fill:#161b22,stroke:#30363d,color:#c9d1d9
-    style MODEL fill:#161b22,stroke:#30363d,color:#c9d1d9
-```
-
-### Concurrent Task Architecture
-
-```mermaid
-flowchart LR
-    BOT["TradingBot.start()"]
-
-    BOT --> S["Strategy Loop\nevery 4s"]
-    BOT --> MS["Market Scan\nevery 1-10s"]
-    BOT --> PM["Position Monitor\nevery 10s"]
-    BOT --> HC["Health Check\n5s then 60s"]
-    BOT --> TP["Time Profile\nevery 1h"]
-
-    S -->|"For each active market"| CYCLE["Snapshot → Features\n→ Predict → Edge\n→ Size → Risk → Order"]
-    PM -->|"For each position"| EXIT["Take-profit\nTrailing stop\nThesis break\nTime decay exit"]
-    HC -->|"Push to dashboard"| DASH["Balance · P&L\nPositions · Settlements"]
-
-    style BOT fill:#1a3a1a,stroke:#3fb950,color:#c9d1d9
-```
-
----
-
 ## Quick Start
 
 ### Prerequisites
@@ -186,51 +68,94 @@ kalshi-bot --mode live --env prod --max-exposure 1000 --max-daily-loss 200
 ### Main Loop (every ~4 seconds)
 
 1. **Snapshot** — Aggregate prices (Coinbase, Kraken), Kalshi orderbook
-2. **Features** — Compute 23 features: momentum, technicals, order flow, cross-exchange signals, time decay
-3. **Predict** — 9 weighted signals → P(YES) estimate with confidence score
-4. **Edge** — Compare model probability vs Kalshi implied probability, subtract fees
-5. **Risk** — 9 independent safety checks (daily loss, exposure cap, streak limits, vol regime)
-6. **Execute** — Kelly-sized limit order if edge > threshold and all risk checks pass
-7. **Monitor** — Track positions for take-profit, trailing stop, thesis break, time decay exit
+2. **Features** — Compute 23 features: momentum, technicals, order flow, cross-exchange signals, settlement bias, cross-asset divergence, time decay
+3. **Predict** — 9 weighted signals → P(YES) estimate with market-direction anchor and confidence score
+4. **Edge** — Compare model probability vs Kalshi implied probability, subtract fees, apply per-asset multipliers
+5. **Filter** — Phase gating, trend guard, edge persistence, zone filter, min price filter
+6. **Risk** — 9 independent safety checks with per-asset position limits
+7. **Execute** — Kelly-sized limit order if edge > threshold and all checks pass
+8. **Monitor** — Trailing take-profit, stop-loss, pre-expiry exit
 
 ### Strategy Types
 
-| Strategy | Trigger | Description |
-|----------|---------|-------------|
-| **Directional** | `net_edge > threshold` | Model vs market probability mismatch |
-| **FOMO** | Retail panic + extreme implied prob | Contrarian bet against crowd |
-| **Market Making** | Wide spread (5-30%) | Resting limit orders both sides |
-| **Averaging** | Position at -10/20/35% discount | Pyramid into discounted positions |
+| Strategy | Assets | Trigger | Description |
+|----------|--------|---------|-------------|
+| **Directional** | BTC | `net_edge > threshold` for N consecutive cycles | Model vs market probability mismatch |
+| **Market Making** | BTC, ETH | Wide spread (5-30%) | Resting limit orders to capture bid-ask spread |
+
+ETH runs in **MM-only mode** — directional trading is disabled for ETH due to lower win rates from higher volatility. BTC directional is the primary profit engine.
+
+### Per-Asset Risk Profiles
+
+| Setting | BTC | ETH |
+|---------|-----|-----|
+| Strategy | Directional + MM | **MM-only** |
+| Stop-loss | 15% | 20% (wider for volatility) |
+| Max position | 25 contracts | 10 contracts |
+| Max per cycle | 15 contracts | 10 contracts |
+| Edge multiplier | 1.0x | 2.0x |
+
+### Phase-Gated Trading
+
+Each 15-minute window is divided into 5 phases:
+
+| Phase | Window | Behavior |
+|-------|--------|----------|
+| 1. Observation | 0–3 min | No directional trades; record momentum direction |
+| 2. Confirmation | 3–8 min | Only trade if bounce-back from Phase 1 overreaction |
+| 3. Active | 8–12 min | Normal trading with full edge/confidence thresholds |
+| 4. Late | 12–14 min | Tightened thresholds (1.3x edge, +5% confidence) |
+| 5. Final | 14–15 min | No new entries — contracts are unpredictable near settlement |
+
+### Entry Filters
+
+- **Edge persistence** — Require 2 consecutive cycles with same-side edge before entry
+- **Trend guard** — Block trades against unanimous multi-timeframe momentum
+- **Min entry price** — No entries below $0.25 (cheap contracts lose money)
+- **Zone filter** — Block expensive directional trades above $0.60
+- **Quality score** — Combined edge + confidence must exceed minimum threshold
 
 ### Edge Calculation
 
 ```
-model_prob = heuristic_model(features)     # e.g., 0.62
+model_prob = heuristic_model(features)     # 9-signal weighted sum, ±0.30 range
+                                           # + market-direction anchor (30% blend)
 market_prob = kalshi_midpoint              # e.g., 0.55
 raw_edge = |model_prob - market_prob|      # 0.07
 net_edge = raw_edge - fee_drag             # ~0.04
-→ Trade if net_edge > min_threshold (default 3%)
+→ Trade if net_edge > min_threshold (5%) × asset_multiplier × zone_multiplier
 ```
+
+### Exit Management
+
+| Exit Type | Trigger | Description |
+|-----------|---------|-------------|
+| **Trailing take-profit** | Activate at +$0.08/contract, exit on $0.05 drop from peak | Let winners run |
+| **Stop-loss** | 15% loss (BTC) / 20% loss (ETH) from entry | Cut losers early |
+| **Pre-expiry exit** | 90 seconds before settlement | Sell if PnL ≥ -$0.03/contract |
+| **TP cooldown** | 15 min after take-profit | Block re-entry in same window |
 
 ### Risk Checks (all must pass)
 
-1. Balance ≥ minimum ($50)
+1. Balance ≥ minimum
 2. Daily P&L above loss limit
-3. Position count < per-market cap
+3. Per-market position < cap (per-asset limits)
 4. Total exposure < cap
 5. Concurrent positions < limit
 6. Consecutive losses < streak max
 7. Trades today < daily limit
-8. Not in cooldown period
+8. Entry cooldown (30s between fills on same market)
 9. Time to expiry > 60 seconds
 
 ### Position Sizing
 
 **Fractional Kelly Criterion** with adjustments:
+- Per-asset caps: different max positions for BTC vs ETH
 - Zone scaling: better risk:reward zones → larger size
 - Time scaling: reduce size as expiry approaches
 - Vol regime: tighter sizing in high volatility
-- Per-cycle cap: max contracts per single order
+- Per-cycle cap: max contracts per single order (per-asset)
+- Minimum position size: skip tiny positions below threshold
 
 ---
 
@@ -255,15 +180,20 @@ All settings in `config/settings.yaml`:
 
 | Setting | Default | Description |
 |---|---|---|
-| `mode` | `live` | `paper` or `live` |
+| `mode` | `paper` | `paper` or `live` |
 | `kalshi.environment` | `prod` | `demo` or `prod` |
 | `strategy.poll_interval_seconds` | `4` | Main loop interval |
-| `strategy.min_edge_threshold` | `0.03` | Minimum edge to trade |
-| `risk.max_position_per_market` | `15` | Max contracts per market |
-| `risk.max_total_exposure_dollars` | `50` | Total capital at risk |
-| `risk.max_daily_loss_dollars` | `5` | Daily loss stop |
-| `risk.max_concurrent_positions` | `3` | Max open positions |
-| `risk.kelly_fraction` | `0.15` | Kelly fraction for sizing |
+| `strategy.min_edge_threshold` | `0.05` | Minimum edge to trade (5%) |
+| `strategy.confidence_min` | `0.62` | Minimum model confidence |
+| `strategy.asset_edge_multipliers` | `{ETH: 2.0}` | Per-asset edge penalty |
+| `strategy.asset_directional_disabled` | `[ETH]` | MM-only assets |
+| `risk.max_position_per_market` | `25` | Max contracts per market |
+| `risk.max_total_exposure_dollars` | `500` | Total capital at risk |
+| `risk.max_daily_loss_dollars` | `300` | Daily loss stop |
+| `risk.max_concurrent_positions` | `5` | Max open positions |
+| `risk.kelly_fraction` | `0.20` | Kelly fraction for sizing |
+| `risk.asset_max_position` | `{ETH: 10}` | Per-asset position caps |
+| `risk.asset_max_per_cycle` | `{ETH: 10}` | Per-asset cycle caps |
 
 ### Per-Asset Config
 
@@ -296,7 +226,6 @@ kalshi:
 │   │   ├── kalshi_client.py       # Kalshi REST client (markets, orders, balance)
 │   │   ├── kalshi_ws.py           # Kalshi WS (orderbook deltas, fills)
 │   │   ├── kalshi_auth.py         # RSA-PSS authentication
-
 │   │   ├── data_hub.py            # Unified aggregator → MarketSnapshot
 │   │   ├── market_scanner.py      # Active market discovery
 │   │   ├── time_profile.py        # Historical kline profiling

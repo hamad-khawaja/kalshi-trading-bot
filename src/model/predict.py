@@ -43,29 +43,37 @@ class HeuristicModel(ProbabilityModel):
     5. Time to expiry (affects confidence)
     """
 
-    # Signal weights — proven signals (momentum, mean reversion) weighted higher.
-    MOMENTUM_WEIGHT = 0.30  # Core signal: BTC direction → resolution 96.6%
-    TECHNICAL_WEIGHT = 0.14  # BB, MACD, ROC, vol-mom composite
-    ORDERFLOW_WEIGHT = 0.06  # Kalshi retail book = noise
-    MEAN_REVERSION_WEIGHT = 0.10  # Reduced: was fighting momentum, keeping model at 0.50
+    # Signal weights — proven signals (momentum, technical) weighted higher.
+    # Noisy signals (flow, taker, settlement) reduced from 24% to 11%.
+    MOMENTUM_WEIGHT = 0.38  # Core signal: BTC direction → resolution 96.6%
+    TECHNICAL_WEIGHT = 0.18  # BB, MACD, ROC, vol-mom composite
+    ORDERFLOW_WEIGHT = 0.02  # Kalshi retail book = noise
+    MEAN_REVERSION_WEIGHT = 0.10  # Keep (useful when not fighting trends)
     TIME_DECAY_WEIGHT = 0.10
-    CROSS_EXCHANGE_WEIGHT = 0.05  # Coinbase IS the oracle, Binance lead weak
-    TAKER_FLOW_WEIGHT = 0.10  # Reduced: strong but noisy, was dominating
-    SETTLEMENT_BIAS_WEIGHT = 0.08  # Recent settlement outcome momentum
-    CROSS_ASSET_DIVERGENCE_WEIGHT = 0.07  # Cross-asset implied probability divergence
+    CROSS_EXCHANGE_WEIGHT = 0.07  # Somewhat useful lead signal
+    TAKER_FLOW_WEIGHT = 0.05  # Reduced: noisy
+    SETTLEMENT_BIAS_WEIGHT = 0.04  # Weak signal, reduced
+    CROSS_ASSET_DIVERGENCE_WEIGHT = 0.06  # Modest reduction
 
     # Maximum adjustment from 0.50 base
-    MAX_ADJUSTMENT = 0.18  # Raised from 0.15: allow model to express stronger conviction
+    MAX_ADJUSTMENT = 0.30  # Raised from 0.18: match Kalshi's actual trading range (0.20–0.80)
 
     # Maximum adjustment when strong multi-timeframe momentum is detected.
     # Reflects empirical finding: BTC direction -> resolution 96.6% of time
-    STRONG_MOMENTUM_MAX_ADJUSTMENT = 0.35
+    STRONG_MOMENTUM_MAX_ADJUSTMENT = 0.45
 
     # Dead zone: suppress marginal signals near 0.50
-    DEAD_ZONE = 0.05  # Raised: suppress marginal signals, require real conviction
+    # Shrunk from 0.05 — consensus gate handles noise instead of blunt dead zone
+    DEAD_ZONE = 0.03
 
     # EMA smoothing alpha (0 = fully smooth, 1 = no smoothing)
-    EMA_ALPHA = 0.5
+    EMA_ALPHA = 0.75  # Faster response (was 0.5 = 50% stale)
+
+    # EMA snap threshold: skip EMA entirely when prediction changes by more than this
+    EMA_SNAP_THRESHOLD = 0.08
+
+    # Market anchor: blend toward implied probability when model agrees with market direction
+    MARKET_ANCHOR_WEIGHT = 0.30
 
     def __init__(self, weight_multipliers: dict[str, float] | None = None) -> None:
         self._prev_probability: float | None = None
@@ -129,10 +137,12 @@ class HeuristicModel(ProbabilityModel):
         if abs(rsi_norm) > 0.5:
             mr_signal += -rsi_norm * 0.2  # Additional push at extremes
 
-        # When all momentum timeframes agree, suppress mean reversion —
+        # When momentum timeframes agree, suppress mean reversion —
         # a consistent trend is not a mean-reversion opportunity.
-        if consistency == 1.0 and abs(mom_signal) > 0.3:
-            mr_signal *= 0.2  # 80% suppression
+        if consistency == 1.0 and abs(mom_signal) > 0.15:
+            mr_signal = 0.0  # Full suppression: confirmed trend
+        elif consistency >= 0.5 and abs(mom_signal) > 0.4:
+            mr_signal *= 0.3  # 70% suppression: strong but not fully confirmed
 
         # --- 5. Cross-exchange lead-lag signal ---
         # Binance typically leads Coinbase by 100-500ms.
@@ -223,16 +233,41 @@ class HeuristicModel(ProbabilityModel):
             + td_w * time_decay_signal
         )
 
+        # --- Signal consensus gate ---
+        # Only trade when signals agree. Prevents coin-flip entries.
+        all_signals = [
+            mom_signal, tech_signal, flow_signal, mr_signal,
+            cross_exchange_signal, taker_signal, settlement_signal,
+            cross_asset_signal, time_decay_signal,
+        ]
+        active_signals = [s for s in all_signals if abs(s) > 0.05]
+        n_active = len(active_signals)
+        n_bullish = sum(1 for s in active_signals if s > 0)
+        n_bearish = n_active - n_bullish
+
+        consensus_gate_applied = False
+        if n_active < 3:
+            # Too few signals with conviction — suppress
+            raw_adjustment = 0.0
+            consensus_gate_applied = True
+        elif n_active > 0:
+            majority_pct = max(n_bullish, n_bearish) / n_active
+            if majority_pct < 0.60:
+                # Signals disagree — dampen by 70%
+                raw_adjustment *= 0.3
+                consensus_gate_applied = True
+
         # Clamp adjustment — with strong momentum override
         effective_max = self.MAX_ADJUSTMENT
 
-        # When all timeframes agree strongly, allow more extreme probabilities
-        # reflecting the 96.6% BTC direction -> resolution correlation.
-        if consistency == 1.0 and abs(mom_signal) > 0.6:
-            override_bonus = (abs(mom_signal) - 0.6) * 0.375
-            effective_max = min(
-                self.STRONG_MOMENTUM_MAX_ADJUSTMENT,
-                self.MAX_ADJUSTMENT + override_bonus,
+        # When all timeframes agree, allow more extreme probabilities via
+        # graduated interpolation. Triggers at |mom_signal| > 0.3 (fires on
+        # real moves) instead of old 0.6 threshold that rarely triggered.
+        if consistency == 1.0 and abs(mom_signal) > 0.3:
+            strength = (abs(mom_signal) - 0.3) / 0.7  # 0→1 scale
+            effective_max = (
+                self.MAX_ADJUSTMENT
+                + strength * (self.STRONG_MOMENTUM_MAX_ADJUSTMENT - self.MAX_ADJUSTMENT)
             )
 
         adjustment = max(-effective_max, min(effective_max, raw_adjustment))
@@ -243,12 +278,31 @@ class HeuristicModel(ProbabilityModel):
             probability = 0.50
 
         # EMA smoothing to reduce oscillation
+        # Snap-through: skip EMA when prediction changes drastically
         if self._prev_probability is not None:
-            probability = (
-                self.EMA_ALPHA * probability
-                + (1 - self.EMA_ALPHA) * self._prev_probability
-            )
+            delta = abs(probability - self._prev_probability)
+            if delta < self.EMA_SNAP_THRESHOLD:
+                probability = (
+                    self.EMA_ALPHA * probability
+                    + (1 - self.EMA_ALPHA) * self._prev_probability
+                )
+            # else: snap — use raw probability without smoothing
         self._prev_probability = probability
+
+        # Market-direction anchor: when model direction matches market direction
+        # and momentum consistency is sufficient, blend toward implied probability.
+        # This prevents the model from stubbornly disagreeing with the market
+        # when its own signals confirm the market's direction.
+        market_anchor_applied = False
+        implied = features.implied_probability
+        model_bullish = probability > 0.50
+        market_bullish = implied > 0.50
+        if consistency >= 0.5 and model_bullish == market_bullish and probability != 0.50:
+            probability = (
+                (1 - self.MARKET_ANCHOR_WEIGHT) * probability
+                + self.MARKET_ANCHOR_WEIGHT * implied
+            )
+            market_anchor_applied = True
 
         # Clamp to valid probability range
         probability = max(0.05, min(0.95, probability))
@@ -269,6 +323,11 @@ class HeuristicModel(ProbabilityModel):
             "time_decay_signal": round(time_decay_signal, 4),
             "consistency": round(consistency, 4),
             "raw_adjustment": round(raw_adjustment, 4),
+            "consensus_active_signals": n_active,
+            "consensus_bullish": n_bullish,
+            "consensus_bearish": n_bearish,
+            "consensus_gate_applied": consensus_gate_applied,
+            "market_anchor_applied": market_anchor_applied,
         }
 
         return PredictionResult(

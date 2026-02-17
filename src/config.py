@@ -113,9 +113,16 @@ class StrategyConfig(BaseModel):
     thesis_break_threshold: float = 0.05  # model must cross 0.50 +/- this to trigger exit
     thesis_break_min_hold_seconds: float = 60.0  # minimum hold before thesis break can fire
     # Entry price filter: block cheap contracts with poor hit rates
-    min_entry_price: float = 0.15
+    min_entry_price: float = 0.25
     # YES-side edge penalty: require more edge for YES (NO side is more profitable empirically)
     yes_side_edge_multiplier: float = 1.4
+    # Per-asset edge multipliers: require more edge for noisier assets
+    # Keys are asset symbols (e.g. "ETH"), values are multipliers applied to edge thresholds
+    asset_edge_multipliers: dict[str, float] = {}
+    # Per-asset stop-loss override: noisier assets may need wider stops
+    asset_stop_loss_pct: dict[str, float] = {}
+    # Disable directional trading for specific assets (keep MM only)
+    asset_directional_disabled: list[str] = []
     # Zone filter: block expensive directional trades
     zone_filter_enabled: bool = True
     max_directional_price: float = 0.60
@@ -141,6 +148,8 @@ class StrategyConfig(BaseModel):
     # Cross-asset divergence: use other asset's implied prob as a lead signal
     cross_asset_divergence_enabled: bool = True
     cross_asset_divergence_weight: float = 0.06
+    # Composite quality score: require combined edge + confidence quality
+    min_quality_score: float = 0.80
 
 
 class RiskConfig(BaseModel):
@@ -167,6 +176,9 @@ class RiskConfig(BaseModel):
     time_scale_full_seconds: float = 480.0  # Full size above this time remaining
     time_scale_min_multiplier: float = 0.4  # Minimum scaling at expiry
     min_position_size: int = 5  # Don't enter with fewer than this many contracts
+    # Per-asset position limits: noisier assets get smaller positions
+    asset_max_position: dict[str, int] = {}
+    asset_max_per_cycle: dict[str, int] = {}
 
 
 class FeatureConfig(BaseModel):

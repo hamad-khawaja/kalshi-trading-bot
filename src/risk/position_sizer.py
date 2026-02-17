@@ -127,6 +127,7 @@ class PositionSizer:
             current_exposure_dollars,
             current_market_position,
             price,
+            ticker=signal.market_ticker,
         )
 
         # Minimum position size: skip tiny positions that statistically lose
@@ -187,15 +188,21 @@ class PositionSizer:
         current_exposure: Decimal,
         current_market_position: int,
         price: float,
+        ticker: str = "",
     ) -> int:
         """Apply all position size caps."""
         if count <= 0:
             return 0
 
-        # Cap 1: Max contracts per market
-        max_for_market = self._config.max_position_per_market - abs(
-            current_market_position
-        )
+        # Cap 1: Max contracts per market (with per-asset override)
+        max_position = self._config.max_position_per_market
+        if self._config.asset_max_position and ticker:
+            ticker_upper = ticker.upper()
+            for asset, limit in self._config.asset_max_position.items():
+                if asset.upper() in ticker_upper:
+                    max_position = limit
+                    break
+        max_for_market = max_position - abs(current_market_position)
         count = min(count, max(0, max_for_market))
 
         # Cap 2: Max total exposure

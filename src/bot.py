@@ -525,9 +525,15 @@ class TradingBot:
                         )
                         return
 
-        # Per-cycle contract cap
+        # Per-cycle contract cap (with per-asset override)
         cycle_contracts_placed = 0
         max_per_cycle = self._settings.risk.max_contracts_per_cycle
+        if self._settings.risk.asset_max_per_cycle:
+            ticker_upper = ticker.upper()
+            for asset, cap in self._settings.risk.asset_max_per_cycle.items():
+                if asset.upper() in ticker_upper:
+                    max_per_cycle = cap
+                    break
 
         # Process each signal
         for signal_item in signals:
@@ -572,6 +578,12 @@ class TradingBot:
 
             if count <= 0:
                 max_pos = self._settings.risk.max_position_per_market
+                if self._settings.risk.asset_max_position:
+                    t_upper = ticker.upper()
+                    for a_sym, a_lim in self._settings.risk.asset_max_position.items():
+                        if a_sym.upper() in t_upper:
+                            max_pos = a_lim
+                            break
                 if effective_position >= max_pos:
                     reason = f"MAX POSITION: {effective_position}/{max_pos} contracts in {signal_item.side.upper()}"
                 else:
@@ -1049,6 +1061,7 @@ class TradingBot:
                         snapshots,
                         stop_loss_pct=self._settings.strategy.stop_loss_pct,
                         min_bid=self._settings.strategy.stop_loss_min_bid,
+                        asset_stop_loss_pct=self._settings.strategy.asset_stop_loss_pct or None,
                     )
                     for sl_ticker, sell_price in sl_signals:
                         pos = self._position_tracker.get_position(sl_ticker)

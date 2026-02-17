@@ -77,16 +77,23 @@ class RiskManager:
                 f"Daily loss limit hit: ${self._daily_pnl}",
             )
 
-        # 3. Position count per market
+        # 3. Position count per market (with per-asset override)
+        max_position = self._config.max_position_per_market
+        if self._config.asset_max_position:
+            ticker_upper = signal.market_ticker.upper()
+            for asset, limit in self._config.asset_max_position.items():
+                if asset.upper() in ticker_upper:
+                    max_position = limit
+                    break
         market_position = 0
         for p in positions:
             if p.ticker == signal.market_ticker:
                 market_position = abs(p.market_exposure)
                 break
-        if market_position + count > self._config.max_position_per_market:
+        if market_position + count > max_position:
             return RiskDecision(
                 False,
-                f"Market position limit: {market_position} + {count} > {self._config.max_position_per_market}",
+                f"Market position limit: {market_position} + {count} > {max_position}",
             )
 
         # 4. Total exposure cap

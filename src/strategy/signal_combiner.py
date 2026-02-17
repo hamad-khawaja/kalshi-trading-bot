@@ -95,7 +95,16 @@ class SignalCombiner:
                 del self._phase1_state[ticker]
 
         # 1. Check for directional edge (highest priority)
-        directional = self._edge_detector.detect(prediction, snapshot)
+        # Skip directional for disabled assets (MM-only mode)
+        directional_disabled = False
+        if self._config.asset_directional_disabled:
+            ticker_upper = snapshot.market_ticker.upper()
+            for asset in self._config.asset_directional_disabled:
+                if asset.upper() in ticker_upper:
+                    directional_disabled = True
+                    break
+
+        directional = None if directional_disabled else self._edge_detector.detect(prediction, snapshot)
 
         if directional is not None:
             # Trend guard: if all momentum timeframes agree on a direction,
@@ -188,6 +197,17 @@ class SignalCombiner:
                         min_conf_late=round(min_conf_late, 4),
                     )
                     directional = None
+            elif phase == 5:
+                # Final phase (last 60s): no new entries — contracts are lottery
+                # tickets with unpredictable resolution
+                logger.info(
+                    "phase5_blocked",
+                    ticker=ticker,
+                    phase=5,
+                    side=directional.side,
+                    net_edge=directional.net_edge,
+                )
+                directional = None
 
         if directional is not None:
             # Edge persistence: require N consecutive cycles with same-side edge

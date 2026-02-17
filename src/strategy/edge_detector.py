@@ -253,6 +253,15 @@ class EdgeDetector:
             min_threshold *= self._config.yes_side_edge_multiplier
             max_threshold *= self._config.yes_side_edge_multiplier
 
+        # Per-asset edge penalty: require more edge for noisier assets (e.g. ETH)
+        if self._config.asset_edge_multipliers:
+            ticker_upper = snapshot.market_ticker.upper()
+            for asset, mult in self._config.asset_edge_multipliers.items():
+                if asset.upper() in ticker_upper and mult > 1.0:
+                    min_threshold *= mult
+                    max_threshold *= mult
+                    break
+
         # Capture analysis state for dashboard
         fv_label = " [fair value]" if using_fair_value else ""
         cheap_zone_bypass = self._config.zone_filter_enabled and zone <= 2
@@ -324,6 +333,28 @@ class EdgeDetector:
 
         # Confidence gate
         if prediction.confidence < self._config.confidence_min:
+            return None
+
+        # Composite quality score gate: require combined edge + confidence quality
+        quality_score = (
+            (net_edge / min_threshold) * 0.5
+            + (prediction.confidence / 1.0) * 0.5
+        )
+        self.last_analysis["quality_score"] = round(quality_score, 4)
+        if quality_score < self._config.min_quality_score:
+            self.last_analysis["passed"] = False
+            self.last_analysis["decision"] = (
+                f"NO TRADE: quality score {quality_score:.4f} < "
+                f"min {self._config.min_quality_score:.2f}"
+            )
+            logger.info(
+                "quality_score_blocked",
+                ticker=snapshot.market_ticker,
+                quality_score=round(quality_score, 4),
+                min_quality=self._config.min_quality_score,
+                net_edge=round(net_edge, 4),
+                confidence=round(prediction.confidence, 4),
+            )
             return None
 
         # Determine price to submit

@@ -38,7 +38,7 @@ strategy:
   mm_min_spread: 0.05           # Minimum spread ($) for market-making
   # Stop-loss: exit when position drops beyond threshold
   stop_loss_enabled: true
-  stop_loss_pct: 0.35              # Exit when loss > 35% of entry price
+  stop_loss_pct: 0.15              # Exit when loss > 15% of entry price (was 25% — losses still 2x wins)
   stop_loss_min_bid: 0.05          # Don't sell if bid is below $0.05
   # FOMO exploitation — DISABLED: 0/3 trades, all stopped out (-$1.41 total)
   fomo_enabled: false
@@ -52,8 +52,8 @@ strategy:
   fomo_min_implied_prob: 0.15
   # Trailing take-profit
   trailing_take_profit_enabled: true
-  trailing_take_profit_activation_cents: 0.04  # Profit to activate trailing
-  trailing_take_profit_drop_cents: 0.03        # Exit when price drops this from peak
+  trailing_take_profit_activation_cents: 0.08  # Profit to activate trailing (was 0.04 — exiting too early, avg win 2x smaller than avg loss)
+  trailing_take_profit_drop_cents: 0.05        # Exit when price drops this from peak (was 0.03 — noise triggered exits)
   # Take-profit cooldown: block re-entry after TP
   take_profit_cooldown_seconds: 900.0          # 15 min — block for rest of window
   # Pre-expiry exit: sell before settlement
@@ -68,8 +68,13 @@ strategy:
   # Pre-expiry exit: only exit if profitable or near-breakeven (don't sell losers at rock bottom)
   pre_expiry_exit_min_pnl_cents: -0.03  # Only pre-expiry exit if PnL >= -$0.03/contract
   # Entry filters
-  min_entry_price: 0.15             # Block entries below $0.15 (cheap contracts lose money)
+  min_entry_price: 0.25             # Block entries below $0.25 (cheap contracts lose money)
   yes_side_edge_multiplier: 1.2     # Require 20% more edge for YES entries (NO side is more profitable)
+  asset_edge_multipliers:
+    ETH: 2.0                         # ETH is noisier: require 2x edge (was 1.5)
+  asset_stop_loss_pct:
+    ETH: 0.20                        # ETH gets wider stop (20%) to avoid noise stop-outs
+  asset_directional_disabled: [ETH]  # ETH: MM-only (45% directional WR was dragging BTC profits)
   # Zone filter: block expensive directional trades
   zone_filter_enabled: true
   max_directional_price: 0.60
@@ -92,20 +97,22 @@ strategy:
   # Cross-asset divergence: use other asset's implied prob as a lead signal
   cross_asset_divergence_enabled: true
   cross_asset_divergence_weight: 0.06
+  # Composite quality score: require combined edge + confidence quality
+  min_quality_score: 0.80
 
 risk:
-  max_position_per_market: 10    # Smaller positions (was 15)
-  max_total_exposure_dollars: 50.0   # $100 paper bankroll / 2 (paper balance = exposure * 2)
-  max_daily_loss_dollars: 20.0       # 20% of bankroll — hard stop
+  max_position_per_market: 25    # Reduced — smaller positions to limit loss size
+  max_total_exposure_dollars: 500.0   # $1000 paper bankroll / 2 (paper balance = exposure * 2)
+  max_daily_loss_dollars: 300.0      # 30% of bankroll — hard stop
   max_concurrent_positions: 5
   kelly_fraction: 0.20          # Reduce risk (was 0.35)
-  min_balance_dollars: 80.0     # Stop trading when balance drops to $80 (20% drawdown)
+  min_balance_dollars: 350.0    # Stop trading when balance drops to $700 (30% drawdown from $1000)
   max_trades_per_day: 1000       # Paper trading: no daily limit
   cooldown_after_streak_minutes: 30
   max_consecutive_losses: 5     # Paper: more room to test
   # Entry discipline
   entry_cooldown_seconds: 30     # Min seconds between fills on same market
-  max_contracts_per_cycle: 7     # Smaller per-cycle cap (was 10)
+  max_contracts_per_cycle: 15    # Reduced — smaller entries to limit loss size
   # Fee-aware sizing at extreme prices
   fee_extreme_price_threshold: 0.25
   fee_extreme_kelly_multiplier: 1.5  # Enable fee boost at extremes (was 1.0)
@@ -116,7 +123,12 @@ risk:
   time_scale_full_seconds: 480.0  # Full size above 8 min remaining
   time_scale_min_multiplier: 0.4  # 40% size at expiry
   # Minimum position size: skip tiny positions that statistically lose
-  min_position_size: 3             # Allow smaller entries (was 5)
+  min_position_size: 5             # Lowered to match smaller max sizes
+  # Per-asset position limits: ETH gets smaller sizes with wider stops
+  asset_max_position:
+    ETH: 10                          # ETH max 10 contracts (BTC keeps 25)
+  asset_max_per_cycle:
+    ETH: 10                          # ETH max 10 per cycle (BTC keeps 15)
 
 averaging:
   enabled: false                # Disabled until profitable (was true)

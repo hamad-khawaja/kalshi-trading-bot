@@ -62,7 +62,7 @@ def sample_snapshot(now: datetime, sample_orderbook: Orderbook) -> MarketSnapsho
             Decimal(f"{97500 + i * 0.5}") for i in range(60)
         ],
         btc_prices_5min=[
-            Decimal(f"{97480 + i * 0.2}") for i in range(300)
+            Decimal(f"{97480 + i * 0.02}") for i in range(1800)
         ],
         btc_volumes_1min=[
             Decimal("0.01") for _ in range(60)
