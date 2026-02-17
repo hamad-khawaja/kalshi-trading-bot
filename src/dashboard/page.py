@@ -582,6 +582,7 @@ a{color:#58a6ff}
             '<span class="trade-arrow ' + cls + '">' + arrow + '</span>' +
             '<span class="trade-action">' + action + '</span>' +
             '<span style="color:#8b949e">' + t.side.toUpperCase() + '</span>' +
+            '<span style="color:#8b949e">$' + (t.size || 0).toFixed(2) + '</span>' +
             '<span class="trade-pnl ' + cls + '">' + sign + '$' + t.pnl.toFixed(2) + '</span>' +
             '<span class="trade-meta">' + t.time + '</span>' +
             '</div>';

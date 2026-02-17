@@ -857,6 +857,7 @@ class TradingBot:
                                 ds.add_trade_result(
                                     self._data_hub._ticker_to_symbol(exit_ticker),
                                     "settle", pos.side, float(pnl), exit_ticker,
+                                    size_dollars=float(cost),
                                 )
                                 # Log settlement to database
                                 try:
@@ -905,6 +906,7 @@ class TradingBot:
                             ds.add_trade_result(
                                 self._data_hub._ticker_to_symbol(exit_ticker),
                                 "settle", pos.side, float(pnl), exit_ticker,
+                                size_dollars=float(cost),
                             )
                             # Log settlement to database
                             try:
@@ -979,6 +981,7 @@ class TradingBot:
                             ds.add_trade_result(
                                 self._data_hub._ticker_to_symbol(pe_ticker),
                                 "pre_expiry", pos.side, float(pnl), pe_ticker,
+                                size_dollars=float(entry_cost),
                             )
                             # Log pre-expiry exit to database
                             try:
@@ -1049,6 +1052,7 @@ class TradingBot:
                             ds.add_trade_result(
                                 self._data_hub._ticker_to_symbol(tp_ticker),
                                 "take_profit", pos.side, float(pnl), tp_ticker,
+                                size_dollars=float(entry_cost),
                             )
                             # Log take-profit to database
                             try:
@@ -1123,6 +1127,7 @@ class TradingBot:
                             ds.add_trade_result(
                                 self._data_hub._ticker_to_symbol(sl_ticker),
                                 "stop_loss", pos.side, float(pnl), sl_ticker,
+                                size_dollars=float(entry_cost),
                             )
                             # Log stop-loss to database
                             try:
@@ -1206,6 +1211,7 @@ class TradingBot:
                             ds.add_trade_result(
                                 self._data_hub._ticker_to_symbol(tb_ticker),
                                 "thesis_break", pos.side, float(pnl), tb_ticker,
+                                size_dollars=float(entry_cost),
                             )
                             # Log thesis-break exit to database
                             try:

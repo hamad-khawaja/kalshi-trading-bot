@@ -60,7 +60,8 @@ class DashboardState:
         self.quiet_hours_utc: list[int] = []
 
     def add_trade_result(
-        self, asset: str, action: str, side: str, pnl: float, ticker: str
+        self, asset: str, action: str, side: str, pnl: float, ticker: str,
+        size_dollars: float = 0.0,
     ) -> None:
         """Record a completed trade result for the trade history panel."""
         if asset not in self.trade_history:
@@ -71,6 +72,7 @@ class DashboardState:
                 "action": action,
                 "side": side,
                 "pnl": round(pnl, 2),
+                "size": round(size_dollars, 2),
                 "ticker": ticker,
             }
         )
