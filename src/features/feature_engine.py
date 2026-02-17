@@ -134,6 +134,8 @@ class FeatureEngine:
             cross_exchange_lead=snapshot.cross_exchange_lead or 0.0,
             taker_buy_sell_ratio=self._compute_taker_ratio(snapshot),
             settlement_bias=settle_bias,
+            chainlink_divergence=snapshot.chainlink_divergence or 0.0,
+            chainlink_confirmation=1.0 if snapshot.chainlink_round_updated else 0.0,
             time_elapsed_seconds=snapshot.time_elapsed_seconds,
             window_phase=snapshot.window_phase,
         )

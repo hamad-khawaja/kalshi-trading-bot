@@ -17,6 +17,8 @@ class AssetConfig(BaseModel):
     primary_symbol: str       # "BTC-USD" or "ETH-USD"
     secondary_ws_url: str = ""
     secondary_symbol: str = ""
+    chainlink_contract: str = ""
+    chainlink_rpc_url: str = ""
 
 
 class KalshiConfig(BaseModel):
@@ -150,6 +152,9 @@ class StrategyConfig(BaseModel):
     cross_asset_divergence_weight: float = 0.06
     # Composite quality score: require combined edge + confidence quality
     min_quality_score: float = 0.80
+    # Quiet hours: skip directional trading during low-volume hours (MM still allowed)
+    quiet_hours_enabled: bool = False
+    quiet_hours_utc: list[int] = []  # UTC hours to skip directional trading (e.g. [5, 6, 7])
 
 
 class RiskConfig(BaseModel):

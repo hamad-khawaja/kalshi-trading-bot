@@ -51,9 +51,10 @@ class HeuristicModel(ProbabilityModel):
     MEAN_REVERSION_WEIGHT = 0.10  # Keep (useful when not fighting trends)
     TIME_DECAY_WEIGHT = 0.10
     CROSS_EXCHANGE_WEIGHT = 0.07  # Somewhat useful lead signal
-    TAKER_FLOW_WEIGHT = 0.05  # Reduced: noisy
-    SETTLEMENT_BIAS_WEIGHT = 0.04  # Weak signal, reduced
+    TAKER_FLOW_WEIGHT = 0.03  # Reduced to make room for chainlink
+    SETTLEMENT_BIAS_WEIGHT = 0.02  # Reduced to make room for chainlink
     CROSS_ASSET_DIVERGENCE_WEIGHT = 0.06  # Modest reduction
+    CHAINLINK_ORACLE_WEIGHT = 0.04  # On-chain oracle divergence signal
 
     # Maximum adjustment from 0.50 base
     MAX_ADJUSTMENT = 0.30  # Raised from 0.18: match Kalshi's actual trading range (0.20–0.80)
@@ -170,7 +171,18 @@ class HeuristicModel(ProbabilityModel):
         # the lagging asset tends to catch up.
         cross_asset_signal = features.cross_asset_divergence  # Already [-1, 1]
 
-        # --- 9. Time decay signal ---
+        # --- 9. Chainlink oracle divergence signal ---
+        # Divergence between live exchange price and lagging on-chain oracle.
+        # Positive divergence = price moved up since last oracle update = bullish.
+        # Amplify when round just confirmed (0.5%+ move validated by oracle).
+        chainlink_signal = 0.0
+        if features.chainlink_divergence != 0:
+            chainlink_signal = math.tanh(features.chainlink_divergence / 0.003)
+            if features.chainlink_confirmation > 0:
+                chainlink_signal *= 1.5
+                chainlink_signal = max(-1.0, min(1.0, chainlink_signal))
+
+        # --- 10. Time decay signal ---
         # Reduced weight: dampen signals near expiry but don't negate them
         time_decay_signal = 0.0
         if features.time_to_expiry_normalized < 0.3:
@@ -194,6 +206,7 @@ class HeuristicModel(ProbabilityModel):
         tk_w = self.TAKER_FLOW_WEIGHT * m.get("taker_flow", 1.0)
         sb_w = self.SETTLEMENT_BIAS_WEIGHT * m.get("settlement_bias", 1.0)
         ca_w = self.CROSS_ASSET_DIVERGENCE_WEIGHT * m.get("cross_asset", 1.0)
+        cl_w = self.CHAINLINK_ORACLE_WEIGHT * m.get("chainlink", 1.0)
 
         # Re-normalize so weights sum to the original total
         original_total = (
@@ -206,8 +219,9 @@ class HeuristicModel(ProbabilityModel):
             + self.TAKER_FLOW_WEIGHT
             + self.SETTLEMENT_BIAS_WEIGHT
             + self.CROSS_ASSET_DIVERGENCE_WEIGHT
+            + self.CHAINLINK_ORACLE_WEIGHT
         )
-        adjusted_total = mom_w + tech_w + flow_w + mr_w + td_w + cx_w + tk_w + sb_w + ca_w
+        adjusted_total = mom_w + tech_w + flow_w + mr_w + td_w + cx_w + tk_w + sb_w + ca_w + cl_w
         if adjusted_total > 0:
             scale = original_total / adjusted_total
             mom_w *= scale
@@ -219,6 +233,7 @@ class HeuristicModel(ProbabilityModel):
             tk_w *= scale
             sb_w *= scale
             ca_w *= scale
+            cl_w *= scale
 
         # --- Combine signals ---
         raw_adjustment = (
@@ -230,6 +245,7 @@ class HeuristicModel(ProbabilityModel):
             + tk_w * taker_signal
             + sb_w * settlement_signal
             + ca_w * cross_asset_signal
+            + cl_w * chainlink_signal
             + td_w * time_decay_signal
         )
 
@@ -238,7 +254,7 @@ class HeuristicModel(ProbabilityModel):
         all_signals = [
             mom_signal, tech_signal, flow_signal, mr_signal,
             cross_exchange_signal, taker_signal, settlement_signal,
-            cross_asset_signal, time_decay_signal,
+            cross_asset_signal, chainlink_signal, time_decay_signal,
         ]
         active_signals = [s for s in all_signals if abs(s) > 0.05]
         n_active = len(active_signals)
@@ -320,6 +336,7 @@ class HeuristicModel(ProbabilityModel):
             "taker_signal": round(taker_signal, 4),
             "settlement_signal": round(settlement_signal, 4),
             "cross_asset_signal": round(cross_asset_signal, 4),
+            "chainlink_signal": round(chainlink_signal, 4),
             "time_decay_signal": round(time_decay_signal, 4),
             "consistency": round(consistency, 4),
             "raw_adjustment": round(raw_adjustment, 4),

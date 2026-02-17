@@ -33,6 +33,7 @@ class TestSignalWeights:
             + HeuristicModel.TAKER_FLOW_WEIGHT
             + HeuristicModel.SETTLEMENT_BIAS_WEIGHT
             + HeuristicModel.CROSS_ASSET_DIVERGENCE_WEIGHT
+            + HeuristicModel.CHAINLINK_ORACLE_WEIGHT
         )
         assert total == pytest.approx(1.0, abs=0.001)
 

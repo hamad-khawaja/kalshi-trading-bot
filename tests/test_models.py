@@ -190,11 +190,11 @@ class TestMarketScanner:
 class TestFeatureVector:
     def test_to_array_length(self, sample_feature_vector):
         arr = sample_feature_vector.to_array()
-        assert len(arr) == 23
+        assert len(arr) == 25
 
     def test_feature_names_length(self):
         names = FeatureVector.feature_names()
-        assert len(names) == 23
+        assert len(names) == 25
 
     def test_to_array_handles_defaults(self):
         fv = FeatureVector(

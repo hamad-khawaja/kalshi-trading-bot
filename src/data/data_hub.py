@@ -10,6 +10,7 @@ import structlog
 
 from src.config import AssetConfig, BotSettings, StrategyConfig
 from src.data.binance_feed import BinanceFeed
+from src.data.chainlink_feed import ChainlinkFeed
 from src.data.kalshi_client import KalshiRestClient
 from src.data.kalshi_ws import KalshiWebSocket
 from src.data.market_scanner import MarketScanner
@@ -34,6 +35,7 @@ class DataHub:
         feeds: dict[str, BinanceFeed],
         scanners: dict[str, MarketScanner],
         secondary_feeds: dict[str, BinanceFeed] | None = None,
+        chainlink_feeds: dict[str, ChainlinkFeed] | None = None,
         strategy_config: StrategyConfig | None = None,
         asset_configs: list[AssetConfig] | None = None,
     ):
@@ -41,6 +43,7 @@ class DataHub:
         self._kalshi_ws = kalshi_ws
         self._feeds = feeds
         self._secondary_feeds = secondary_feeds or {}
+        self._chainlink_feeds = chainlink_feeds or {}
         self._scanners = scanners
         self._strategy_config = strategy_config or StrategyConfig()
         self._asset_configs = asset_configs or []
@@ -80,6 +83,8 @@ class DataHub:
         ]
         for symbol, feed in self._secondary_feeds.items():
             best_effort.append((f"secondary_feed_{symbol}", feed.connect()))
+        for symbol, feed in self._chainlink_feeds.items():
+            best_effort.append((f"chainlink_feed_{symbol}", feed.start()))
 
         for name, coro in best_effort:
             try:
@@ -99,6 +104,8 @@ class DataHub:
             coros.append(feed.close())
         for feed in self._secondary_feeds.values():
             coros.append(feed.close())
+        for feed in self._chainlink_feeds.values():
+            coros.append(feed.stop())
         await asyncio.gather(*coros, return_exceptions=True)
         logger.info("data_hub_stopped")
 
@@ -343,6 +350,18 @@ class DataHub:
                 taker_buy = buy * price_usd
                 taker_sell = sell * price_usd
 
+        # Chainlink oracle data
+        chainlink_oracle_price = None
+        chainlink_divergence = None
+        chainlink_round_updated = False
+        chainlink_feed = self._chainlink_feeds.get(symbol)
+        if chainlink_feed and chainlink_feed.latest_price is not None:
+            chainlink_oracle_price = chainlink_feed.latest_price
+            oracle_f = float(chainlink_oracle_price)
+            if oracle_f > 0:
+                chainlink_divergence = (float(btc_price) - oracle_f) / oracle_f
+            chainlink_round_updated = chainlink_feed.round_just_updated
+
         # Compute time elapsed and window phase
         time_elapsed = max(0.0, 900.0 - time_to_expiry)
         cfg = self._strategy_config
@@ -374,6 +393,9 @@ class DataHub:
             cross_exchange_lead=cross_exchange_lead,
             taker_buy_volume=taker_buy,
             taker_sell_volume=taker_sell,
+            chainlink_oracle_price=chainlink_oracle_price,
+            chainlink_divergence=chainlink_divergence,
+            chainlink_round_updated=chainlink_round_updated,
             time_to_expiry_seconds=time_to_expiry,
             time_elapsed_seconds=time_elapsed,
             window_phase=window_phase,
