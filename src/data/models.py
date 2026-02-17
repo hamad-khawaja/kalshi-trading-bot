@@ -191,6 +191,10 @@ class MarketSnapshot(BaseModel):
     cross_exchange_lead: float | None = None
     taker_buy_volume: float | None = None
     taker_sell_volume: float | None = None
+    chainlink_oracle_price: Decimal | None = None
+    chainlink_divergence: float | None = None
+    chainlink_round_updated: bool = False
+    btc_momentum_lead: float | None = None  # BTC momentum for non-BTC assets
     time_to_expiry_seconds: float = 0.0
     time_elapsed_seconds: float = 0.0
     window_phase: int = 0  # 1-5
@@ -260,6 +264,9 @@ class FeatureVector(BaseModel):
     taker_buy_sell_ratio: float = 0.0
     settlement_bias: float = 0.0  # [-1, 1]: positive = recent YES bias
     cross_asset_divergence: float = 0.0  # [-1, 1]: positive = other asset more bullish
+    chainlink_divergence: float = 0.0
+    chainlink_confirmation: float = 0.0
+    btc_beta_signal: float = 0.0  # BTC-led directional signal for non-BTC assets
     time_elapsed_seconds: float = 0.0
     window_phase: int = 0  # 1-5
 
@@ -289,6 +296,9 @@ class FeatureVector(BaseModel):
             self.taker_buy_sell_ratio,
             self.settlement_bias,
             self.cross_asset_divergence,
+            self.chainlink_divergence,
+            self.chainlink_confirmation,
+            self.btc_beta_signal,
         ]
 
     @staticmethod
@@ -318,6 +328,9 @@ class FeatureVector(BaseModel):
             "taker_buy_sell_ratio",
             "settlement_bias",
             "cross_asset_divergence",
+            "chainlink_divergence",
+            "chainlink_confirmation",
+            "btc_beta_signal",
         ]
 
 

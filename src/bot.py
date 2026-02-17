@@ -15,6 +15,7 @@ import structlog
 
 from src.config import AssetConfig, BinanceConfig, BotSettings, KalshiConfig, load_settings
 from src.data.binance_feed import BinanceFeed
+from src.data.chainlink_feed import ChainlinkFeed
 from src.data.time_profile import TimeProfiler
 from src.data.data_hub import DataHub
 from src.data.database import Database
@@ -81,6 +82,7 @@ class TradingBot:
         # Per-asset price feeds and scanners
         self._feeds: dict[str, BinanceFeed] = {}
         self._secondary_feeds: dict[str, BinanceFeed] = {}
+        self._chainlink_feeds: dict[str, ChainlinkFeed] = {}
         self._scanners: dict[str, MarketScanner] = {}
 
         for asset in settings.kalshi.assets:
@@ -93,6 +95,13 @@ class TradingBot:
                 self._secondary_feeds[asset.symbol] = BinanceFeed(
                     BinanceConfig(ws_url=asset.secondary_ws_url, symbol=asset.secondary_symbol)
                 )
+            # Chainlink oracle feed (optional)
+            if asset.chainlink_contract:
+                self._chainlink_feeds[asset.symbol] = ChainlinkFeed(
+                    symbol=asset.symbol,
+                    contract_address=asset.chainlink_contract,
+                    rpc_url=asset.chainlink_rpc_url or None,
+                )
             # Market scanner with per-asset series_ticker
             scanner_config = settings.kalshi.model_copy(update={"series_ticker": asset.series_ticker})
             self._scanners[asset.symbol] = MarketScanner(self._kalshi_rest, scanner_config)
@@ -103,6 +112,7 @@ class TradingBot:
             feeds=self._feeds,
             scanners=self._scanners,
             secondary_feeds=self._secondary_feeds,
+            chainlink_feeds=self._chainlink_feeds,
             strategy_config=settings.strategy,
             asset_configs=settings.kalshi.assets,
         )
@@ -111,6 +121,8 @@ class TradingBot:
         # Dashboard (must be before feature engine which references settlement_history)
         self._dashboard_state = DashboardState()
         self._dashboard_state.mode = settings.mode
+        if settings.strategy.quiet_hours_enabled:
+            self._dashboard_state.quiet_hours_utc = settings.strategy.quiet_hours_utc
         self._dashboard_server = DashboardServer(
             self._dashboard_state,
             settings.dashboard.host,
@@ -316,6 +328,9 @@ class TradingBot:
             "cross_exchange_lead": snapshot.cross_exchange_lead,
             "taker_buy_volume": snapshot.taker_buy_volume,
             "taker_sell_volume": snapshot.taker_sell_volume,
+            "chainlink_oracle_price": float(snapshot.chainlink_oracle_price) if snapshot.chainlink_oracle_price else None,
+            "chainlink_divergence": snapshot.chainlink_divergence,
+            "chainlink_round_updated": snapshot.chainlink_round_updated,
             "time_elapsed": snapshot.time_elapsed_seconds,
             "window_phase": snapshot.window_phase,
             "orderbook": {
@@ -369,6 +384,8 @@ class TradingBot:
                 "taker_flow": prediction.features_used.get("taker_signal", 0),
                 "settlement": prediction.features_used.get("settlement_signal", 0),
                 "cross_asset": prediction.features_used.get("cross_asset_signal", 0),
+                "chainlink": prediction.features_used.get("chainlink_signal", 0),
+                "btc_beta": prediction.features_used.get("btc_beta_signal", 0),
                 "time_decay": prediction.features_used.get("time_decay_signal", 0),
             },
         }
@@ -1284,6 +1301,11 @@ class TradingBot:
                     sym: float(f.latest_price or 0)
                     for sym, f in self._feeds.items()
                 }
+                chainlink_prices = {
+                    sym: float(f.latest_price or 0)
+                    for sym, f in self._chainlink_feeds.items()
+                    if f.latest_price is not None
+                }
                 logger.info(
                     "health_check",
                     uptime_seconds=(
@@ -1299,6 +1321,7 @@ class TradingBot:
                     active_markets=total_active_markets,
                     cycles=self._cycle_count,
                     feed_prices=feed_prices,
+                    chainlink_prices=chainlink_prices,
                     vol_regime=self._vol_tracker.current_regime,
                     consecutive_losses=self._risk_manager.consecutive_losses,
                 )

@@ -117,6 +117,7 @@ a{color:#58a6ff}
     <span>Cycle #<span id="cycle">0</span></span>
     <span>Uptime <span id="uptime">0s</span></span>
     <span>Mode: <span id="mode">--</span></span>
+    <span id="utc-clock" style="font-weight:600;font-size:13px;padding:2px 8px;border-radius:4px">--:--:-- UTC</span>
   </div>
 </div>
 
@@ -170,6 +171,8 @@ a{color:#58a6ff}
       <div class="kv"><span class="k">Coinbase</span><span class="v" id="price-coinbase" style="color:#58a6ff">--</span></div>
       <div class="kv"><span class="k">Kraken</span><span class="v" id="price-binance" style="color:#f0e68c">--</span></div>
       <div class="kv"><span class="k">Kalshi Strike</span><span class="v" id="price-kalshi" style="color:#d2a8ff">--</span></div>
+      <div class="kv"><span class="k">Chainlink</span><span class="v" id="price-chainlink" style="color:#375bd2">--</span></div>
+      <div class="kv"><span class="k">Oracle div</span><span class="v" id="chainlink-div">--</span></div>
     </div>
     <div style="margin-top:4px;border-top:1px solid #21262d;padding-top:4px">
       <div class="kv"><span class="k">X-Spread</span><span class="v" id="cross-spread">--</span></div>
@@ -352,6 +355,9 @@ a{color:#58a6ff}
     $('uptime').textContent = fmtDuration(s.uptime_seconds || 0);
     $('mode').textContent = s.mode || '--';
 
+    // Update quiet hours from server config
+    if (s.quiet_hours_utc) quietHoursUTC = s.quiet_hours_utc;
+
     // Auto-detect available assets from per_asset keys and add tabs dynamically
     const pa = s.per_asset || {};
     updateTabBar(Object.keys(pa));
@@ -414,6 +420,18 @@ a{color:#58a6ff}
     $('price-coinbase').textContent = newPrice ? fmtUsd(newPrice) : '--';
     $('price-binance').textContent = snap.binance_btc_price ? fmtUsd(snap.binance_btc_price) : '--';
     $('price-kalshi').textContent = snap.strike_price ? fmtUsd(snap.strike_price) : '--';
+    // Chainlink oracle
+    const clEl = $('price-chainlink');
+    if (snap.chainlink_oracle_price) {
+      clEl.textContent = fmtUsd(snap.chainlink_oracle_price);
+      if (snap.chainlink_round_updated) clEl.textContent += ' \u2713';
+    } else { clEl.textContent = '--'; }
+    const clDiv = $('chainlink-div');
+    if (snap.chainlink_divergence != null) {
+      const bps = (snap.chainlink_divergence * 10000).toFixed(1);
+      clDiv.textContent = bps + ' bps';
+      clDiv.style.color = snap.chainlink_divergence > 0 ? '#3fb950' : snap.chainlink_divergence < 0 ? '#f85149' : '#8b949e';
+    } else { clDiv.textContent = '--'; clDiv.style.color = '#8b949e'; }
     $('btc-implied').textContent = pct(snap.implied_prob);
     if (snap.cross_exchange_spread != null) {
       const bps = (snap.cross_exchange_spread * 10000).toFixed(1);
@@ -656,8 +674,8 @@ a{color:#58a6ff}
   }
 
   function renderSignalBars(signals) {
-    const names = ['momentum', 'technical', 'flow', 'mean_reversion', 'cross_exchange', 'taker_flow', 'settlement', 'cross_asset', 'time_decay'];
-    const labels = ['Mom', 'Tech', 'Flow', 'MRev', 'Fund', 'XExch', 'Liq', 'Takr', 'Settl', 'XAst', 'TDec'];
+    const names = ['momentum', 'technical', 'flow', 'mean_reversion', 'cross_exchange', 'taker_flow', 'settlement', 'cross_asset', 'chainlink', 'btc_beta', 'time_decay'];
+    const labels = ['Mom', 'Tech', 'Flow', 'MRev', 'XExch', 'Takr', 'Settl', 'XAst', 'CLink', 'Beta', 'TDec'];
     const container = $('signal-bars');
     container.innerHTML = '';
     for (let i = 0; i < names.length; i++) {
@@ -716,7 +734,30 @@ a{color:#58a6ff}
     else { el.className = 'countdown ok'; }
   }
 
+  // UTC clock with quiet hours coloring
+  let quietHoursUTC = [];
+  function tickUTCClock() {
+    const now = new Date();
+    const h = now.getUTCHours();
+    const m = String(now.getUTCMinutes()).padStart(2, '0');
+    const s = String(now.getUTCSeconds()).padStart(2, '0');
+    const hh = String(h).padStart(2, '0');
+    const el = $('utc-clock');
+    el.textContent = hh + ':' + m + ':' + s + ' UTC';
+    if (quietHoursUTC.length > 0 && quietHoursUTC.includes(h)) {
+      el.style.background = '#2a1a1a';
+      el.style.color = '#f85149';
+      el.style.border = '1px solid #da3633';
+    } else {
+      el.style.background = '#1a3a1a';
+      el.style.color = '#3fb950';
+      el.style.border = '1px solid #238636';
+    }
+  }
+
   setInterval(tickCountdown, 1000);
+  setInterval(tickUTCClock, 1000);
+  tickUTCClock();
   connect();
 })();
 </script>

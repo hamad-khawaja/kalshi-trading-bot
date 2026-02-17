@@ -70,6 +70,10 @@ def sample_snapshot(now: datetime, sample_orderbook: Orderbook) -> MarketSnapsho
         orderbook=sample_orderbook,
         implied_yes_prob=Decimal("0.51"),
         spread=Decimal("0.02"),
+        chainlink_oracle_price=Decimal("97480.00"),
+        chainlink_divergence=0.0002,
+        chainlink_round_updated=False,
+        btc_momentum_lead=0.0,
         time_to_expiry_seconds=600.0,
         volume=250,
     )

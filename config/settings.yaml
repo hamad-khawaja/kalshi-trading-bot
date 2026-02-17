@@ -13,12 +13,14 @@ kalshi:
       primary_symbol: "BTC-USD"
       secondary_ws_url: "wss://ws.kraken.com/v2"
       secondary_symbol: "BTC/USD"
+      chainlink_contract: "0xF4030086522a5bEEa4988F8cA5B36dbC97BeE88c"
     - series_ticker: "KXETH15M"
       symbol: "ETH"
       primary_ws_url: "wss://ws-feed.exchange.coinbase.com"
       primary_symbol: "ETH-USD"
       secondary_ws_url: "wss://ws.kraken.com/v2"
       secondary_symbol: "ETH/USD"
+      chainlink_contract: "0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419"
 
 binance:
   ws_url: "wss://ws-feed.exchange.coinbase.com"
@@ -99,6 +101,12 @@ strategy:
   cross_asset_divergence_weight: 0.06
   # Composite quality score: require combined edge + confidence quality
   min_quality_score: 0.80
+  # BTC beta leader: use BTC momentum to enable ETH directional
+  btc_beta_enabled: true
+  btc_beta_min_signal: 0.40    # |btc_beta_signal| threshold to allow ETH directional
+  # Quiet hours: skip directional trading during low-volume hours (MM still allowed)
+  quiet_hours_enabled: true
+  quiet_hours_utc: [5, 6, 7]           # 05:00-07:59 UTC — consistently unprofitable overnight window
 
 risk:
   max_position_per_market: 25    # Reduced — smaller positions to limit loss size
