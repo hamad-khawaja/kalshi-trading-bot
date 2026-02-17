@@ -362,6 +362,27 @@ class DataHub:
                 chainlink_divergence = (float(btc_price) - oracle_f) / oracle_f
             chainlink_round_updated = chainlink_feed.round_just_updated
 
+        # BTC momentum lead for non-BTC assets
+        btc_momentum_lead = None
+        if symbol != "BTC":
+            btc_feed = self._feeds.get("BTC")
+            if btc_feed and btc_feed.latest_price is not None:
+                btc_ticks_60 = btc_feed.get_prices_since(60)
+                btc_ticks_180 = btc_feed.get_prices_since(180)
+                mom_60s = 0.0
+                mom_180s = 0.0
+                if len(btc_ticks_60) >= 2:
+                    start_f = float(btc_ticks_60[0].price)
+                    end_f = float(btc_ticks_60[-1].price)
+                    if start_f > 0:
+                        mom_60s = (end_f - start_f) / start_f
+                if len(btc_ticks_180) >= 2:
+                    start_f = float(btc_ticks_180[0].price)
+                    end_f = float(btc_ticks_180[-1].price)
+                    if start_f > 0:
+                        mom_180s = (end_f - start_f) / start_f
+                btc_momentum_lead = 0.4 * mom_60s + 0.6 * mom_180s
+
         # Compute time elapsed and window phase
         time_elapsed = max(0.0, 900.0 - time_to_expiry)
         cfg = self._strategy_config
@@ -396,6 +417,7 @@ class DataHub:
             chainlink_oracle_price=chainlink_oracle_price,
             chainlink_divergence=chainlink_divergence,
             chainlink_round_updated=chainlink_round_updated,
+            btc_momentum_lead=btc_momentum_lead,
             time_to_expiry_seconds=time_to_expiry,
             time_elapsed_seconds=time_elapsed,
             window_phase=window_phase,

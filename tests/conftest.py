@@ -73,6 +73,7 @@ def sample_snapshot(now: datetime, sample_orderbook: Orderbook) -> MarketSnapsho
         chainlink_oracle_price=Decimal("97480.00"),
         chainlink_divergence=0.0002,
         chainlink_round_updated=False,
+        btc_momentum_lead=0.0,
         time_to_expiry_seconds=600.0,
         volume=250,
     )

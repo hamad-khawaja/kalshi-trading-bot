@@ -152,6 +152,9 @@ class StrategyConfig(BaseModel):
     cross_asset_divergence_weight: float = 0.06
     # Composite quality score: require combined edge + confidence quality
     min_quality_score: float = 0.80
+    # BTC beta leader: use BTC momentum to enable ETH directional
+    btc_beta_enabled: bool = True
+    btc_beta_min_signal: float = 0.40  # Min |btc_beta_signal| to override ETH directional disable
     # Quiet hours: skip directional trading during low-volume hours (MM still allowed)
     quiet_hours_enabled: bool = False
     quiet_hours_utc: list[int] = []  # UTC hours to skip directional trading (e.g. [5, 6, 7])

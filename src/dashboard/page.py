@@ -674,8 +674,8 @@ a{color:#58a6ff}
   }
 
   function renderSignalBars(signals) {
-    const names = ['momentum', 'technical', 'flow', 'mean_reversion', 'cross_exchange', 'taker_flow', 'settlement', 'cross_asset', 'chainlink', 'time_decay'];
-    const labels = ['Mom', 'Tech', 'Flow', 'MRev', 'XExch', 'Takr', 'Settl', 'XAst', 'CLink', 'TDec'];
+    const names = ['momentum', 'technical', 'flow', 'mean_reversion', 'cross_exchange', 'taker_flow', 'settlement', 'cross_asset', 'chainlink', 'btc_beta', 'time_decay'];
+    const labels = ['Mom', 'Tech', 'Flow', 'MRev', 'XExch', 'Takr', 'Settl', 'XAst', 'CLink', 'Beta', 'TDec'];
     const container = $('signal-bars');
     container.innerHTML = '';
     for (let i = 0; i < names.length; i++) {

@@ -56,6 +56,9 @@ class DashboardState:
         # Kalshi settlement history (last 5 settled markets per asset)
         self.settlement_history: dict[str, list[dict[str, Any]]] = {}
 
+        # Quiet hours config (passed to frontend for clock coloring)
+        self.quiet_hours_utc: list[int] = []
+
     def add_trade_result(
         self, asset: str, action: str, side: str, pnl: float, ticker: str
     ) -> None:
@@ -122,6 +125,7 @@ class DashboardState:
                 for asset, trades in self.trade_history.items()
             },
             "settlement_history": self.settlement_history,
+            "quiet_hours_utc": self.quiet_hours_utc,
         }
         return json.dumps(payload, default=str)
 

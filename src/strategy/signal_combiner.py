@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import structlog
 
 from src.config import StrategyConfig
@@ -94,6 +96,18 @@ class SignalCombiner:
                 # Clean up state past Phase 2
                 del self._phase1_state[ticker]
 
+        # Quiet hours: skip directional trading during low-volume UTC hours
+        quiet_hours_active = False
+        if self._config.quiet_hours_enabled and self._config.quiet_hours_utc:
+            current_hour = datetime.now(timezone.utc).hour
+            if current_hour in self._config.quiet_hours_utc:
+                quiet_hours_active = True
+                logger.info(
+                    "quiet_hours_blocked",
+                    ticker=snapshot.market_ticker,
+                    hour_utc=current_hour,
+                )
+
         # 1. Check for directional edge (highest priority)
         # Skip directional for disabled assets (MM-only mode)
         directional_disabled = False
@@ -104,7 +118,20 @@ class SignalCombiner:
                     directional_disabled = True
                     break
 
-        directional = None if directional_disabled else self._edge_detector.detect(prediction, snapshot)
+        # Beta-led override: allow directional for disabled assets when BTC
+        # gives a strong lead signal (btc_beta_signal on the features)
+        btc_beta_override = False
+        if directional_disabled and features is not None:
+            btc_beta_threshold = self._config.btc_beta_min_signal
+            if abs(features.btc_beta_signal) >= btc_beta_threshold:
+                btc_beta_override = True
+                logger.info(
+                    "btc_beta_override_directional",
+                    ticker=snapshot.market_ticker,
+                    btc_beta_signal=round(features.btc_beta_signal, 4),
+                )
+
+        directional = None if ((directional_disabled and not btc_beta_override) or quiet_hours_active) else self._edge_detector.detect(prediction, snapshot)
 
         if directional is not None:
             # Trend guard: if all momentum timeframes agree on a direction,

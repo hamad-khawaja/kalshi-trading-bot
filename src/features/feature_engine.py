@@ -136,6 +136,7 @@ class FeatureEngine:
             settlement_bias=settle_bias,
             chainlink_divergence=snapshot.chainlink_divergence or 0.0,
             chainlink_confirmation=1.0 if snapshot.chainlink_round_updated else 0.0,
+            btc_beta_signal=max(-1.0, min(1.0, math.tanh((snapshot.btc_momentum_lead or 0.0) / 0.003) * 1.3)),
             time_elapsed_seconds=snapshot.time_elapsed_seconds,
             window_phase=snapshot.window_phase,
         )

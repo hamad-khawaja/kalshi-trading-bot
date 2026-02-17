@@ -385,6 +385,7 @@ class TradingBot:
                 "settlement": prediction.features_used.get("settlement_signal", 0),
                 "cross_asset": prediction.features_used.get("cross_asset_signal", 0),
                 "chainlink": prediction.features_used.get("chainlink_signal", 0),
+                "btc_beta": prediction.features_used.get("btc_beta_signal", 0),
                 "time_decay": prediction.features_used.get("time_decay_signal", 0),
             },
         }
