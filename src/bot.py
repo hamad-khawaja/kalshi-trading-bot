@@ -1255,6 +1255,10 @@ class TradingBot:
                     self._risk_manager.daily_pnl + unrealized_pnl
                 )
 
+                # Track cumulative time with open positions
+                if self._position_tracker._positions:
+                    self._dashboard_state.active_trading_seconds += 10
+
                 # Cancel stale resting orders (older than 90s)
                 await self._order_manager.cancel_stale_orders(max_age_seconds=90)
 

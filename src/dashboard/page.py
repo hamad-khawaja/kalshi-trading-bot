@@ -116,6 +116,7 @@ a{color:#58a6ff}
     <span><span class="status-dot live" id="status-dot"></span><span id="conn-status">Live</span></span>
     <span>Cycle #<span id="cycle">0</span></span>
     <span>Uptime <span id="uptime">0s</span></span>
+    <span>Active <span id="active-time">0s</span></span>
     <span>Mode: <span id="mode">--</span></span>
     <span id="utc-clock" style="font-weight:600;font-size:13px;padding:2px 8px;border-radius:4px">--:--:-- UTC</span>
   </div>
@@ -353,6 +354,7 @@ a{color:#58a6ff}
     // Header
     $('cycle').textContent = s.cycle || 0;
     $('uptime').textContent = fmtDuration(s.uptime_seconds || 0);
+    $('active-time').textContent = fmtDuration(s.active_trading_seconds || 0);
     $('mode').textContent = s.mode || '--';
 
     // Update quiet hours from server config

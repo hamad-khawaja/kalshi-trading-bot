@@ -59,6 +59,9 @@ class DashboardState:
         # Quiet hours config (passed to frontend for clock coloring)
         self.quiet_hours_utc: list[int] = []
 
+        # Cumulative seconds where at least one position was open
+        self.active_trading_seconds: float = 0.0
+
     def add_trade_result(
         self, asset: str, action: str, side: str, pnl: float, ticker: str,
         size_dollars: float = 0.0,
@@ -128,6 +131,7 @@ class DashboardState:
             },
             "settlement_history": self.settlement_history,
             "quiet_hours_utc": self.quiet_hours_utc,
+            "active_trading_seconds": self.active_trading_seconds,
         }
         return json.dumps(payload, default=str)
 
