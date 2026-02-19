@@ -93,17 +93,18 @@ class StrategyConfig(BaseModel):
     stop_loss_enabled: bool = True
     stop_loss_pct: float = 0.35  # Exit when loss > 35% of entry price
     stop_loss_min_bid: float = 0.05  # Don't sell if bid is below $0.05
+    stop_loss_min_hold_seconds: float = 60.0  # Minimum hold before SL can trigger
     # Take-profit parameters
     take_profit_enabled: bool = True
-    take_profit_min_profit_cents: float = 0.06
+    take_profit_min_profit_cents: float = 0.10
     take_profit_min_hold_seconds: float = 20.0
     take_profit_time_decay_start_seconds: float = 300.0
-    take_profit_time_decay_floor_cents: float = 0.03
+    take_profit_time_decay_floor_cents: float = 0.05
     take_profit_cooldown_seconds: float = 900.0  # Block re-entry after TP for rest of window
     # Trailing take-profit: ratchet exit price up as position gains
     trailing_take_profit_enabled: bool = True
-    trailing_take_profit_activation_cents: float = 0.04  # Profit needed to activate trailing
-    trailing_take_profit_drop_cents: float = 0.03  # Exit when price drops this much from peak
+    trailing_take_profit_activation_cents: float = 0.08  # Profit needed to activate trailing
+    trailing_take_profit_drop_cents: float = 0.05  # Exit when price drops this much from peak
     # Pre-expiry exit: sell before settlement instead of gambling
     pre_expiry_exit_enabled: bool = True
     pre_expiry_exit_seconds: float = 90.0  # Sell with this many seconds left
@@ -158,6 +159,26 @@ class StrategyConfig(BaseModel):
     # Quiet hours: skip directional trading during low-volume hours (MM still allowed)
     quiet_hours_enabled: bool = False
     quiet_hours_utc: list[int] = []  # UTC hours to skip directional trading (e.g. [5, 6, 7])
+    # Settlement-ride: enter late in window, hold to settlement (no TP/SL/pre-expiry)
+    settlement_ride_enabled: bool = True
+    settlement_ride_min_elapsed_seconds: float = 600.0  # Only enter after 10 min elapsed
+    settlement_ride_min_edge: float = 0.03               # Lower edge ok (no exit fees)
+    settlement_ride_min_implied_distance: float = 0.12   # Min |implied - 0.50| to enter
+    settlement_ride_kelly_fraction: float = 0.10         # Conservative sizing (can't cut losses)
+    # Per-asset settlement ride overrides: noisier assets need higher thresholds
+    asset_settlement_ride_min_edge: dict[str, float] = {}
+    asset_settlement_ride_min_implied_distance: dict[str, float] = {}
+    # Disable market-making for specific assets
+    asset_market_maker_disabled: list[str] = []
+    # Certainty scalp: bet large on near-certain outcomes in last 3 min
+    certainty_scalp_enabled: bool = True
+    certainty_scalp_max_ttx: float = 180.0          # Only when TTX <= 3 min
+    certainty_scalp_min_ttx: float = 60.0            # At least 60s to get filled
+    certainty_scalp_min_implied_prob: float = 0.85   # Market must show 85%+ one direction
+    certainty_scalp_min_model_prob: float = 0.85     # Model must agree at 85%+
+    certainty_scalp_min_edge: float = 0.02           # Low bar (fees tiny at extremes)
+    certainty_scalp_kelly_fraction: float = 0.30     # Aggressive sizing
+    certainty_scalp_min_spot_distance_pct: float = 0.002  # 0.2% spot past strike
 
 
 class RiskConfig(BaseModel):
@@ -170,6 +191,9 @@ class RiskConfig(BaseModel):
     max_trades_per_day: int = 40
     cooldown_after_streak_minutes: int = 30
     max_consecutive_losses: int = 3
+    # Drawdown circuit breaker: stop trading if daily P&L drops X below its peak
+    drawdown_limit_enabled: bool = True
+    drawdown_limit_dollars: float = 20.0  # Stop if daily PnL drops $20 from peak
     # Entry cooldown: minimum seconds between fills on the same market
     entry_cooldown_seconds: float = 30.0
     # Per-cycle contract cap: max contracts placed in a single strategy cycle

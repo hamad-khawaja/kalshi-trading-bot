@@ -56,6 +56,17 @@ class TestTimeProfiler:
         assert TimeProfiler.classify_hour(21) == SessionType.ASIA  # late/off-hours
         assert TimeProfiler.classify_hour(23) == SessionType.ASIA
 
+    def test_session_boundary_16_is_us_not_overlap(self):
+        """Hour 16 is US, not overlap. Regression: old code had dead condition
+        `13 <= hour < 21` which happened to work but was logically wrong."""
+        # 15 is last overlap hour
+        assert TimeProfiler.classify_hour(15) == SessionType.OVERLAP_EU_US
+        # 16 is first US hour (not overlap)
+        assert TimeProfiler.classify_hour(16) == SessionType.US
+        # Verify the full US range 16-20
+        for h in range(16, 21):
+            assert TimeProfiler.classify_hour(h) == SessionType.US
+
     def test_weight_multipliers_asia(self):
         """Asia session boosts mean reversion, dampens momentum."""
         m = TimeProfiler.get_weight_multipliers(SessionType.ASIA)

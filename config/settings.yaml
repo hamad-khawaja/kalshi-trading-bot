@@ -30,7 +30,7 @@ strategy:
   poll_interval_seconds: 4
   min_edge_threshold: 0.05      # 5% minimum edge (was 0.04 — raise floor to filter noise)
   max_edge_threshold: 0.12      # Tighter cap on suspicious edges (was 0.15)
-  confidence_min: 0.62          # Require higher confidence (was 0.58 — entered on weak signals)
+  confidence_min: 0.65          # Require higher confidence (was 0.62 — still entering on marginal signals)
   edge_expiry_decay_enabled: true
   edge_expiry_decay_max: 1.8    # At 1 min left, require 1.8x normal edge
   directional_max_spread: 0.15  # Skip wide-spread illiquid books
@@ -40,8 +40,9 @@ strategy:
   mm_min_spread: 0.05           # Minimum spread ($) for market-making
   # Stop-loss: exit when position drops beyond threshold
   stop_loss_enabled: true
-  stop_loss_pct: 0.15              # Exit when loss > 15% of entry price (was 25% — losses still 2x wins)
+  stop_loss_pct: 0.20              # Exit when loss > 20% of entry price (was 15% — too tight, noise triggered SL before recovery)
   stop_loss_min_bid: 0.05          # Don't sell if bid is below $0.05
+  stop_loss_min_hold_seconds: 60.0  # Wait 60s before SL can trigger (was 30s — noise triggered early exits)
   # FOMO exploitation — DISABLED: 0/3 trades, all stopped out (-$1.41 total)
   fomo_enabled: false
   fomo_min_divergence: 0.20        # Require bigger gap (was 0.12)
@@ -54,8 +55,10 @@ strategy:
   fomo_min_implied_prob: 0.15
   # Trailing take-profit
   trailing_take_profit_enabled: true
-  trailing_take_profit_activation_cents: 0.08  # Profit to activate trailing (was 0.04 — exiting too early, avg win 2x smaller than avg loss)
+  trailing_take_profit_activation_cents: 0.10  # Profit to activate trailing (was 0.08 — avg win still half avg loss, let winners run)
   trailing_take_profit_drop_cents: 0.05        # Exit when price drops this from peak (was 0.03 — noise triggered exits)
+  take_profit_min_profit_cents: 0.10            # Widen fixed TP target (was 0.06 — exited winners too early)
+  take_profit_time_decay_floor_cents: 0.05      # Higher floor prevents tiny TP exits (was 0.03)
   # Take-profit cooldown: block re-entry after TP
   take_profit_cooldown_seconds: 900.0          # 15 min — block for rest of window
   # Pre-expiry exit: sell before settlement
@@ -106,7 +109,29 @@ strategy:
   btc_beta_min_signal: 0.40    # |btc_beta_signal| threshold to allow ETH directional
   # Quiet hours: skip directional trading during low-volume hours (MM still allowed)
   quiet_hours_enabled: true
-  quiet_hours_utc: [5, 6, 7]           # 05:00-07:59 UTC — consistently unprofitable overnight window
+  quiet_hours_utc: [0, 1, 2, 3, 4, 5, 6, 7]  # 00:00-07:59 UTC — overnight low-volume, consistently unprofitable
+  # Settlement-ride: enter after 10 min, hold to settlement
+  settlement_ride_enabled: true
+  settlement_ride_min_elapsed_seconds: 600.0
+  settlement_ride_min_edge: 0.03
+  settlement_ride_min_implied_distance: 0.12
+  settlement_ride_kelly_fraction: 0.10
+  # Per-asset settlement ride overrides (ETH needs higher thresholds)
+  asset_settlement_ride_min_edge:
+    ETH: 0.08
+  asset_settlement_ride_min_implied_distance:
+    ETH: 0.22
+  # Disable market-making for specific assets (ETH MM was mostly stopped out)
+  asset_market_maker_disabled: [ETH]
+  # Certainty scalp: bet large on near-certain outcomes in last 3 min
+  certainty_scalp_enabled: true
+  certainty_scalp_max_ttx: 180.0            # Only when TTX <= 3 min
+  certainty_scalp_min_ttx: 60.0             # At least 60s to get filled
+  certainty_scalp_min_implied_prob: 0.85    # Market 85%+ one direction
+  certainty_scalp_min_model_prob: 0.80      # Model agrees at 80%+ (spot distance check provides extra safety)
+  certainty_scalp_min_edge: 0.02            # Low bar (fees tiny at extremes)
+  certainty_scalp_kelly_fraction: 0.30      # Aggressive sizing
+  certainty_scalp_min_spot_distance_pct: 0.002  # 0.2% spot past strike
 
 risk:
   max_position_per_market: 25    # Reduced — smaller positions to limit loss size
@@ -118,6 +143,9 @@ risk:
   max_trades_per_day: 1000       # Paper trading: no daily limit
   cooldown_after_streak_minutes: 30
   max_consecutive_losses: 5     # Paper: more room to test
+  # Drawdown circuit breaker: stop if daily P&L drops $20 from its peak
+  drawdown_limit_enabled: true
+  drawdown_limit_dollars: 20.0
   # Entry discipline
   entry_cooldown_seconds: 30     # Min seconds between fills on same market
   max_contracts_per_cycle: 15    # Reduced — smaller entries to limit loss size
@@ -134,7 +162,7 @@ risk:
   min_position_size: 5             # Lowered to match smaller max sizes
   # Per-asset position limits: ETH gets smaller sizes with wider stops
   asset_max_position:
-    ETH: 10                          # ETH max 10 contracts (BTC keeps 25)
+    ETH: 15                          # ETH max 15 contracts (was 10 — larger size for higher-conviction entries)
   asset_max_per_cycle:
     ETH: 10                          # ETH max 10 per cycle (BTC keeps 15)
 

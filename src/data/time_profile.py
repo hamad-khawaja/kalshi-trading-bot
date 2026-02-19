@@ -177,7 +177,7 @@ class TimeProfiler:
         """Classify a UTC hour into a trading session."""
         if 13 <= hour < 16:
             return SessionType.OVERLAP_EU_US
-        if 13 <= hour < 21:
+        if 16 <= hour < 21:
             return SessionType.US
         if 8 <= hour < 13:
             return SessionType.EUROPE

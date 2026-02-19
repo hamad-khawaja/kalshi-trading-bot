@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import math
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import ROUND_CEILING, Decimal
 
 import structlog
 
@@ -469,6 +468,6 @@ class EdgeDetector:
         c = Decimal(str(count))
 
         raw_fee = rate * c * p * (1 - p)
-        # Ceiling to nearest cent
-        fee_cents = math.ceil(float(raw_fee) * 100)
-        return Decimal(str(fee_cents)) / 100
+        # Ceiling to nearest cent (pure Decimal arithmetic, no float precision loss)
+        fee_cents = (raw_fee * 100).to_integral_value(rounding=ROUND_CEILING)
+        return fee_cents / 100

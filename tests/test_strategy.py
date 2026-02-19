@@ -147,6 +147,50 @@ class TestFeeCalculation:
             fee = EdgeDetector.compute_fee_dollars(1, price)
             assert fee >= Decimal("0.01")
 
+    def test_fee_decimal_precision_no_float_loss(self):
+        """Fee computation stays in Decimal — no float precision loss.
+
+        Regression: old code used math.ceil(float(raw_fee) * 100) which
+        could round incorrectly at float boundaries. New code uses
+        Decimal.to_integral_value(rounding=ROUND_CEILING).
+        """
+        # Pick values where float arithmetic might lose precision
+        # 0.0175 * 7 * 0.33 * 0.67 = exact Decimal vs float drift
+        fee = EdgeDetector.compute_fee_dollars(7, 0.33, is_maker=True)
+        assert isinstance(fee, Decimal)
+        # Manually: 0.0175 * 7 * 0.33 * 0.67 = 0.02709075
+        # * 100 = 2.709075, ceil = 3, / 100 = 0.03
+        assert fee == Decimal("0.03")
+
+        # Verify symmetry: fee(count=1, p) * count can differ from fee(count, p)
+        # because ceiling is applied per-batch, not per-contract
+        fee_batch = EdgeDetector.compute_fee_dollars(10, 0.50, is_maker=False)
+        fee_single = EdgeDetector.compute_fee_dollars(1, 0.50, is_maker=False)
+        # Batch: ceil(0.07 * 10 * 0.25 * 100) = ceil(17.5) = 18 -> $0.18
+        # Single: ceil(0.07 * 1 * 0.25 * 100) = ceil(1.75) = 2 -> $0.02
+        # 10 * $0.02 = $0.20 != $0.18 — ceiling is not linear
+        assert fee_batch == Decimal("0.18")
+        assert fee_single == Decimal("0.02")
+        assert fee_single * 10 != fee_batch  # Confirms non-linearity
+
+    def test_fee_per_contract_vs_batch_divided(self):
+        """Per-contract fee computed directly is >= batch fee / count.
+
+        Regression: take-profit code used batch fee / count which
+        underestimated the per-contract sell fee due to ceiling rounding.
+        """
+        # At price=0.30: batch of 2 has lower per-contract fee than direct
+        batch_fee = EdgeDetector.compute_fee_dollars(2, 0.30, is_maker=False)
+        single_fee = EdgeDetector.compute_fee_dollars(1, 0.30, is_maker=False)
+        batch_per_contract = batch_fee / 2
+
+        # Single: ceil(0.07 * 1 * 0.30 * 0.70 * 100) = ceil(1.47) = 2 -> $0.02
+        # Batch:  ceil(0.07 * 2 * 0.30 * 0.70 * 100) = ceil(2.94) = 3 -> $0.03
+        # Batch/2 = $0.015 < $0.02
+        assert single_fee == Decimal("0.02")
+        assert batch_fee == Decimal("0.03")
+        assert single_fee > batch_per_contract  # Direct is more accurate
+
 
 class TestMarketMaker:
     @pytest.fixture

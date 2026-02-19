@@ -80,7 +80,11 @@ class OrderManager:
             action=signal.action,
             count=count,
             client_order_id=client_order_id,
-            post_only=(signal.action != "sell"),  # Taker for exits, maker for entries
+            post_only=(
+                signal.post_only
+                if signal.post_only is not None
+                else (signal.action != "sell")
+            ),  # Respect signal override, else taker for exits, maker for entries
         )
 
         # Set price based on side
@@ -188,11 +192,35 @@ class OrderManager:
 
         except KalshiAPIError as e:
             if e.status == 409:
-                # Duplicate client_order_id — treat as success
+                # Duplicate client_order_id — look up the existing order
                 logger.warning(
-                    "order_duplicate",
+                    "order_duplicate_looking_up",
                     client_order_id=order_req.client_order_id,
+                    ticker=signal.market_ticker,
                 )
+                try:
+                    existing_orders = await self._client.get_orders(
+                        ticker=signal.market_ticker
+                    )
+                    for od in existing_orders:
+                        if od.get("client_order_id") == order_req.client_order_id:
+                            oid = od["order_id"]
+                            state.order_id = oid
+                            state.filled_count = od.get("fill_count", 0)
+                            state.status = (
+                                "filled"
+                                if od.get("remaining_count", 0) == 0
+                                else "active"
+                            )
+                            self._pending_orders[oid] = state
+                            logger.info(
+                                "order_duplicate_recovered",
+                                order_id=oid,
+                                filled=state.filled_count,
+                            )
+                            return oid
+                except Exception:
+                    logger.warning("order_duplicate_lookup_failed")
                 return None
             logger.error(
                 "order_submit_error",
@@ -204,6 +232,77 @@ class OrderManager:
         except Exception:
             logger.exception("order_submit_unexpected_error")
             return None
+
+    async def hydrate_from_exchange(self) -> int:
+        """Fetch active orders from Kalshi and populate internal tracking.
+
+        Call this on startup to recover state from previous sessions.
+        Returns the number of orders hydrated.
+        """
+        if self._paper_mode:
+            return 0
+
+        try:
+            active_orders = await self._client.get_orders(status="resting")
+        except Exception:
+            logger.warning("hydrate_orders_failed")
+            return 0
+
+        count = 0
+        for od in active_orders:
+            oid = od.get("order_id", "")
+            if not oid or oid in self._pending_orders:
+                continue
+
+            # Build a minimal TradeSignal to satisfy OrderState
+            ticker = od.get("ticker", "")
+            side = od.get("side", "yes")
+            action = od.get("action", "buy")
+            yes_price = od.get("yes_price", 0)
+            no_price = od.get("no_price", 0)
+            price = yes_price if side == "yes" else no_price
+            # Kalshi returns prices in cents; convert to dollars
+            price_dollars = str(price / 100) if isinstance(price, (int, float)) and price > 1 else str(price)
+
+            signal = TradeSignal(
+                market_ticker=ticker,
+                side=side,
+                action=action,
+                raw_edge=0.0,
+                net_edge=0.0,
+                model_probability=0.0,
+                implied_probability=0.0,
+                confidence=0.0,
+                suggested_price_dollars=price_dollars,
+                suggested_count=od.get("count", 0),
+                timestamp=datetime.now(timezone.utc),
+                signal_type="directional",
+            )
+
+            req_count = od.get("count", 0)
+            fill_count = od.get("fill_count", 0)
+
+            state = OrderState(
+                order_id=oid,
+                client_order_id=od.get("client_order_id", ""),
+                signal=signal,
+                requested_count=req_count,
+            )
+            state.filled_count = fill_count
+            status_str = od.get("status", "active")
+            if status_str in ("filled", "canceled"):
+                state.status = "filled" if fill_count > 0 else "canceled"
+            elif fill_count > 0:
+                state.status = "partially_filled"
+            else:
+                state.status = "active"
+
+            self._pending_orders[oid] = state
+            count += 1
+
+        if count:
+            logger.info("orders_hydrated", count=count)
+        return count
 
     async def cancel(self, order_id: str) -> bool:
         """Cancel an active order. Returns True if successful."""
@@ -358,7 +457,7 @@ class OrderManager:
                     state.status = "partially_filled"
 
             except Exception:
-                logger.debug("resting_order_check_error", order_id=order_id)
+                logger.warning("resting_order_check_error", order_id=order_id, exc_info=True)
 
         return newly_filled
 

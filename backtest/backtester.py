@@ -1,8 +1,11 @@
-"""Full-pipeline backtester for BTC 15-minute binary options.
+"""Full-pipeline backtester for BTC/ETH 15-minute binary options.
 
-Simulates: BacktestFeatureEngine → HeuristicModel → SignalCombiner →
-PositionSizer → RiskManager over 15-minute windows built from real
+Simulates: BacktestFeatureEngine -> HeuristicModel -> SignalCombiner ->
+PositionSizer -> RiskManager over 15-minute windows built from real
 1-minute Binance candles.
+
+Evaluates each window at multiple time points (minutes 3-14) so that
+late-window strategies like settlement_ride and certainty_scalp can fire.
 """
 
 from __future__ import annotations
@@ -49,7 +52,7 @@ class BacktestTrade:
     timestamp: datetime
     market_ticker: str
     side: str  # "yes" / "no"
-    signal_type: str  # "directional" / "fomo"
+    signal_type: str  # "directional" / "fomo" / "settlement_ride" / "certainty_scalp"
     count: int
     price: float
     model_prob: float
@@ -62,6 +65,10 @@ class BacktestTrade:
     pnl: float
     fees: float
     bankroll_after: float
+    asset: str = ""
+    exit_type: str = "settlement"  # "settlement" or "stop_loss"
+    time_elapsed_at_entry: float = 0.0
+    strategy_tag: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -82,6 +89,10 @@ class BacktestTrade:
             "pnl": self.pnl,
             "fees": self.fees,
             "bankroll_after": self.bankroll_after,
+            "asset": self.asset,
+            "exit_type": self.exit_type,
+            "time_elapsed_at_entry": self.time_elapsed_at_entry,
+            "strategy_tag": self.strategy_tag,
         }
 
     @classmethod
@@ -104,6 +115,10 @@ class BacktestTrade:
             pnl=d["pnl"],
             fees=d["fees"],
             bankroll_after=d["bankroll_after"],
+            asset=d.get("asset", ""),
+            exit_type=d.get("exit_type", "settlement"),
+            time_elapsed_at_entry=d.get("time_elapsed_at_entry", 0.0),
+            strategy_tag=d.get("strategy_tag", ""),
         )
 
 
@@ -124,11 +139,16 @@ class BacktestResult:
     trade_rate: float = 0.0  # trades / windows
     directional_trades: int = 0
     fomo_trades: int = 0
+    settlement_ride_trades: int = 0
+    certainty_scalp_trades: int = 0
+    stop_loss_exits: int = 0
     trend_guard_blocks: int = 0
     risk_blocks: int = 0
+    drawdown_blocks: int = 0
     initial_bankroll: float = 0.0
     final_bankroll: float = 0.0
     total_fees: float = 0.0
+    asset: str = ""
     trades: list[BacktestTrade] = field(default_factory=list)
     equity_curve: list[tuple[str, float]] = field(default_factory=list)
     label: str = ""
@@ -150,11 +170,16 @@ class BacktestResult:
             "trade_rate": self.trade_rate,
             "directional_trades": self.directional_trades,
             "fomo_trades": self.fomo_trades,
+            "settlement_ride_trades": self.settlement_ride_trades,
+            "certainty_scalp_trades": self.certainty_scalp_trades,
+            "stop_loss_exits": self.stop_loss_exits,
             "trend_guard_blocks": self.trend_guard_blocks,
             "risk_blocks": self.risk_blocks,
+            "drawdown_blocks": self.drawdown_blocks,
             "initial_bankroll": self.initial_bankroll,
             "final_bankroll": self.final_bankroll,
             "total_fees": self.total_fees,
+            "asset": self.asset,
             "label": self.label,
             "trades": [t.to_dict() for t in self.trades],
             "equity_curve": self.equity_curve,
@@ -183,11 +208,16 @@ class BacktestResult:
             trade_rate=data.get("trade_rate", 0.0),
             directional_trades=data.get("directional_trades", 0),
             fomo_trades=data.get("fomo_trades", 0),
+            settlement_ride_trades=data.get("settlement_ride_trades", 0),
+            certainty_scalp_trades=data.get("certainty_scalp_trades", 0),
+            stop_loss_exits=data.get("stop_loss_exits", 0),
             trend_guard_blocks=data.get("trend_guard_blocks", 0),
             risk_blocks=data.get("risk_blocks", 0),
+            drawdown_blocks=data.get("drawdown_blocks", 0),
             initial_bankroll=data.get("initial_bankroll", 0.0),
             final_bankroll=data.get("final_bankroll", 0.0),
             total_fees=data.get("total_fees", 0.0),
+            asset=data.get("asset", ""),
             label=data.get("label", ""),
             trades=trades,
             equity_curve=equity,
@@ -204,15 +234,11 @@ class Window:
     """A 15-minute simulation window."""
 
     start: datetime
-    eval_time: datetime  # minute 7 of window
     end: datetime
-    strike: float  # BTC close at window start
-    btc_at_eval: float  # BTC close at eval time
-    btc_at_settlement: float  # BTC close at window end
+    strike: float  # BTC/ETH close at window start
+    btc_at_settlement: float  # close at window end
     settled_yes: bool  # btc_at_settlement > strike
-    # Candle indices for history lookup
     start_idx: int
-    eval_idx: int
     end_idx: int
 
 
@@ -226,19 +252,23 @@ class Backtester:
 
     Simulates the complete trading pipeline for each 15-minute window:
     1. Compute strike from window start candle
-    2. Evaluate at minute 7 (realistic entry delay)
+    2. Evaluate at minutes 3-14 (multi-point, first signal wins)
     3. Compute features from candle history
-    4. Run through SignalCombiner (edge detection + trend guard + FOMO)
+    4. Run through SignalCombiner (edge + trend guard + FOMO + settlement ride + certainty scalp)
     5. Size position via Kelly
     6. Check risk limits
-    7. Settle at window end
+    7. Simulate stop-loss or hold to settlement
     """
 
     # How many history candles we need before eval point
     HISTORY_CANDLES = 30
+    # Evaluate minutes 3-14 within each 15-min window (12 points)
+    EVAL_MINUTES = range(3, 15)
 
-    def __init__(self, settings: BotSettings) -> None:
+    def __init__(self, settings: BotSettings, asset: str = "BTC") -> None:
         self._settings = settings
+        self._asset = asset
+        self._ticker_prefix = f"KX{asset}-"
 
         # Adjust strategy config for backtest environment:
         # - Disable market making (synthetic orderbook makes MM meaningless)
@@ -262,6 +292,9 @@ class Backtester:
         risk_config.min_balance_dollars = 1.0  # Keep trading until nearly broke
         risk_config.max_total_exposure_dollars = 500.0
         risk_config.max_position_per_market = 100
+        # Scale drawdown breaker proportionally to bankroll
+        # Production uses $20 on ~$200 bankroll (10%); keep same ratio
+        risk_config.drawdown_limit_dollars = 1000.0  # Effectively no daily drawdown limit
 
         self._model = HeuristicModel()
         self._signal_combiner = SignalCombiner(strategy_config)
@@ -288,7 +321,6 @@ class Backtester:
         closes = candles["close"].values.astype(float)
         volumes = candles["volume"].values.astype(float)
         taker_buys = candles["taker_buy_volume"].values.astype(float)
-        timestamps = candles["timestamp"].values
 
         # Build 15-minute windows aligned to :00/:15/:30/:45
         windows = self._build_windows(candles)
@@ -301,6 +333,12 @@ class Backtester:
         trend_guard_blocks = 0
         risk_blocks = 0
 
+        # Drawdown circuit breaker state
+        daily_pnl = 0.0
+        daily_pnl_peak = 0.0
+        current_date = None
+        drawdown_blocks = 0
+
         # Reset model EMA state
         self._model._prev_probability = None
         # Reset risk manager for clean backtest
@@ -311,175 +349,249 @@ class Backtester:
             if bankroll < self._risk_config.min_balance_dollars:
                 break
 
-            # --- Step 1: Get candle history up to eval point ---
-            hist_start = max(0, window.eval_idx - self.HISTORY_CANDLES)
-            hist_closes = closes[hist_start : window.eval_idx + 1]
-            hist_volumes = volumes[hist_start : window.eval_idx + 1]
-            hist_taker_buys = taker_buys[hist_start : window.eval_idx + 1]
+            # Daily reset at midnight UTC
+            window_date = pd.Timestamp(window.start).date()
+            if current_date is None or window_date != current_date:
+                current_date = window_date
+                daily_pnl = 0.0
+                daily_pnl_peak = 0.0
+                self._risk_manager = RiskManager(self._risk_config)
 
-            if len(hist_closes) < 5:
-                continue
+            # Drawdown circuit breaker
+            if self._risk_config.drawdown_limit_enabled:
+                if daily_pnl_peak - daily_pnl >= self._risk_config.drawdown_limit_dollars:
+                    drawdown_blocks += 1
+                    equity_curve.append(
+                        (window.start.isoformat(), bankroll)
+                    )
+                    continue
 
-            # --- Step 2: Compute fair value for synthetic orderbook ---
-            time_remaining = (
-                window.end - window.eval_time
-            ).total_seconds()
+            # --- Multi-evaluation-point loop ---
+            # Evaluate at minutes 3-14; take first signal that passes all checks
+            trade_taken = False
+            for eval_minute in self.EVAL_MINUTES:
+                eval_idx = window.start_idx + eval_minute
 
-            fair_value = compute_fair_value_from_prices(
-                btc_price=window.btc_at_eval,
-                strike_price=window.strike,
-                price_history=np.array(hist_closes),
-                time_to_expiry_seconds=time_remaining,
-                price_window_seconds=len(hist_closes) * 60.0,
-            )
+                # Safety: don't go past window end or array bounds
+                if eval_idx >= window.end_idx or eval_idx >= len(closes):
+                    break
 
-            if fair_value is None:
-                # Fallback: simple distance-based estimate
-                if window.btc_at_eval > window.strike:
-                    fair_value = 0.55 + min(0.40, (window.btc_at_eval - window.strike) / window.strike * 50)
-                else:
-                    fair_value = 0.45 - min(0.40, (window.strike - window.btc_at_eval) / window.strike * 50)
-                fair_value = max(0.05, min(0.95, fair_value))
+                eval_time = window.start + pd.Timedelta(minutes=eval_minute)
+                time_elapsed = eval_minute * 60.0
+                time_remaining = (15 - eval_minute) * 60.0
+                window_phase = self._compute_phase(time_elapsed)
 
-            # --- Step 3: Build synthetic orderbook ---
-            orderbook = build_synthetic_orderbook(
-                fair_value=fair_value,
-                spread=0.04,
-                depth=100,
-                ticker=f"KXBTC-{window.start.strftime('%H%M')}",
-                timestamp=window.eval_time,
-            )
+                btc_at_eval = float(closes[eval_idx])
 
-            # --- Step 4: Compute features ---
-            features = self._feature_engine.compute(
-                closes=np.array(hist_closes),
-                volumes=np.array(hist_volumes),
-                taker_buy_volumes=np.array(hist_taker_buys),
-                orderbook=orderbook,
-                time_to_expiry_seconds=time_remaining,
-                market_ticker=orderbook.ticker,
-                timestamp=window.eval_time,
-            )
+                # --- Candle history up to eval point ---
+                hist_start = max(0, eval_idx - self.HISTORY_CANDLES)
+                hist_closes = closes[hist_start : eval_idx + 1]
+                hist_volumes = volumes[hist_start : eval_idx + 1]
+                hist_taker_buys = taker_buys[hist_start : eval_idx + 1]
 
-            # --- Step 5: Build snapshot for signal combiner ---
-            snapshot = self._build_snapshot(
-                window=window,
-                orderbook=orderbook,
-                fair_value=fair_value,
-                time_remaining=time_remaining,
-                closes=hist_closes,
-                volumes=hist_volumes,
-            )
+                if len(hist_closes) < 5:
+                    continue
 
-            # --- Step 6: Model prediction ---
-            prediction = self._model.predict(features)
-
-            # --- Step 7: Signal evaluation (edge + trend guard + FOMO) ---
-            signals = self._signal_combiner.evaluate(
-                prediction, snapshot, current_position=0, features=features
-            )
-
-            if not signals:
-                equity_curve.append(
-                    (window.eval_time.isoformat(), bankroll)
+                # --- Compute fair value for synthetic orderbook ---
+                fair_value = compute_fair_value_from_prices(
+                    btc_price=btc_at_eval,
+                    strike_price=window.strike,
+                    price_history=np.array(hist_closes),
+                    time_to_expiry_seconds=time_remaining,
+                    price_window_seconds=len(hist_closes) * 60.0,
                 )
-                # Check if trend guard blocked
-                edge_analysis = self._signal_combiner._edge_detector.last_analysis
-                if edge_analysis.get("passed") is False and edge_analysis.get("edge_passed"):
-                    # Had edge but confidence failed — not trend guard
-                    pass
-                continue
 
-            signal = signals[0]
+                if fair_value is None:
+                    # Fallback: simple distance-based estimate
+                    if btc_at_eval > window.strike:
+                        fair_value = 0.55 + min(
+                            0.40,
+                            (btc_at_eval - window.strike) / window.strike * 50,
+                        )
+                    else:
+                        fair_value = 0.45 - min(
+                            0.40,
+                            (window.strike - btc_at_eval) / window.strike * 50,
+                        )
+                    fair_value = max(0.05, min(0.95, fair_value))
 
-            # Skip market-making signals
-            if signal.signal_type == "market_making":
-                equity_curve.append(
-                    (window.eval_time.isoformat(), bankroll)
+                # --- Build synthetic orderbook ---
+                ticker = f"{self._ticker_prefix}{window.start.strftime('%H%M')}"
+                orderbook = build_synthetic_orderbook(
+                    fair_value=fair_value,
+                    spread=0.04,
+                    depth=100,
+                    ticker=ticker,
+                    timestamp=eval_time,
                 )
-                continue
 
-            # --- Step 8: Position sizing ---
-            count = self._position_sizer.size(
-                signal,
-                Decimal(str(bankroll)),
-                Decimal("0"),
-            )
-
-            if count <= 0:
-                equity_curve.append(
-                    (window.eval_time.isoformat(), bankroll)
+                # --- Compute features ---
+                features = self._feature_engine.compute(
+                    closes=np.array(hist_closes),
+                    volumes=np.array(hist_volumes),
+                    taker_buy_volumes=np.array(hist_taker_buys),
+                    orderbook=orderbook,
+                    time_to_expiry_seconds=time_remaining,
+                    market_ticker=ticker,
+                    timestamp=eval_time,
                 )
-                continue
 
-            # --- Step 9: Risk check ---
-            risk_decision = self._risk_manager.check(
-                signal,
-                count,
-                Decimal(str(bankroll)),
-                positions=[],
-                time_to_expiry_seconds=time_remaining,
-            )
-
-            if not risk_decision.approved:
-                risk_blocks += 1
-                equity_curve.append(
-                    (window.eval_time.isoformat(), bankroll)
+                # --- Build snapshot with timing fields ---
+                snapshot = self._build_snapshot(
+                    strike=window.strike,
+                    eval_time=eval_time,
+                    btc_at_eval=btc_at_eval,
+                    orderbook=orderbook,
+                    fair_value=fair_value,
+                    time_remaining=time_remaining,
+                    time_elapsed=time_elapsed,
+                    window_phase=window_phase,
+                    closes=hist_closes,
+                    volumes=hist_volumes,
                 )
-                continue
 
-            if risk_decision.adjusted_count is not None:
-                count = risk_decision.adjusted_count
+                # --- Set simulated time for quiet hours ---
+                self._signal_combiner.set_simulated_time(eval_time)
 
-            # --- Step 10: Simulate trade settlement ---
-            price = float(signal.suggested_price_dollars)
-            fee = float(
-                EdgeDetector.compute_fee_dollars(count, price, is_maker=False)
-            )
+                # --- Model prediction ---
+                prediction = self._model.predict(features)
 
-            # Binary contract P&L
-            if signal.side == "yes":
-                won = window.settled_yes
-            else:
-                won = not window.settled_yes
+                # --- Signal evaluation ---
+                signals = self._signal_combiner.evaluate(
+                    prediction, snapshot, current_position=0, features=features
+                )
 
-            if won:
-                pnl = count * (1.0 - price) - fee
-            else:
-                pnl = -count * price - fee
+                if not signals:
+                    continue
 
-            bankroll += pnl
-            peak_bankroll = max(peak_bankroll, bankroll)
-            drawdown = peak_bankroll - bankroll
-            max_drawdown = max(max_drawdown, drawdown)
+                signal = signals[0]
 
-            # Record trade with risk manager
-            self._risk_manager.record_trade(Decimal(str(round(pnl, 4))))
-            self._risk_manager._trades_today += 1
+                # Skip market-making signals
+                if signal.signal_type == "market_making":
+                    continue
 
-            trade = BacktestTrade(
-                window_start=window.start,
-                timestamp=window.eval_time,
-                market_ticker=signal.market_ticker,
-                side=signal.side,
-                signal_type=signal.signal_type,
-                count=count,
-                price=price,
-                model_prob=prediction.probability_yes,
-                implied_prob=signal.implied_probability,
-                edge=signal.net_edge,
-                strike=window.strike,
-                btc_at_entry=window.btc_at_eval,
-                btc_at_settlement=window.btc_at_settlement,
-                settled_yes=window.settled_yes,
-                pnl=round(pnl, 4),
-                fees=round(fee, 4),
-                bankroll_after=round(bankroll, 4),
-            )
-            trades.append(trade)
-            equity_curve.append(
-                (window.eval_time.isoformat(), round(bankroll, 4))
-            )
+                # --- Position sizing ---
+                count = self._position_sizer.size(
+                    signal,
+                    Decimal(str(bankroll)),
+                    Decimal("0"),
+                )
+
+                if count <= 0:
+                    continue
+
+                # --- Risk check ---
+                risk_decision = self._risk_manager.check(
+                    signal,
+                    count,
+                    Decimal(str(bankroll)),
+                    positions=[],
+                    time_to_expiry_seconds=time_remaining,
+                )
+
+                if not risk_decision.approved:
+                    risk_blocks += 1
+                    continue
+
+                if risk_decision.adjusted_count is not None:
+                    count = risk_decision.adjusted_count
+
+                # --- Trade taken! ---
+                trade_taken = True
+                entry_price = float(signal.suggested_price_dollars)
+                entry_fee = float(
+                    EdgeDetector.compute_fee_dollars(
+                        count, entry_price, is_maker=False
+                    )
+                )
+
+                # --- Stop-loss simulation ---
+                # Skip SL for settlement_ride/certainty_scalp (hold to settlement)
+                exit_type = "settlement"
+                actual_pnl = None
+                actual_fees = entry_fee
+
+                if (
+                    signal.signal_type not in ("settlement_ride", "certainty_scalp")
+                    and self._strategy_config.stop_loss_enabled
+                ):
+                    sl_result = self._simulate_stop_loss(
+                        window=window,
+                        eval_idx=eval_idx,
+                        signal=signal,
+                        count=count,
+                        entry_price=entry_price,
+                        entry_fee=entry_fee,
+                        closes=closes,
+                    )
+                    if sl_result is not None:
+                        exit_type = "stop_loss"
+                        actual_pnl = sl_result["pnl"]
+                        actual_fees = sl_result["fees"]
+
+                # --- Settlement PnL (if no stop-loss triggered) ---
+                if actual_pnl is None:
+                    if signal.side == "yes":
+                        won = window.settled_yes
+                    else:
+                        won = not window.settled_yes
+
+                    if won:
+                        actual_pnl = count * (1.0 - entry_price) - entry_fee
+                    else:
+                        actual_pnl = -count * entry_price - entry_fee
+
+                bankroll += actual_pnl
+                peak_bankroll = max(peak_bankroll, bankroll)
+                drawdown = peak_bankroll - bankroll
+                max_drawdown = max(max_drawdown, drawdown)
+
+                # Update daily PnL tracking
+                daily_pnl += actual_pnl
+                daily_pnl_peak = max(daily_pnl_peak, daily_pnl)
+
+                # Record trade with risk manager
+                self._risk_manager.record_trade(
+                    Decimal(str(round(actual_pnl, 4)))
+                )
+                self._risk_manager._trades_today += 1
+
+                trade = BacktestTrade(
+                    window_start=window.start,
+                    timestamp=eval_time,
+                    market_ticker=signal.market_ticker,
+                    side=signal.side,
+                    signal_type=signal.signal_type,
+                    count=count,
+                    price=entry_price,
+                    model_prob=prediction.probability_yes,
+                    implied_prob=signal.implied_probability,
+                    edge=signal.net_edge,
+                    strike=window.strike,
+                    btc_at_entry=btc_at_eval,
+                    btc_at_settlement=window.btc_at_settlement,
+                    settled_yes=window.settled_yes,
+                    pnl=round(actual_pnl, 4),
+                    fees=round(actual_fees, 4),
+                    bankroll_after=round(bankroll, 4),
+                    asset=self._asset,
+                    exit_type=exit_type,
+                    time_elapsed_at_entry=time_elapsed,
+                    strategy_tag=signal.signal_type,
+                )
+                trades.append(trade)
+                equity_curve.append(
+                    (eval_time.isoformat(), round(bankroll, 4))
+                )
+                break  # Only one trade per window
+
+            if not trade_taken:
+                equity_curve.append(
+                    (window.start.isoformat(), bankroll)
+                )
+
+        # Clear simulated time
+        self._signal_combiner.set_simulated_time(None)
 
         return self._compute_metrics(
             trades=trades,
@@ -489,7 +601,115 @@ class Backtester:
             total_windows=len(windows),
             trend_guard_blocks=trend_guard_blocks,
             risk_blocks=risk_blocks,
+            drawdown_blocks=drawdown_blocks,
         )
+
+    def _simulate_stop_loss(
+        self,
+        window: Window,
+        eval_idx: int,
+        signal: TradeSignal,
+        count: int,
+        entry_price: float,
+        entry_fee: float,
+        closes: np.ndarray,
+    ) -> dict | None:
+        """Check if stop-loss would trigger between entry and settlement.
+
+        Walks the price path from entry to settlement candle-by-candle,
+        computing synthetic fair value and bid at each point.
+
+        Returns dict with pnl/fees if SL triggers, None otherwise.
+        """
+        stop_loss_pct = self._strategy_config.stop_loss_pct
+        for asset, val in self._strategy_config.asset_stop_loss_pct.items():
+            if asset.upper() == self._asset.upper():
+                stop_loss_pct = val
+                break
+
+        min_hold = self._strategy_config.stop_loss_min_hold_seconds
+        min_bid = self._strategy_config.stop_loss_min_bid
+
+        for candle_offset in range(1, window.end_idx - eval_idx):
+            check_idx = eval_idx + candle_offset
+            if check_idx >= len(closes):
+                break
+
+            time_held = candle_offset * 60.0
+            if time_held < min_hold:
+                continue
+
+            check_btc = float(closes[check_idx])
+            check_time_remaining = (window.end_idx - check_idx) * 60.0
+            if check_time_remaining <= 0:
+                break
+
+            # Compute synthetic fair value at this point
+            hist_start = max(0, check_idx - 30)
+            hist_prices = closes[hist_start : check_idx + 1]
+
+            check_fv = compute_fair_value_from_prices(
+                btc_price=check_btc,
+                strike_price=window.strike,
+                price_history=np.array(hist_prices),
+                time_to_expiry_seconds=check_time_remaining,
+                price_window_seconds=len(hist_prices) * 60.0,
+            )
+
+            if check_fv is None:
+                if check_btc > window.strike:
+                    check_fv = 0.55 + min(
+                        0.40,
+                        (check_btc - window.strike) / window.strike * 50,
+                    )
+                else:
+                    check_fv = 0.45 - min(
+                        0.40,
+                        (window.strike - check_btc) / window.strike * 50,
+                    )
+                check_fv = max(0.05, min(0.95, check_fv))
+
+            # Compute synthetic bid for our side
+            spread = 0.04
+            if signal.side == "yes":
+                current_bid = max(0.01, check_fv - spread / 2)
+            else:
+                current_bid = max(0.01, (1.0 - check_fv) - spread / 2)
+
+            if current_bid < min_bid:
+                continue
+
+            # Check if loss exceeds threshold
+            loss_pct = (
+                (entry_price - current_bid) / entry_price
+                if entry_price > 0
+                else 0
+            )
+
+            if loss_pct >= stop_loss_pct:
+                exit_fee = float(
+                    EdgeDetector.compute_fee_dollars(
+                        count, current_bid, is_maker=False
+                    )
+                )
+                pnl = count * (current_bid - entry_price) - entry_fee - exit_fee
+                return {"pnl": pnl, "fees": entry_fee + exit_fee}
+
+        return None
+
+    def _compute_phase(self, time_elapsed: float) -> int:
+        """Compute window phase (1-5) from elapsed seconds."""
+        cfg = self._strategy_config
+        if time_elapsed < cfg.phase_observation_end:
+            return 1
+        elif time_elapsed < cfg.phase_confirmation_end:
+            return 2
+        elif time_elapsed < cfg.phase_active_end:
+            return 3
+        elif time_elapsed < cfg.phase_late_end:
+            return 4
+        else:
+            return 5
 
     def _build_windows(self, candles: pd.DataFrame) -> list[Window]:
         """Build 15-minute windows aligned to :00/:15/:30/:45."""
@@ -511,7 +731,6 @@ class Backtester:
 
         while current + pd.Timedelta(minutes=15) <= last_ts:
             window_end = current + pd.Timedelta(minutes=15)
-            eval_time = current + pd.Timedelta(minutes=7)
 
             # Find candle indices
             start_mask = timestamps >= current
@@ -521,39 +740,29 @@ class Backtester:
 
             start_idx = start_mask.idxmax()
 
-            eval_mask = timestamps >= eval_time
-            if not eval_mask.any():
-                current = window_end
-                continue
-            eval_idx = eval_mask.idxmax()
-
             end_mask = timestamps >= window_end
             if not end_mask.any():
                 current = window_end
                 continue
             end_idx = end_mask.idxmax()
 
-            # Ensure we have enough candle range
-            if eval_idx <= start_idx or end_idx <= eval_idx:
+            # Need enough candles for at least the first eval point (minute 3)
+            if end_idx <= start_idx + 3:
                 current = window_end
                 continue
 
             strike = float(closes[start_idx])
-            btc_at_eval = float(closes[eval_idx])
             btc_at_settlement = float(closes[end_idx])
             settled_yes = bool(btc_at_settlement > strike)
 
             windows.append(
                 Window(
                     start=pd.Timestamp(current, tz="UTC") if current.tzinfo is None else current,
-                    eval_time=pd.Timestamp(eval_time, tz="UTC") if eval_time.tzinfo is None else eval_time,
                     end=pd.Timestamp(window_end, tz="UTC") if window_end.tzinfo is None else window_end,
                     strike=strike,
-                    btc_at_eval=btc_at_eval,
                     btc_at_settlement=btc_at_settlement,
                     settled_yes=settled_yes,
                     start_idx=start_idx,
-                    eval_idx=eval_idx,
                     end_idx=end_idx,
                 )
             )
@@ -564,15 +773,20 @@ class Backtester:
 
     def _build_snapshot(
         self,
-        window: Window,
+        *,
+        strike: float,
+        eval_time: datetime,
+        btc_at_eval: float,
         orderbook: Orderbook,
         fair_value: float,
         time_remaining: float,
+        time_elapsed: float,
+        window_phase: int,
         closes: np.ndarray,
         volumes: np.ndarray,
     ) -> MarketSnapshot:
-        """Build a MarketSnapshot from window data."""
-        btc_price = Decimal(str(window.btc_at_eval))
+        """Build a MarketSnapshot from window + eval point data."""
+        btc_price = Decimal(str(btc_at_eval))
 
         # Build price lists from candle history
         prices_1min = [Decimal(str(c)) for c in closes[-60:]]
@@ -580,7 +794,7 @@ class Backtester:
         volumes_1min = [Decimal(str(v)) for v in volumes[-60:]]
 
         return MarketSnapshot(
-            timestamp=window.eval_time,
+            timestamp=eval_time,
             market_ticker=orderbook.ticker,
             btc_price=btc_price,
             btc_prices_1min=prices_1min,
@@ -589,10 +803,12 @@ class Backtester:
             orderbook=orderbook,
             implied_yes_prob=orderbook.implied_yes_prob,
             spread=orderbook.spread,
-            strike_price=Decimal(str(window.strike)),
+            strike_price=Decimal(str(strike)),
             statistical_fair_value=fair_value,
             binance_btc_price=btc_price,
             time_to_expiry_seconds=time_remaining,
+            time_elapsed_seconds=time_elapsed,
+            window_phase=window_phase,
             volume=100,
         )
 
@@ -605,6 +821,7 @@ class Backtester:
         total_windows: int,
         trend_guard_blocks: int,
         risk_blocks: int,
+        drawdown_blocks: int = 0,
     ) -> BacktestResult:
         """Compute backtest performance metrics."""
         if not trades:
@@ -642,8 +859,12 @@ class Backtester:
         # Signal type breakdown
         directional = [t for t in trades if t.signal_type == "directional"]
         fomo = [t for t in trades if t.signal_type == "fomo"]
+        settlement_ride = [t for t in trades if t.signal_type == "settlement_ride"]
+        certainty_scalp = [t for t in trades if t.signal_type == "certainty_scalp"]
+        stop_loss_exits = [t for t in trades if t.exit_type == "stop_loss"]
 
         final_bankroll = trades[-1].bankroll_after if trades else initial_bankroll
+        asset = trades[0].asset if trades else ""
 
         return BacktestResult(
             total_trades=len(trades),
@@ -659,11 +880,16 @@ class Backtester:
             trade_rate=round(len(trades) / total_windows, 4) if total_windows > 0 else 0.0,
             directional_trades=len(directional),
             fomo_trades=len(fomo),
+            settlement_ride_trades=len(settlement_ride),
+            certainty_scalp_trades=len(certainty_scalp),
+            stop_loss_exits=len(stop_loss_exits),
             trend_guard_blocks=trend_guard_blocks,
             risk_blocks=risk_blocks,
+            drawdown_blocks=drawdown_blocks,
             initial_bankroll=initial_bankroll,
             final_bankroll=round(final_bankroll, 2),
             total_fees=round(total_fees, 4),
+            asset=asset,
             trades=trades,
             equity_curve=equity_curve,
         )

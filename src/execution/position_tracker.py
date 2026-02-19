@@ -39,6 +39,7 @@ class PositionState:
         self.realized_pnl = Decimal("0")
         self.order_ids: list[str] = []
         self.high_water_bid: Decimal | None = None  # Best bid seen since entry
+        self.strategy_tag: str = ""  # "settlement_ride" = hold to settlement, skip all exits
 
     @property
     def exposure_dollars(self) -> Decimal:
@@ -103,14 +104,16 @@ class PositionTracker:
         now = datetime.now(timezone.utc)
         if existing is None:
             # New position
-            self._positions[ticker] = PositionState(
+            new_pos = PositionState(
                 market_ticker=ticker,
                 side=signal.side,
                 count=count,
                 avg_entry_price=price,
                 entry_time=now,
             )
-            self._positions[ticker].order_ids.append(order_state.order_id)
+            new_pos.strategy_tag = signal.signal_type
+            new_pos.order_ids.append(order_state.order_id)
+            self._positions[ticker] = new_pos
         elif existing.side == signal.side:
             # Adding to existing position — compute weighted average price
             total_count = existing.count + count
@@ -295,6 +298,8 @@ class PositionTracker:
         results: list[tuple[str, str]] = []
 
         for ticker, position in list(self._positions.items()):
+            if position.strategy_tag in ("settlement_ride", "certainty_scalp"):
+                continue
             snapshot = snapshots.get(ticker)
             if snapshot is None:
                 continue
@@ -357,6 +362,8 @@ class PositionTracker:
         breaks = []
         now = datetime.now(timezone.utc)
         for ticker, position in list(self._positions.items()):
+            if position.strategy_tag in ("settlement_ride", "certainty_scalp"):
+                continue
             prediction = predictions.get(ticker)
             if prediction is None:
                 continue
@@ -407,6 +414,8 @@ class PositionTracker:
         now = datetime.now(timezone.utc)
 
         for ticker, position in list(self._positions.items()):
+            if position.strategy_tag in ("settlement_ride", "certainty_scalp"):
+                continue
             snapshot = snapshots.get(ticker)
             if snapshot is None:
                 continue
@@ -480,11 +489,10 @@ class PositionTracker:
                 t = (time_to_expiry - 30) / (decay_start - 30)
                 threshold = floor_cents + t * (min_profit - floor_cents)
 
-            # Compute sell fee (taker for guaranteed execution)
-            sell_fee = EdgeDetector.compute_fee_dollars(
-                position.count, float(current_bid), is_maker=False
+            # Compute sell fee per contract (taker for guaranteed execution)
+            fee_per_contract = EdgeDetector.compute_fee_dollars(
+                1, float(current_bid), is_maker=False
             )
-            fee_per_contract = sell_fee / position.count if position.count > 0 else sell_fee
 
             # Check: profit - fee >= threshold
             if float(profit_per_contract) - float(fee_per_contract) >= threshold:
@@ -522,6 +530,8 @@ class PositionTracker:
         now = datetime.now(timezone.utc)
 
         for ticker, position in list(self._positions.items()):
+            if position.strategy_tag in ("settlement_ride", "certainty_scalp"):
+                continue
             snapshot = snapshots.get(ticker)
             if snapshot is None:
                 continue
@@ -582,7 +592,10 @@ class PositionTracker:
     ) -> Decimal:
         """Compute total unrealized PNL across all positions using current bids.
 
-        For each position, unrealized PNL = (current_bid - avg_entry_price) * count.
+        For each position, unrealized PNL accounts for:
+        - Gross P&L: (current_bid - avg_entry_price) * count
+        - Buy fees already paid (pos.fees_paid)
+        - Estimated sell fees to exit (taker rate)
         If no bid is available, assumes mark-to-market at entry price (PNL = 0).
         """
         total = Decimal("0")
@@ -600,7 +613,11 @@ class PositionTracker:
             if current_bid is None:
                 continue
 
-            unrealized = (current_bid - position.avg_entry_price) * position.count
+            gross = (current_bid - position.avg_entry_price) * position.count
+            sell_fee = EdgeDetector.compute_fee_dollars(
+                position.count, float(current_bid), is_maker=False
+            )
+            unrealized = gross - sell_fee - position.fees_paid
             total += unrealized
 
         return total

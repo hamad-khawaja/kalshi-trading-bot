@@ -57,7 +57,7 @@ class TradingBot:
         # Balance cache (avoid API call every 4s cycle)
         self._cached_balance: Decimal | None = None
         self._balance_fetched_at: float = 0.0  # monotonic time
-        self._balance_cache_ttl: float = 30.0  # seconds
+        self._balance_cache_ttl: float = 10.0  # seconds
 
         # Prediction cache for thesis-break checks in monitor loop
         self._last_predictions: dict[str, object] = {}  # ticker → PredictionResult
@@ -139,7 +139,7 @@ class TradingBot:
         self._model: ProbabilityModel = HeuristicModel()
 
         # Risk
-        self._position_sizer = PositionSizer(settings.risk)
+        self._position_sizer = PositionSizer(settings.risk, strategy_config=settings.strategy)
         self._risk_manager = RiskManager(settings.risk)
         self._vol_tracker = VolatilityTracker()
 
@@ -220,6 +220,14 @@ class TradingBot:
         except Exception:
             logger.warning("initial_settlement_history_failed")
 
+        # Hydrate resting orders from exchange (recover state after restart)
+        try:
+            hydrated = await self._order_manager.hydrate_from_exchange()
+            if hydrated:
+                logger.info("orders_hydrated_on_startup", count=hydrated)
+        except Exception:
+            logger.warning("order_hydration_failed")
+
         # Fetch initial balance so it appears on dashboard immediately
         try:
             initial_balance = await self._get_balance(force=True)
@@ -291,6 +299,14 @@ class TradingBot:
             ds.add_decision(self._cycle_count, "no_market", "No active market")
             return
 
+        # Check trading pause toggle (dashboard UI)
+        if self._dashboard_state.trading_paused:
+            ds.add_decision(self._cycle_count, "reject", "Trading paused from dashboard")
+            return
+
+        # Sync quiet hours override from dashboard to signal combiner
+        self._signal_combiner.quiet_hours_override = self._dashboard_state.quiet_hours_override
+
         for market in markets_to_process:
             await self._process_market(market)
 
@@ -303,6 +319,7 @@ class TradingBot:
         close_time = market.close_time or market.expected_expiration_time or market.expiration_time
         ds.market = {
             "ticker": ticker,
+            "event_ticker": market.event_ticker,
             "title": market.title,
             "yes_sub_title": market.yes_sub_title,
             "expiry": str(market.expiration_time) if market.expiration_time else None,
@@ -362,11 +379,17 @@ class TradingBot:
         # Update volatility tracker
         self._vol_tracker.update(features.realized_vol_5min)
 
-        # Update model weights based on current session
+        # Dampen Chainlink in high vol (stale oracle creates false signals)
+        chainlink_mult = {"low": 1.0, "normal": 1.0, "high": 0.5, "extreme": 0.25}.get(
+            self._vol_tracker.current_regime, 1.0
+        )
         if self._time_profiler is not None and self._time_profiler.loaded:
             session = self._time_profiler.get_current_session()
             multipliers = self._time_profiler.get_weight_multipliers(session)
+            multipliers["chainlink"] = multipliers.get("chainlink", 1.0) * chainlink_mult
             self._model.set_weight_multipliers(multipliers)
+        elif chainlink_mult != 1.0:
+            self._model.set_weight_multipliers({"chainlink": chainlink_mult})
 
         # Get model prediction
         prediction = self._model.predict(features)
@@ -440,7 +463,7 @@ class TradingBot:
             tp_exit_time = self._take_profit_markets[ticker]
             elapsed = (datetime.now(timezone.utc) - tp_exit_time).total_seconds()
             if elapsed < tp_cooldown:
-                buy_signals = [s for s in signals if s.action == "buy" and s.signal_type != "market_making"]
+                buy_signals = [s for s in signals if s.action == "buy" and s.signal_type not in ("market_making", "settlement_ride", "certainty_scalp")]
                 if buy_signals:
                     logger.info(
                         "take_profit_cooldown_blocked",
@@ -449,21 +472,21 @@ class TradingBot:
                         cooldown=tp_cooldown,
                         blocked_count=len(buy_signals),
                     )
-                    signals = [s for s in signals if s.action != "buy" or s.signal_type == "market_making"]
+                    signals = [s for s in signals if s.action != "buy" or s.signal_type in ("market_making", "settlement_ride", "certainty_scalp")]
             else:
                 # Cooldown expired, remove from tracking
                 del self._take_profit_markets[ticker]
 
         # Thesis-break cooldown: block buy signals for markets we got stopped out of
         if ticker in self._thesis_break_markets and signals:
-            buy_signals = [s for s in signals if s.action == "buy" and s.signal_type != "market_making"]
+            buy_signals = [s for s in signals if s.action == "buy" and s.signal_type not in ("market_making", "settlement_ride", "certainty_scalp")]
             if buy_signals:
                 logger.info(
                     "thesis_break_cooldown_blocked",
                     ticker=ticker,
                     blocked_count=len(buy_signals),
                 )
-                signals = [s for s in signals if s.action != "buy" or s.signal_type == "market_making"]
+                signals = [s for s in signals if s.action != "buy" or s.signal_type in ("market_making", "settlement_ride", "certainty_scalp")]
 
         if not signals:
             # --- Averaging: check existing position for discount add ---
@@ -629,6 +652,7 @@ class TradingBot:
                 balance,
                 position_models,
                 snapshot.time_to_expiry_seconds,
+                current_exposure_dollars=self._position_tracker.total_exposure_dollars,
             )
 
             if not decision.approved:
@@ -707,6 +731,8 @@ class TradingBot:
                         self._cycle_count, "trade",
                         f"TRADE: buy {order_state.filled_count}x {signal_item.side.upper()} @ {signal_item.suggested_price_dollars}, edge={signal_item.net_edge:.4f}",
                     )
+                    # Force-refresh balance after fill
+                    await self._get_balance(force=True)
                     # Update dashboard positions/risk immediately
                     self._update_dashboard_positions()
                 else:
@@ -842,7 +868,7 @@ class TradingBot:
                                 # Actual settlement: YES pays $1/contract, NO pays $0
                                 won = (settlement_result == pos.side)
                                 payout = Decimal(str(pos.count)) if won else Decimal("0")
-                                pnl = payout - cost
+                                pnl = payout - cost - pos.fees_paid
                                 logger.info(
                                     "position_settled_actual",
                                     ticker=exit_ticker,
@@ -851,6 +877,7 @@ class TradingBot:
                                     won=won,
                                     count=pos.count,
                                     entry_price=float(pos.avg_entry_price),
+                                    fees=float(pos.fees_paid),
                                     pnl=float(pnl),
                                 )
                                 self._risk_manager.record_trade(pnl)
@@ -858,6 +885,7 @@ class TradingBot:
                                     self._data_hub._ticker_to_symbol(exit_ticker),
                                     "settle", pos.side, float(pnl), exit_ticker,
                                     size_dollars=float(cost),
+                                    signal_type=pos.strategy_tag,
                                 )
                                 # Log settlement to database
                                 try:
@@ -869,7 +897,7 @@ class TradingBot:
                                         action="settle",
                                         count=pos.count,
                                         price_dollars=pos.avg_entry_price,
-                                        fees_dollars=Decimal("0"),
+                                        fees_dollars=pos.fees_paid,
                                         pnl_dollars=pnl,
                                         entry_time=pos.entry_time,
                                         exit_time=datetime.now(timezone.utc),
@@ -879,27 +907,83 @@ class TradingBot:
                                     logger.warning("settlement_logging_failed", ticker=exit_ticker)
                                 actually_settled.append(exit_ticker)
                             else:
-                                # Result not available yet — keep position, retry next cycle
-                                logger.info(
-                                    "settlement_pending",
-                                    ticker=exit_ticker,
-                                    side=pos.side,
-                                    count=pos.count,
-                                )
+                                # Result not available yet — expedited polling
+                                for _retry in range(10):
+                                    await asyncio.sleep(2)
+                                    try:
+                                        settlement_result = await self._kalshi_rest.get_market_result(exit_ticker)
+                                    except Exception:
+                                        pass
+                                    if settlement_result is not None:
+                                        break
+
+                                if settlement_result is not None:
+                                    won = (settlement_result == pos.side)
+                                    payout = Decimal(str(pos.count)) if won else Decimal("0")
+                                    pnl = payout - cost - pos.fees_paid
+                                    logger.info(
+                                        "position_settled_actual",
+                                        ticker=exit_ticker,
+                                        side=pos.side,
+                                        result=settlement_result,
+                                        won=won,
+                                        count=pos.count,
+                                        entry_price=float(pos.avg_entry_price),
+                                        fees=float(pos.fees_paid),
+                                        pnl=float(pnl),
+                                        expedited=True,
+                                    )
+                                    self._risk_manager.record_trade(pnl)
+                                    ds.add_trade_result(
+                                        self._data_hub._ticker_to_symbol(exit_ticker),
+                                        "settle", pos.side, float(pnl), exit_ticker,
+                                        size_dollars=float(cost),
+                                        signal_type=pos.strategy_tag,
+                                    )
+                                    try:
+                                        from src.data.models import CompletedTrade
+                                        completed = CompletedTrade(
+                                            order_id="settlement",
+                                            market_ticker=exit_ticker,
+                                            side=pos.side,
+                                            action="settle",
+                                            count=pos.count,
+                                            price_dollars=pos.avg_entry_price,
+                                            fees_dollars=pos.fees_paid,
+                                            pnl_dollars=pnl,
+                                            entry_time=pos.entry_time,
+                                            exit_time=datetime.now(timezone.utc),
+                                        )
+                                        await self._db.insert_trade(completed)
+                                    except Exception:
+                                        logger.warning("settlement_logging_failed", ticker=exit_ticker)
+                                    actually_settled.append(exit_ticker)
+                                else:
+                                    logger.info(
+                                        "settlement_pending",
+                                        ticker=exit_ticker,
+                                        side=pos.side,
+                                        count=pos.count,
+                                    )
                         else:
-                            # Paper mode: estimate from implied prob
+                            # Paper mode: simulate binary settlement using implied prob
+                            # If implied > 0.50, YES wins; otherwise NO wins
                             snap = snapshots.get(exit_ticker)
                             if snap and snap.implied_yes_prob is not None:
-                                settle = float(snap.implied_yes_prob) if pos.side == "yes" else (1.0 - float(snap.implied_yes_prob))
-                                pnl = Decimal(str(settle)) * pos.count - cost
+                                yes_wins = float(snap.implied_yes_prob) > 0.50
+                                won = (yes_wins and pos.side == "yes") or (not yes_wins and pos.side == "no")
+                                payout = Decimal(str(pos.count)) if won else Decimal("0")
+                                pnl = payout - cost - pos.fees_paid
                             else:
-                                pnl = -cost  # Paper mode fallback
+                                pnl = -cost - pos.fees_paid  # Paper mode fallback
                             logger.info(
-                                "position_settled_estimated",
+                                "position_settled_paper",
                                 ticker=exit_ticker,
                                 side=pos.side,
                                 count=pos.count,
                                 entry_price=float(pos.avg_entry_price),
+                                implied_prob=float(snap.implied_yes_prob) if snap and snap.implied_yes_prob is not None else None,
+                                won=pnl > 0,
                                 pnl=float(pnl),
                             )
                             self._risk_manager.record_trade(pnl)
@@ -907,6 +991,7 @@ class TradingBot:
                                 self._data_hub._ticker_to_symbol(exit_ticker),
                                 "settle", pos.side, float(pnl), exit_ticker,
                                 size_dollars=float(cost),
+                                signal_type=pos.strategy_tag,
                             )
                             # Log settlement to database
                             try:
@@ -918,7 +1003,7 @@ class TradingBot:
                                     action="settle",
                                     count=pos.count,
                                     price_dollars=pos.avg_entry_price,
-                                    fees_dollars=Decimal("0"),
+                                    fees_dollars=pos.fees_paid,
                                     pnl_dollars=pnl,
                                     entry_time=pos.entry_time,
                                     exit_time=datetime.now(timezone.utc),
@@ -982,6 +1067,7 @@ class TradingBot:
                                 self._data_hub._ticker_to_symbol(pe_ticker),
                                 "pre_expiry", pos.side, float(pnl), pe_ticker,
                                 size_dollars=float(entry_cost),
+                                signal_type=pos.strategy_tag,
                             )
                             # Log pre-expiry exit to database
                             try:
@@ -1028,13 +1114,14 @@ class TradingBot:
                             suggested_count=pos.count,
                             timestamp=datetime.now(timezone.utc),
                             signal_type="directional",
+                            post_only=True,  # TP exits use maker orders (1.75% vs 7% fee)
                         )
                         order_id = await self._order_manager.submit(sell_signal, pos.count)
                         if order_id:
                             entry_cost = pos.avg_entry_price * pos.count
                             exit_revenue = Decimal(sell_price) * pos.count
                             sell_fee = EdgeDetector.compute_fee_dollars(
-                                pos.count, float(sell_price), is_maker=False
+                                pos.count, float(sell_price), is_maker=True
                             )
                             pnl = exit_revenue - entry_cost - sell_fee - pos.fees_paid
                             self._total_fees += sell_fee
@@ -1053,6 +1140,7 @@ class TradingBot:
                                 self._data_hub._ticker_to_symbol(tp_ticker),
                                 "take_profit", pos.side, float(pnl), tp_ticker,
                                 size_dollars=float(entry_cost),
+                                signal_type=pos.strategy_tag,
                             )
                             # Log take-profit to database
                             try:
@@ -1082,6 +1170,7 @@ class TradingBot:
                         snapshots,
                         stop_loss_pct=self._settings.strategy.stop_loss_pct,
                         min_bid=self._settings.strategy.stop_loss_min_bid,
+                        min_hold_seconds=self._settings.strategy.stop_loss_min_hold_seconds,
                         asset_stop_loss_pct=self._settings.strategy.asset_stop_loss_pct or None,
                     )
                     for sl_ticker, sell_price in sl_signals:
@@ -1128,6 +1217,7 @@ class TradingBot:
                                 self._data_hub._ticker_to_symbol(sl_ticker),
                                 "stop_loss", pos.side, float(pnl), sl_ticker,
                                 size_dollars=float(entry_cost),
+                                signal_type=pos.strategy_tag,
                             )
                             # Log stop-loss to database
                             try:
@@ -1212,6 +1302,7 @@ class TradingBot:
                                 self._data_hub._ticker_to_symbol(tb_ticker),
                                 "thesis_break", pos.side, float(pnl), tb_ticker,
                                 size_dollars=float(entry_cost),
+                                signal_type=pos.strategy_tag,
                             )
                             # Log thesis-break exit to database
                             try:
@@ -1240,12 +1331,25 @@ class TradingBot:
                 for filled_state in newly_filled:
                     self._position_tracker.update_on_fill(filled_state)
                     self._risk_manager._trades_today += 1
+                    # Track buy fee for resting fills (same as immediate fills)
+                    if filled_state.signal.action == "buy" and filled_state.filled_count > 0:
+                        buy_fee = EdgeDetector.compute_fee_dollars(
+                            filled_state.filled_count,
+                            float(filled_state.signal.suggested_price_dollars),
+                            is_maker=True,
+                        )
+                        self._total_fees += buy_fee
+                        pos = self._position_tracker.get_position(filled_state.signal.market_ticker)
+                        if pos:
+                            pos.fees_paid += buy_fee
                     logger.info(
                         "resting_order_fill_detected",
                         ticker=filled_state.signal.market_ticker,
                         side=filled_state.signal.side,
                         filled=filled_state.filled_count,
                     )
+                    # Force-refresh balance after resting fill
+                    await self._get_balance(force=True)
                     self._update_dashboard_positions()
 
                 # Compute and push unrealized PNL to dashboard
@@ -1442,6 +1546,7 @@ class TradingBot:
             "vol_regime": self._vol_tracker.current_regime,
             "exposure": float(self._position_tracker.total_exposure_dollars),
             "total_fees": float(self._total_fees),
+            "daily_pnl_peak": float(self._risk_manager.daily_pnl_peak),
         }
 
     def _update_dashboard_positions(self) -> None:
@@ -1536,6 +1641,9 @@ def configure_logging(settings: BotSettings) -> None:
     else:
         renderer = structlog.dev.ConsoleRenderer()
 
+    # Open persistent log file (append mode, line-buffered)
+    log_fh = open(log_file, "a", buffering=1)  # noqa: SIM115
+
     structlog.configure(
         processors=[
             structlog.contextvars.merge_contextvars,
@@ -1549,7 +1657,7 @@ def configure_logging(settings: BotSettings) -> None:
             structlog._log_levels.NAME_TO_LEVEL[log_level.lower()]
         ),
         context_class=dict,
-        logger_factory=structlog.PrintLoggerFactory(),
+        logger_factory=structlog.WriteLoggerFactory(file=log_fh),
         cache_logger_on_first_use=True,
     )
 
