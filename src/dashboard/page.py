@@ -185,6 +185,11 @@ a{color:#58a6ff}
       <span class="toggle-label disabled" id="qh-label">Quiet Hrs</span>
       <div class="toggle-track disabled" id="qh-track"><div class="toggle-knob"></div></div>
     </div>
+    <div class="toggle-divider"></div>
+    <div class="toggle-wrap" id="eth-toggle" onclick="toggleETH()">
+      <span class="toggle-label active" id="eth-label">ETH</span>
+      <div class="toggle-track active" id="eth-track"><div class="toggle-knob"></div></div>
+    </div>
   </div>
 </div>
 
@@ -481,6 +486,9 @@ a{color:#58a6ff}
     if (s.trading_paused != null) {
       updateToggleButton(s.trading_paused);
       updateQHToggle(s.quiet_hours_override || false, s.trading_paused);
+    }
+    if (s.eth_disabled != null) {
+      updateETHToggle(s.eth_disabled);
     }
 
     // Auto-detect available assets from per_asset keys and add tabs dynamically
@@ -958,6 +966,28 @@ a{color:#58a6ff}
       track.className = 'toggle-track paused';
     } else {
       label.textContent = 'Active';
+      label.className = 'toggle-label active';
+      track.className = 'toggle-track active';
+    }
+  }
+
+  // ETH killswitch toggle
+  window.toggleETH = function() {
+    fetch('/api/toggle-eth', {method: 'POST'})
+      .then(r => r.json())
+      .then(d => updateETHToggle(d.eth_disabled))
+      .catch(err => console.error('eth toggle error', err));
+  };
+
+  function updateETHToggle(disabled) {
+    const label = $('eth-label');
+    const track = $('eth-track');
+    if (disabled) {
+      label.textContent = 'ETH Off';
+      label.className = 'toggle-label paused';
+      track.className = 'toggle-track paused';
+    } else {
+      label.textContent = 'ETH';
       label.className = 'toggle-label active';
       track.className = 'toggle-track active';
     }

@@ -317,6 +317,10 @@ class TradingBot:
         ticker = market.ticker
         # Resolve asset symbol for per-asset dashboard state
         asset_symbol = self._data_hub._ticker_to_symbol(ticker)
+
+        # ETH killswitch: skip all ETH markets when disabled from dashboard
+        if self._dashboard_state.eth_disabled and asset_symbol == "ETH":
+            return
         close_time = market.close_time or market.expected_expiration_time or market.expiration_time
         ds.market = {
             "ticker": ticker,

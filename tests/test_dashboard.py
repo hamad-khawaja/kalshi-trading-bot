@@ -1,0 +1,86 @@
+"""Tests for dashboard state and toggle endpoints."""
+
+from __future__ import annotations
+
+import json
+
+import pytest
+from aiohttp import web
+from aiohttp.test_utils import TestClient, TestServer
+
+from src.dashboard.server import DashboardServer, DashboardState
+
+
+@pytest.fixture
+def dashboard_state() -> DashboardState:
+    return DashboardState()
+
+
+class TestDashboardState:
+    def test_eth_disabled_default_false(self, dashboard_state: DashboardState):
+        """ETH killswitch is off by default."""
+        assert dashboard_state.eth_disabled is False
+
+    def test_eth_disabled_in_json(self, dashboard_state: DashboardState):
+        """eth_disabled field is serialized in the SSE payload."""
+        data = json.loads(dashboard_state.to_json())
+        assert "eth_disabled" in data
+        assert data["eth_disabled"] is False
+
+    def test_eth_disabled_true_in_json(self, dashboard_state: DashboardState):
+        """eth_disabled=True is reflected in JSON."""
+        dashboard_state.eth_disabled = True
+        data = json.loads(dashboard_state.to_json())
+        assert data["eth_disabled"] is True
+
+    def test_trading_paused_in_json(self, dashboard_state: DashboardState):
+        """Verify other toggles still present alongside eth_disabled."""
+        data = json.loads(dashboard_state.to_json())
+        assert "trading_paused" in data
+        assert "quiet_hours_override" in data
+        assert "eth_disabled" in data
+
+
+def _build_app(state: DashboardState) -> web.Application:
+    """Build a minimal aiohttp app with dashboard toggle routes."""
+    server = DashboardServer(state, "127.0.0.1", 0)
+    app = web.Application()
+    app.router.add_post("/api/toggle-eth", server._handle_toggle_eth)
+    app.router.add_post("/api/toggle-trading", server._handle_toggle_trading)
+    return app
+
+
+@pytest.mark.asyncio
+async def test_toggle_eth_endpoint(dashboard_state: DashboardState):
+    """POST /api/toggle-eth flips eth_disabled."""
+    app = _build_app(dashboard_state)
+    async with TestClient(TestServer(app)) as client:
+        # First toggle: off → on
+        resp = await client.post("/api/toggle-eth")
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["eth_disabled"] is True
+        assert dashboard_state.eth_disabled is True
+
+        # Second toggle: on → off
+        resp = await client.post("/api/toggle-eth")
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["eth_disabled"] is False
+        assert dashboard_state.eth_disabled is False
+
+
+@pytest.mark.asyncio
+async def test_eth_toggle_independent_of_master(dashboard_state: DashboardState):
+    """ETH toggle works regardless of master trading toggle state."""
+    app = _build_app(dashboard_state)
+    async with TestClient(TestServer(app)) as client:
+        # Pause master trading
+        await client.post("/api/toggle-trading")
+        assert dashboard_state.trading_paused is True
+
+        # ETH toggle should still work
+        resp = await client.post("/api/toggle-eth")
+        data = await resp.json()
+        assert data["eth_disabled"] is True
+        assert dashboard_state.eth_disabled is True
