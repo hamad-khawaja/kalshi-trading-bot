@@ -30,7 +30,7 @@ strategy:
   poll_interval_seconds: 4
   min_edge_threshold: 0.05      # 5% minimum edge (was 0.04 — raise floor to filter noise)
   max_edge_threshold: 0.12      # Tighter cap on suspicious edges (was 0.15)
-  confidence_min: 0.65          # Require higher confidence (was 0.62 — still entering on marginal signals)
+  confidence_min: 0.70          # Raised from 0.65 — marginal confidence trades (0.65-0.70) had negative EV
   edge_expiry_decay_enabled: true
   edge_expiry_decay_max: 1.8    # At 1 min left, require 1.8x normal edge
   directional_max_spread: 0.15  # Skip wide-spread illiquid books
@@ -40,9 +40,9 @@ strategy:
   mm_min_spread: 0.05           # Minimum spread ($) for market-making
   # Stop-loss: exit when position drops beyond threshold
   stop_loss_enabled: true
-  stop_loss_pct: 0.20              # Exit when loss > 20% of entry price (was 15% — too tight, noise triggered SL before recovery)
+  stop_loss_pct: 0.30              # Exit when loss > 30% (was 20% — too tight, 67 SL trades at -$119 total, avg hold 64s = noise)
   stop_loss_min_bid: 0.05          # Don't sell if bid is below $0.05
-  stop_loss_min_hold_seconds: 60.0  # Wait 60s before SL can trigger (was 30s — noise triggered early exits)
+  stop_loss_min_hold_seconds: 120.0  # Wait 120s before SL can trigger (was 60s — stops fired on normal 15-min swings)
   # FOMO exploitation — DISABLED: 0/3 trades, all stopped out (-$1.41 total)
   fomo_enabled: false
   fomo_min_divergence: 0.20        # Require bigger gap (was 0.12)
@@ -55,9 +55,9 @@ strategy:
   fomo_min_implied_prob: 0.15
   # Trailing take-profit
   trailing_take_profit_enabled: true
-  trailing_take_profit_activation_cents: 0.10  # Profit to activate trailing (was 0.08 — avg win still half avg loss, let winners run)
+  trailing_take_profit_activation_cents: 0.12  # Let winners run more (was 0.10 — avg win still half avg loss)
   trailing_take_profit_drop_cents: 0.05        # Exit when price drops this from peak (was 0.03 — noise triggered exits)
-  take_profit_min_profit_cents: 0.10            # Widen fixed TP target (was 0.06 — exited winners too early)
+  take_profit_min_profit_cents: 0.12            # Widen fixed TP target (was 0.10 — exited winners too early)
   take_profit_time_decay_floor_cents: 0.05      # Higher floor prevents tiny TP exits (was 0.03)
   # Take-profit cooldown: block re-entry after TP
   take_profit_cooldown_seconds: 900.0          # 15 min — block for rest of window
@@ -73,13 +73,15 @@ strategy:
   # Pre-expiry exit: only exit if profitable or near-breakeven (don't sell losers at rock bottom)
   pre_expiry_exit_min_pnl_cents: -0.03  # Only pre-expiry exit if PnL >= -$0.03/contract
   # Entry filters
-  min_entry_price: 0.25             # Block entries below $0.25 (cheap contracts lose money)
-  yes_side_edge_multiplier: 1.2     # Require 20% more edge for YES entries (NO side is more profitable)
+  min_entry_price: 0.30             # Block entries below $0.30 (0.20-0.30 zone: 17% WR, -$64.89)
+  yes_side_edge_multiplier: 1.0     # No penalty (was 1.2 — data shows YES +$36.58 vs NO -$3.02, penalty was wrong)
   asset_edge_multipliers:
     ETH: 2.0                         # ETH is noisier: require 2x edge (was 1.5)
   asset_stop_loss_pct:
     ETH: 0.20                        # ETH gets wider stop (20%) to avoid noise stop-outs
   asset_directional_disabled: [ETH]  # ETH: MM-only (45% directional WR was dragging BTC profits)
+  # Max implied probability for directional trades: block when market is already very confident
+  max_directional_implied_prob: 0.70   # Skip when implied > 0.70 or < 0.30 (high-conviction market = unreliable edge)
   # Zone filter: block expensive directional trades
   zone_filter_enabled: true
   max_directional_price: 0.60
@@ -113,7 +115,7 @@ strategy:
   # Settlement-ride: enter after 10 min, hold to settlement
   settlement_ride_enabled: true
   settlement_ride_min_elapsed_seconds: 600.0
-  settlement_ride_min_edge: 0.03
+  settlement_ride_min_edge: 0.05    # Raised from 0.03 — low-conviction rides losing during quiet hours
   settlement_ride_min_implied_distance: 0.12
   settlement_ride_kelly_fraction: 0.10
   # Per-asset settlement ride overrides (ETH needs higher thresholds)
@@ -121,6 +123,8 @@ strategy:
     ETH: 0.08
   asset_settlement_ride_min_implied_distance:
     ETH: 0.22
+  # Disable settlement rides for specific assets (ETH settlement rides were unprofitable)
+  asset_settlement_ride_disabled: [ETH]
   # Disable market-making for specific assets (ETH MM was mostly stopped out)
   asset_market_maker_disabled: [ETH]
   # Certainty scalp: bet large on near-certain outcomes in last 3 min
@@ -148,7 +152,7 @@ risk:
   drawdown_limit_dollars: 20.0
   # Entry discipline
   entry_cooldown_seconds: 30     # Min seconds between fills on same market
-  max_contracts_per_cycle: 15    # Reduced — smaller entries to limit loss size
+  max_contracts_per_cycle: 10    # Reduced from 15 — multi-entry compounds losses when first entry is wrong
   # Fee-aware sizing at extreme prices
   fee_extreme_price_threshold: 0.25
   fee_extreme_kelly_multiplier: 1.5  # Enable fee boost at extremes (was 1.0)

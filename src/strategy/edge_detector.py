@@ -139,6 +139,46 @@ class EdgeDetector:
             raw_edge = implied - model_prob
             trade_price = 1.0 - implied  # NO price = 1 - YES implied
 
+        # Block NO-side trades when model prob is near 0.50 (no genuine conviction)
+        # Model prob <0.50 on NO means model thinks YES is more likely but buys NO
+        # because the market disagrees even more — these have 27% WR empirically
+        if side == "no" and model_prob > 0.48:
+            self.last_analysis = {
+                "side": side,
+                "raw_edge": round(raw_edge, 4),
+                "fee_drag": 0,
+                "net_edge": round(raw_edge, 4),
+                "model_prob": round(model_prob, 4),
+                "implied_prob": round(implied, 4),
+                "confidence": round(prediction.confidence, 4),
+                "edge_passed": False,
+                "confidence_ok": False,
+                "passed": False,
+                "using_fair_value": using_fair_value,
+                "decision": f"NO TRADE: NO-side with model prob {model_prob:.3f} > 0.48 (no genuine NO conviction)",
+            }
+            return None
+
+        # Block directional trades when market is already very confident
+        # (high implied prob = unreliable edge, model frequently wrong here)
+        max_ip = self._config.max_directional_implied_prob
+        if implied > max_ip or implied < (1.0 - max_ip):
+            self.last_analysis = {
+                "side": side,
+                "raw_edge": round(raw_edge, 4),
+                "fee_drag": 0,
+                "net_edge": round(raw_edge, 4),
+                "model_prob": round(model_prob, 4),
+                "implied_prob": round(implied, 4),
+                "confidence": round(prediction.confidence, 4),
+                "edge_passed": False,
+                "confidence_ok": False,
+                "passed": False,
+                "using_fair_value": using_fair_value,
+                "decision": f"NO TRADE: implied prob {implied:.3f} outside [{1-max_ip:.2f}, {max_ip:.2f}] (high-conviction market)",
+            }
+            return None
+
         # Compute fee drag per contract
         # Using maker fee since all orders use post_only=True
         fee_per_contract = self.compute_fee_dollars(1, trade_price, is_maker=True)

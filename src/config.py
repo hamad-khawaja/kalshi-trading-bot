@@ -126,6 +126,8 @@ class StrategyConfig(BaseModel):
     asset_stop_loss_pct: dict[str, float] = {}
     # Disable directional trading for specific assets (keep MM only)
     asset_directional_disabled: list[str] = []
+    # Max implied probability for directional trades (block when market is very confident)
+    max_directional_implied_prob: float = 0.70
     # Zone filter: block expensive directional trades
     zone_filter_enabled: bool = True
     max_directional_price: float = 0.60
@@ -168,6 +170,8 @@ class StrategyConfig(BaseModel):
     # Per-asset settlement ride overrides: noisier assets need higher thresholds
     asset_settlement_ride_min_edge: dict[str, float] = {}
     asset_settlement_ride_min_implied_distance: dict[str, float] = {}
+    # Disable settlement rides for specific assets
+    asset_settlement_ride_disabled: list[str] = []
     # Disable market-making for specific assets
     asset_market_maker_disabled: list[str] = []
     # Certainty scalp: bet large on near-certain outcomes in last 3 min
