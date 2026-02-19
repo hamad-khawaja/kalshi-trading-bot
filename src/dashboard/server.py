@@ -157,10 +157,13 @@ class DashboardState:
 class DashboardServer:
     """aiohttp web server serving the dashboard UI and SSE state stream."""
 
-    def __init__(self, state: DashboardState, host: str, port: int) -> None:
+    def __init__(
+        self, state: DashboardState, host: str, port: int, db=None
+    ) -> None:
         self._state = state
         self._host = host
         self._port = port
+        self._db = db
         self._app: web.Application | None = None
         self._runner: web.AppRunner | None = None
 
@@ -172,6 +175,7 @@ class DashboardServer:
         self._app.router.add_get("/api/state", self._handle_api_state)
         self._app.router.add_post("/api/toggle-trading", self._handle_toggle_trading)
         self._app.router.add_post("/api/toggle-quiet-hours", self._handle_toggle_quiet_hours)
+        self._app.router.add_get("/api/trades", self._handle_trades)
 
         self._runner = web.AppRunner(self._app)
         await self._runner.setup()
@@ -236,6 +240,32 @@ class DashboardServer:
             }),
             content_type="application/json",
         )
+
+    async def _handle_trades(self, request: web.Request) -> web.Response:
+        """Return recent trades from the database for the chart."""
+        if not self._db:
+            return web.Response(
+                text=json.dumps([]),
+                content_type="application/json",
+            )
+        try:
+            limit = int(request.query.get("limit", "200"))
+            trades = await self._db.get_recent_trades(limit=limit)
+            # Convert Decimal/datetime to JSON-safe types
+            for t in trades:
+                for k, v in t.items():
+                    if hasattr(v, "as_integer_ratio"):  # Decimal
+                        t[k] = float(v)
+            return web.Response(
+                text=json.dumps(trades, default=str),
+                content_type="application/json",
+            )
+        except Exception:
+            logger.warning("trades_api_error", exc_info=True)
+            return web.Response(
+                text=json.dumps([]),
+                content_type="application/json",
+            )
 
     async def _handle_toggle_quiet_hours(self, _request: web.Request) -> web.Response:
         # Only allow enabling if master toggle is active

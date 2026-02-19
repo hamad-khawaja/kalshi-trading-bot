@@ -126,7 +126,43 @@ a{color:#58a6ff}
 
 /* Section divider within combined panel */
 .panel-divider{border:none;border-top:1px solid #21262d;margin:8px 0}
+
+/* Chart view */
+#chart-view{display:none;padding:16px}
+#chart-view.visible{display:block}
+.chart-controls{display:flex;gap:8px;margin-bottom:12px;align-items:center}
+.chart-btn{padding:4px 12px;font-size:11px;font-weight:600;border:1px solid #30363d;border-radius:4px;cursor:pointer;font-family:inherit;background:#161b22;color:#8b949e;transition:all .2s}
+.chart-btn:hover{color:#c9d1d9;border-color:#8b949e}
+.chart-btn.active{background:#1a3a1a;color:#3fb950;border-color:#238636}
+.chart-container{background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:16px;margin-bottom:16px}
+.chart-stats{display:flex;gap:1px;background:#30363d;border-radius:6px;overflow:hidden;margin-bottom:16px}
+.chart-stat{flex:1;background:#0d1117;padding:12px 16px;text-align:center}
+.chart-stat .cs-val{font-size:20px;font-weight:700;font-variant-numeric:tabular-nums}
+.chart-stat .cs-label{font-size:10px;text-transform:uppercase;color:#8b949e;margin-top:2px;letter-spacing:0.5px}
+.trade-table{width:100%;border-collapse:collapse;font-size:12px}
+.trade-table th{text-align:left;padding:6px 8px;border-bottom:1px solid #30363d;color:#8b949e;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;font-weight:600}
+.trade-table td{padding:6px 8px;border-bottom:1px solid #21262d}
+.trade-table tr:hover{background:#161b22}
+.trade-table .pnl-pos{color:#3fb950;font-weight:600} .trade-table .pnl-neg{color:#f85149;font-weight:600}
+.trade-table .side-yes{color:#3fb950} .trade-table .side-no{color:#f85149}
+.trade-table .type-tag{font-size:10px;padding:1px 5px;border-radius:3px;font-weight:600;text-transform:uppercase}
+.type-tag.directional{background:#1a2a3a;color:#58a6ff}
+.type-tag.settlement_ride{background:#2a1a2a;color:#d2a8ff}
+.type-tag.settlement-ride{background:#2a1a2a;color:#d2a8ff}
+.type-tag.fomo{background:#2a2a1a;color:#d29922}
+.type-tag.certainty_scalp{background:#1a2a2a;color:#56d4dd}
+.type-tag.stop_loss{background:#2a1a1a;color:#f85149}
+.type-tag.take_profit{background:#1a3a1a;color:#3fb950}
+.type-tag.settle{background:#1a1a2a;color:#8b949e}
+.type-tag.pre_expiry{background:#2a2a1a;color:#ffa657}
+.type-tag.thesis_break{background:#2a1a2a;color:#d2a8ff}
+.nav-bar{display:flex;gap:0;background:#161b22;border-bottom:1px solid #30363d;padding:0 16px}
+.nav-btn{padding:8px 20px;font-size:13px;font-weight:600;color:#8b949e;background:transparent;border:none;border-bottom:2px solid transparent;cursor:pointer;font-family:inherit;transition:color .2s,border-color .2s}
+.nav-btn:hover{color:#c9d1d9}
+.nav-btn.active{color:#f0f6fc;border-bottom-color:#58a6ff}
 </style>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
 </head>
 <body>
 <div id="reconnect-banner">Disconnected — reconnecting&hellip;</div>
@@ -152,6 +188,12 @@ a{color:#58a6ff}
   </div>
 </div>
 
+<div class="nav-bar">
+  <button class="nav-btn active" data-view="dashboard" onclick="switchView('dashboard')">Dashboard</button>
+  <button class="nav-btn" data-view="trades" onclick="switchView('trades')">Trades</button>
+</div>
+
+<div id="dashboard-view">
 <div class="tab-bar" id="tab-bar">
   <button class="tab-btn active" data-asset="BTC"><span class="tab-dot btc"></span>BTC</button>
   <button class="tab-btn" data-asset="ETH"><span class="tab-dot eth"></span>ETH</button>
@@ -328,6 +370,43 @@ a{color:#58a6ff}
   <div class="panel full" id="p-log">
     <h2>Decision Log</h2>
     <div id="log"></div>
+  </div>
+</div>
+</div><!-- end dashboard-view -->
+
+<div id="chart-view">
+  <div class="chart-stats" id="chart-stats">
+    <div class="chart-stat"><div class="cs-val" id="cs-total-trades">--</div><div class="cs-label">Total Trades</div></div>
+    <div class="chart-stat"><div class="cs-val" id="cs-win-rate">--</div><div class="cs-label">Win Rate</div></div>
+    <div class="chart-stat"><div class="cs-val" id="cs-total-pnl">--</div><div class="cs-label">Total P&amp;L</div></div>
+    <div class="chart-stat"><div class="cs-val" id="cs-avg-pnl">--</div><div class="cs-label">Avg P&amp;L</div></div>
+    <div class="chart-stat"><div class="cs-val" id="cs-best">--</div><div class="cs-label">Best Trade</div></div>
+    <div class="chart-stat"><div class="cs-val" id="cs-worst">--</div><div class="cs-label">Worst Trade</div></div>
+  </div>
+  <div class="chart-controls">
+    <button class="chart-btn active" data-filter="all" onclick="filterChart('all')">All</button>
+    <button class="chart-btn" data-filter="BTC" onclick="filterChart('BTC')">BTC</button>
+    <button class="chart-btn" data-filter="ETH" onclick="filterChart('ETH')">ETH</button>
+    <span style="color:#30363d;margin:0 4px">|</span>
+    <button class="chart-btn active" data-action="all" onclick="filterAction('all')">All Types</button>
+    <button class="chart-btn" data-action="settle" onclick="filterAction('settle')">Settlement</button>
+    <button class="chart-btn" data-action="stop_loss" onclick="filterAction('stop_loss')">Stop Loss</button>
+    <button class="chart-btn" data-action="take_profit" onclick="filterAction('take_profit')">Take Profit</button>
+    <button class="chart-btn" data-action="thesis_break" onclick="filterAction('thesis_break')">Thesis Break</button>
+    <span style="flex:1"></span>
+    <button class="chart-btn" onclick="refreshTrades()" style="border-color:#58a6ff;color:#58a6ff">Refresh</button>
+  </div>
+  <div class="chart-container">
+    <canvas id="equity-chart" height="300"></canvas>
+  </div>
+  <div class="chart-container">
+    <canvas id="pnl-chart" height="200"></canvas>
+  </div>
+  <div class="chart-container" style="max-height:400px;overflow-y:auto">
+    <table class="trade-table">
+      <thead><tr><th>Time</th><th>Market</th><th>Side</th><th>Action</th><th>Count</th><th>Price</th><th>Fees</th><th>P&amp;L</th></tr></thead>
+      <tbody id="trade-table-body"></tbody>
+    </table>
   </div>
 </div>
 
@@ -901,6 +980,307 @@ a{color:#58a6ff}
       label.className = 'toggle-label paused';
       track.className = 'toggle-track paused';
     }
+  }
+
+  // ===== View switching =====
+  let currentView = 'dashboard';
+  window.switchView = function(view) {
+    currentView = view;
+    document.querySelectorAll('.nav-btn').forEach(b => {
+      b.classList.toggle('active', b.dataset.view === view);
+    });
+    $('dashboard-view').style.display = view === 'dashboard' ? '' : 'none';
+    $('chart-view').style.display = view === 'trades' ? 'block' : 'none';
+    if (view === 'trades' && allTrades.length === 0) refreshTrades();
+  };
+
+  // ===== Trade chart =====
+  let allTrades = [];
+  let chartFilter = 'all';
+  let actionFilter = 'all';
+  let equityChart = null;
+  let pnlChart = null;
+
+  window.filterChart = function(filter) {
+    chartFilter = filter;
+    document.querySelectorAll('.chart-btn[data-filter]').forEach(b => {
+      b.classList.toggle('active', b.dataset.filter === filter);
+    });
+    renderCharts();
+  };
+
+  window.filterAction = function(filter) {
+    actionFilter = filter;
+    document.querySelectorAll('.chart-btn[data-action]').forEach(b => {
+      b.classList.toggle('active', b.dataset.action === filter);
+    });
+    renderCharts();
+  };
+
+  window.refreshTrades = function() {
+    fetch('/api/trades?limit=500')
+      .then(r => r.json())
+      .then(trades => {
+        allTrades = trades.sort((a, b) => new Date(a.exit_time || a.entry_time) - new Date(b.exit_time || b.entry_time));
+        renderCharts();
+      })
+      .catch(err => console.error('trades fetch error', err));
+  };
+
+  function getFilteredTrades() {
+    return allTrades.filter(t => {
+      // Only show exit trades (settle, stop_loss, take_profit, etc) not buy entries
+      if (t.action === 'buy') return false;
+      if (chartFilter !== 'all') {
+        const ticker = (t.market_ticker || '').toUpperCase();
+        if (chartFilter === 'BTC' && !ticker.includes('BTC')) return false;
+        if (chartFilter === 'ETH' && !ticker.includes('ETH')) return false;
+      }
+      if (actionFilter !== 'all' && t.action !== actionFilter) return false;
+      return true;
+    });
+  }
+
+  function renderCharts() {
+    const trades = getFilteredTrades();
+    renderStats(trades);
+    renderEquityChart(trades);
+    renderPnlChart(trades);
+    renderTradeTable(trades);
+  }
+
+  function renderStats(trades) {
+    const total = trades.length;
+    const wins = trades.filter(t => (t.pnl_dollars || 0) > 0).length;
+    const pnls = trades.map(t => t.pnl_dollars || 0);
+    const totalPnl = pnls.reduce((a, b) => a + b, 0);
+
+    $('cs-total-trades').textContent = total;
+    const wr = $('cs-win-rate');
+    if (total > 0) {
+      const rate = (wins / total * 100).toFixed(1);
+      wr.textContent = rate + '%';
+      wr.style.color = wins / total >= 0.5 ? '#3fb950' : '#f85149';
+    } else { wr.textContent = '--'; wr.style.color = '#8b949e'; }
+
+    const tp = $('cs-total-pnl');
+    tp.textContent = (totalPnl >= 0 ? '+' : '') + '$' + totalPnl.toFixed(2);
+    tp.style.color = totalPnl >= 0 ? '#3fb950' : '#f85149';
+
+    const avg = $('cs-avg-pnl');
+    if (total > 0) {
+      const a = totalPnl / total;
+      avg.textContent = (a >= 0 ? '+' : '') + '$' + a.toFixed(2);
+      avg.style.color = a >= 0 ? '#3fb950' : '#f85149';
+    } else { avg.textContent = '--'; avg.style.color = '#8b949e'; }
+
+    const best = $('cs-best');
+    if (pnls.length > 0) {
+      const b = Math.max(...pnls);
+      best.textContent = '+$' + b.toFixed(2);
+      best.style.color = '#3fb950';
+    } else { best.textContent = '--'; best.style.color = '#8b949e'; }
+
+    const worst = $('cs-worst');
+    if (pnls.length > 0) {
+      const w = Math.min(...pnls);
+      worst.textContent = '$' + w.toFixed(2);
+      worst.style.color = '#f85149';
+    } else { worst.textContent = '--'; worst.style.color = '#8b949e'; }
+  }
+
+  function renderEquityChart(trades) {
+    const ctx = $('equity-chart').getContext('2d');
+    if (equityChart) equityChart.destroy();
+
+    let cumPnl = 0;
+    const dataPoints = [{x: trades.length > 0 ? new Date(trades[0].exit_time || trades[0].entry_time).getTime() - 60000 : Date.now(), y: 0}];
+    for (const t of trades) {
+      cumPnl += (t.pnl_dollars || 0);
+      dataPoints.push({
+        x: new Date(t.exit_time || t.entry_time).getTime(),
+        y: Math.round(cumPnl * 100) / 100,
+      });
+    }
+
+    // Trade markers
+    const markers = trades.map(t => ({
+      x: new Date(t.exit_time || t.entry_time).getTime(),
+      y: 0, // will be set below
+      pnl: t.pnl_dollars || 0,
+      action: t.action,
+      ticker: t.market_ticker,
+      side: t.side,
+      count: t.count,
+    }));
+    // Set y to cumulative PnL at that point
+    let cum2 = 0;
+    for (let i = 0; i < trades.length; i++) {
+      cum2 += (trades[i].pnl_dollars || 0);
+      markers[i].y = Math.round(cum2 * 100) / 100;
+    }
+
+    equityChart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        datasets: [
+          {
+            label: 'Cumulative P&L',
+            data: dataPoints,
+            borderColor: cumPnl >= 0 ? '#3fb950' : '#f85149',
+            backgroundColor: (cumPnl >= 0 ? 'rgba(63,185,80,' : 'rgba(248,81,73,') + '0.1)',
+            fill: true,
+            tension: 0.1,
+            borderWidth: 2,
+            pointRadius: 0,
+          },
+          {
+            label: 'Trades',
+            data: markers,
+            type: 'scatter',
+            pointRadius: 6,
+            pointHoverRadius: 9,
+            pointBackgroundColor: markers.map(m => m.pnl >= 0 ? '#3fb950' : '#f85149'),
+            pointBorderColor: markers.map(m => m.pnl >= 0 ? '#238636' : '#da3633'),
+            pointBorderWidth: 2,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'nearest', intersect: true },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: function(ctx) {
+                const raw = ctx.raw;
+                if (raw.ticker) {
+                  const sign = raw.pnl >= 0 ? '+' : '';
+                  return [
+                    raw.ticker,
+                    raw.action.replace('_', ' ') + ' ' + raw.side.toUpperCase() + ' x' + raw.count,
+                    'P&L: ' + sign + '$' + raw.pnl.toFixed(2),
+                    'Cumulative: $' + raw.y.toFixed(2),
+                  ];
+                }
+                return 'P&L: $' + raw.y.toFixed(2);
+              },
+            },
+            backgroundColor: '#161b22',
+            titleColor: '#f0f6fc',
+            bodyColor: '#c9d1d9',
+            borderColor: '#30363d',
+            borderWidth: 1,
+          },
+        },
+        scales: {
+          x: {
+            type: 'time',
+            time: { tooltipFormat: 'MMM d, HH:mm', displayFormats: { hour: 'HH:mm', minute: 'HH:mm' } },
+            grid: { color: '#21262d' },
+            ticks: { color: '#8b949e', font: { size: 11 } },
+          },
+          y: {
+            grid: { color: '#21262d' },
+            ticks: {
+              color: '#8b949e',
+              font: { size: 11 },
+              callback: v => '$' + v.toFixed(2),
+            },
+          },
+        },
+      },
+    });
+  }
+
+  function renderPnlChart(trades) {
+    const ctx = $('pnl-chart').getContext('2d');
+    if (pnlChart) pnlChart.destroy();
+
+    const bars = trades.map(t => ({
+      x: new Date(t.exit_time || t.entry_time).getTime(),
+      y: t.pnl_dollars || 0,
+      ticker: t.market_ticker,
+      action: t.action,
+      side: t.side,
+    }));
+
+    pnlChart = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        datasets: [{
+          label: 'Trade P&L',
+          data: bars,
+          backgroundColor: bars.map(b => b.y >= 0 ? 'rgba(63,185,80,0.7)' : 'rgba(248,81,73,0.7)'),
+          borderColor: bars.map(b => b.y >= 0 ? '#3fb950' : '#f85149'),
+          borderWidth: 1,
+          borderRadius: 2,
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: function(ctx) {
+                const r = ctx.raw;
+                const sign = r.y >= 0 ? '+' : '';
+                return [r.ticker, r.action.replace('_', ' ') + ' ' + r.side.toUpperCase(), sign + '$' + r.y.toFixed(2)];
+              },
+            },
+            backgroundColor: '#161b22',
+            titleColor: '#f0f6fc',
+            bodyColor: '#c9d1d9',
+            borderColor: '#30363d',
+            borderWidth: 1,
+          },
+        },
+        scales: {
+          x: {
+            type: 'time',
+            time: { tooltipFormat: 'MMM d, HH:mm', displayFormats: { hour: 'HH:mm', minute: 'HH:mm' } },
+            grid: { color: '#21262d' },
+            ticks: { color: '#8b949e', font: { size: 11 } },
+          },
+          y: {
+            grid: { color: '#21262d' },
+            ticks: {
+              color: '#8b949e',
+              font: { size: 11 },
+              callback: v => '$' + v.toFixed(2),
+            },
+          },
+        },
+      },
+    });
+  }
+
+  function renderTradeTable(trades) {
+    const tbody = $('trade-table-body');
+    const rows = trades.slice().reverse();
+    tbody.innerHTML = rows.map(t => {
+      const pnl = t.pnl_dollars || 0;
+      const pnlCls = pnl >= 0 ? 'pnl-pos' : 'pnl-neg';
+      const sign = pnl >= 0 ? '+' : '';
+      const sideCls = t.side === 'yes' ? 'side-yes' : 'side-no';
+      const time = t.exit_time ? new Date(t.exit_time).toLocaleString([], {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'}) : '--';
+      const actionLabel = (t.action || '').replace('_', ' ');
+      const actionCls = (t.action || '').replace('_', '-');
+      return '<tr>' +
+        '<td style="color:#8b949e">' + time + '</td>' +
+        '<td style="color:#c9d1d9">' + (t.market_ticker || '') + '</td>' +
+        '<td class="' + sideCls + '">' + (t.side || '').toUpperCase() + '</td>' +
+        '<td><span class="type-tag ' + actionCls + '">' + actionLabel + '</span></td>' +
+        '<td>' + (t.count || 0) + '</td>' +
+        '<td>$' + (t.price_dollars || 0).toFixed(2) + '</td>' +
+        '<td style="color:#8b949e">$' + (t.fees_dollars || 0).toFixed(2) + '</td>' +
+        '<td class="' + pnlCls + '">' + sign + '$' + pnl.toFixed(2) + '</td>' +
+        '</tr>';
+    }).join('');
   }
 
   setInterval(tickCountdown, 1000);
