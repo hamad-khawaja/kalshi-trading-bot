@@ -127,6 +127,7 @@ class TradingBot:
             self._dashboard_state,
             settings.dashboard.host,
             settings.dashboard.port,
+            db=self._db,
         ) if settings.dashboard.enabled else None
 
         # Feature engine (pass shared settlement_history dict reference)
