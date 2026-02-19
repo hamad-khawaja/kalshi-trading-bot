@@ -7,7 +7,7 @@ from decimal import Decimal
 
 import structlog
 
-from src.config import RiskConfig
+from src.config import RiskConfig, StrategyConfig
 from src.data.models import TradeSignal
 from src.risk.volatility import VolatilityTracker
 
@@ -22,8 +22,9 @@ class PositionSizer:
     and percentage-of-bankroll limit.
     """
 
-    def __init__(self, config: RiskConfig):
+    def __init__(self, config: RiskConfig, strategy_config: StrategyConfig | None = None):
         self._config = config
+        self._strategy_config = strategy_config
         self._kelly_fraction = config.kelly_fraction
 
     def size(
@@ -63,21 +64,42 @@ class PositionSizer:
         if kelly_f <= 0:
             return 0
 
-        # Apply fractional Kelly
-        f = kelly_f * self._kelly_fraction
+        # Apply fractional Kelly (settlement_ride / certainty_scalp use custom fractions)
+        if (
+            signal.signal_type == "certainty_scalp"
+            and self._strategy_config is not None
+        ):
+            effective_kelly = self._strategy_config.certainty_scalp_kelly_fraction
+        elif (
+            signal.signal_type == "settlement_ride"
+            and self._strategy_config is not None
+        ):
+            effective_kelly = self._strategy_config.settlement_ride_kelly_fraction
+            # Scale with implied distance: bigger when more certain, smaller when marginal
+            # Linear from 0.5x at min_distance to 1.5x at distance=0.45
+            implied_dist = abs(signal.implied_probability - 0.5)
+            min_dist = self._strategy_config.settlement_ride_min_implied_distance
+            max_dist = 0.45
+            if max_dist > min_dist:
+                t = min(1.0, max(0.0, (implied_dist - min_dist) / (max_dist - min_dist)))
+                dist_mult = 0.5 + t * 1.0  # 0.5x → 1.5x
+                effective_kelly *= dist_mult
+        else:
+            effective_kelly = self._kelly_fraction
+        f = kelly_f * effective_kelly
 
         # Adjust Kelly fraction for volatility regime
         if vol_tracker is not None:
-            vol_adjusted = vol_tracker.adjust_kelly_fraction(self._kelly_fraction)
-            f *= vol_adjusted / self._kelly_fraction
+            vol_adjusted = vol_tracker.adjust_kelly_fraction(effective_kelly)
+            f *= vol_adjusted / effective_kelly
 
         # Zone-based Kelly scaling: cheap zones get more, expensive zones get less
         if signal.entry_zone > 0 and signal.entry_zone <= len(self._config.zone_kelly_multipliers):
             zone_mult = self._config.zone_kelly_multipliers[signal.entry_zone - 1]
             f *= zone_mult
 
-        # Scale by confidence (sqrt to avoid quadratic scaling with Kelly)
-        f *= math.sqrt(signal.confidence)
+        # Scale by confidence (linear for stronger differentiation)
+        f *= signal.confidence
 
         # Fee-aware boost: increase position at extreme prices where fees
         # are negligible (~0.2% at 20c vs ~1.56% at 50c)
@@ -97,7 +119,7 @@ class PositionSizer:
         if (
             self._config.time_scale_enabled
             and time_to_expiry is not None
-            and signal.signal_type != "market_making"
+            and signal.signal_type not in ("market_making", "certainty_scalp")
         ):
             full_time = self._config.time_scale_full_seconds
             min_mult = self._config.time_scale_min_multiplier

@@ -74,6 +74,27 @@ a{color:#58a6ff}
 .trade-pnl.win{color:#3fb950} .trade-pnl.loss{color:#f85149}
 .trade-meta{color:#8b949e;font-size:11px}
 .trade-action{color:#c9d1d9;font-weight:500;text-transform:capitalize}
+.trade-tag{font-size:10px;padding:1px 5px;border-radius:3px;font-weight:600;text-transform:uppercase;letter-spacing:0.3px}
+.trade-tag.directional{background:#1a2a3a;color:#58a6ff}
+.trade-tag.settlement-ride{background:#2a1a2a;color:#d2a8ff}
+.trade-tag.fomo{background:#2a2a1a;color:#d29922}
+.trade-tag.market-making{background:#1a2a1a;color:#3fb950}
+.trade-tag.averaging{background:#2a1a1a;color:#f0883e}
+.toggle-wrap{display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none}
+.toggle-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;min-width:54px}
+.toggle-label.active{color:#3fb950}
+.toggle-label.paused{color:#f85149;animation:pulse 2s ease-in-out infinite}
+.toggle-track{width:40px;height:20px;border-radius:10px;position:relative;transition:background .3s,border-color .3s;border:1px solid}
+.toggle-track.active{background:#1a3a1a;border-color:#238636}
+.toggle-track.paused{background:#2a1a1a;border-color:#da3633}
+.toggle-knob{position:absolute;top:2px;width:14px;height:14px;border-radius:50%;transition:left .3s,background .3s}
+.toggle-track.active .toggle-knob{left:22px;background:#3fb950}
+.toggle-track.paused .toggle-knob{left:2px;background:#f85149}
+.toggle-track.disabled{background:#161b22;border-color:#21262d;opacity:0.4;cursor:not-allowed}
+.toggle-track.disabled .toggle-knob{left:2px;background:#484f58}
+.toggle-wrap.disabled{opacity:0.4;cursor:not-allowed}
+.toggle-label.disabled{color:#484f58}
+.toggle-divider{width:1px;height:18px;background:#30363d}
 #reconnect-banner{display:none;position:fixed;top:0;left:0;right:0;background:#da3633;color:#fff;text-align:center;padding:6px;font-size:12px;font-weight:600;z-index:999}
 .countdown{font-size:20px;font-weight:700;margin-top:4px;font-variant-numeric:tabular-nums}
 .countdown.urgent{color:#f85149;animation:pulse 1s ease-in-out infinite}
@@ -119,6 +140,15 @@ a{color:#58a6ff}
     <span>Active <span id="active-time">0s</span></span>
     <span>Mode: <span id="mode">--</span></span>
     <span id="utc-clock" style="font-weight:600;font-size:13px;padding:2px 8px;border-radius:4px">--:--:-- UTC</span>
+    <div class="toggle-wrap" id="trade-toggle" onclick="toggleTrading()">
+      <span class="toggle-label active" id="toggle-label">Active</span>
+      <div class="toggle-track active" id="toggle-track"><div class="toggle-knob"></div></div>
+    </div>
+    <div class="toggle-divider"></div>
+    <div class="toggle-wrap disabled" id="qh-toggle" onclick="toggleQuietHours()">
+      <span class="toggle-label disabled" id="qh-label">Quiet Hrs</span>
+      <div class="toggle-track disabled" id="qh-track"><div class="toggle-knob"></div></div>
+    </div>
   </div>
 </div>
 
@@ -138,6 +168,14 @@ a{color:#58a6ff}
     <div class="stat-label">Total P&amp;L</div>
   </div>
   <div class="stat-card">
+    <div class="stat-value neutral" id="sum-pnl-btc">--</div>
+    <div class="stat-label"><span class="tab-dot btc" style="width:6px;height:6px;display:inline-block;vertical-align:middle;margin-right:3px"></span>BTC P&amp;L</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value neutral" id="sum-pnl-eth">--</div>
+    <div class="stat-label"><span class="tab-dot eth" style="width:6px;height:6px;display:inline-block;vertical-align:middle;margin-right:3px"></span>ETH P&amp;L</div>
+  </div>
+  <div class="stat-card">
     <div class="stat-value" id="sum-trades">--</div>
     <div class="stat-label">Trades Today</div>
   </div>
@@ -155,7 +193,7 @@ a{color:#58a6ff}
   <!-- Row 1: Market | Price | Prediction -->
   <div class="panel" id="p-market">
     <h2>Market</h2>
-    <div class="val" id="market-ticker">--</div>
+    <div class="val"><a id="market-ticker" href="#" target="_blank" rel="noopener" style="color:#58a6ff;text-decoration:none">--</a></div>
     <div class="sub" id="market-title" style="color:#f0f6fc;font-size:13px;font-weight:600;margin:4px 0">--</div>
     <div class="countdown ok" id="market-countdown">--:--</div>
     <div class="sub" id="market-volume">--</div>
@@ -360,6 +398,12 @@ a{color:#58a6ff}
     // Update quiet hours from server config
     if (s.quiet_hours_utc) quietHoursUTC = s.quiet_hours_utc;
 
+    // Sync trading toggles with server state
+    if (s.trading_paused != null) {
+      updateToggleButton(s.trading_paused);
+      updateQHToggle(s.quiet_hours_override || false, s.trading_paused);
+    }
+
     // Auto-detect available assets from per_asset keys and add tabs dynamically
     const pa = s.per_asset || {};
     updateTabBar(Object.keys(pa));
@@ -374,13 +418,21 @@ a{color:#58a6ff}
 
     // --- Summary Bar (shared data from risk) ---
     const risk = s.risk || {};
-    renderSummaryBar(risk);
+    renderSummaryBar(risk, s.per_asset_pnl);
 
     // Update price panel header
     $('price-header').textContent = activeAsset + ' Prices';
 
-    // Market
-    $('market-ticker').textContent = m.ticker || '--';
+    // Market (with Kalshi link)
+    const tickerEl = $('market-ticker');
+    tickerEl.textContent = m.ticker || '--';
+    const kalshiUrl = buildKalshiUrl(m.ticker, m.event_ticker);
+    if (kalshiUrl) {
+      tickerEl.href = kalshiUrl;
+      tickerEl.style.cursor = 'pointer';
+    } else {
+      tickerEl.removeAttribute('href');
+    }
     $('market-title').textContent = m.yes_sub_title || m.title || '--';
     $('market-volume').textContent = m.volume != null ? 'Vol: ' + fmtVol(m.volume) : '--';
     if (m.close_time) { window._closeTime = new Date(m.close_time).getTime(); }
@@ -580,8 +632,13 @@ a{color:#58a6ff}
           const cls = isWin ? 'win' : 'loss';
           const sign = isWin ? '+' : '';
           const action = t.action.replace('_', ' ');
+          const st = t.signal_type || '';
+          const tagCls = st.replace('_', '-');
+          const tagLabel = st ? st.replace('_', ' ') : '';
+          const tagHtml = tagLabel ? '<span class="trade-tag ' + tagCls + '">' + tagLabel + '</span>' : '';
           return '<div class="trade-hist-row">' +
             '<span class="trade-arrow ' + cls + '">' + arrow + '</span>' +
+            tagHtml +
             '<span class="trade-action">' + action + '</span>' +
             '<span style="color:#8b949e">' + t.side.toUpperCase() + '</span>' +
             '<span style="color:#8b949e">$' + (t.size || 0).toFixed(2) + '</span>' +
@@ -608,7 +665,7 @@ a{color:#58a6ff}
   }
 
   // Render summary bar stats
-  function renderSummaryBar(risk) {
+  function renderSummaryBar(risk, perAssetPnl) {
     const bal = $('sum-balance');
     if (risk.balance != null) {
       bal.textContent = '$' + Number(risk.balance).toFixed(2);
@@ -648,6 +705,20 @@ a{color:#58a6ff}
     } else {
       fees.textContent = '$0.00';
       fees.className = 'stat-value neutral';
+    }
+
+    // Per-asset P&L
+    for (const [asset, elId] of [['BTC', 'sum-pnl-btc'], ['ETH', 'sum-pnl-eth']]) {
+      const el = $(elId);
+      const val = (perAssetPnl || {})[asset];
+      if (val != null && val !== 0) {
+        const sign = val >= 0 ? '+' : '';
+        el.textContent = sign + '$' + Number(val).toFixed(2);
+        el.className = 'stat-value' + (val >= 0 ? ' pos' : ' neg');
+      } else {
+        el.textContent = '$0.00';
+        el.className = 'stat-value neutral';
+      }
     }
   }
 
@@ -719,6 +790,26 @@ a{color:#58a6ff}
     return h + 'h ' + m + 'm';
   }
 
+  const kalshiSlugs = {
+    'KXBTC15M': 'bitcoin-price-up-down',
+    'KXETH15M': 'eth-15m-price-up-down',
+  };
+  function buildKalshiUrl(ticker, eventTicker) {
+    if (!ticker) return null;
+    // Derive series from ticker (e.g. KXBTC15M-26FEB172215-15 → KXBTC15M)
+    const series = ticker.split('-')[0].toUpperCase();
+    const slug = kalshiSlugs[series];
+    if (!slug) return 'https://kalshi.com/markets/' + series.toLowerCase();
+    // Use event_ticker if available, otherwise derive from ticker (drop last segment)
+    let evt = eventTicker;
+    if (!evt) {
+      const parts = ticker.split('-');
+      if (parts.length >= 2) evt = parts.slice(0, -1).join('-');
+      else evt = ticker;
+    }
+    return 'https://kalshi.com/markets/' + series.toLowerCase() + '/' + slug + '/' + evt.toLowerCase();
+  }
+
   function fmtVol(v) {
     if (v >= 1000) return (v/1000).toFixed(1) + 'k';
     return v;
@@ -755,6 +846,60 @@ a{color:#58a6ff}
       el.style.background = '#1a3a1a';
       el.style.color = '#3fb950';
       el.style.border = '1px solid #238636';
+    }
+  }
+
+  // Trading toggle
+  window.toggleTrading = function() {
+    fetch('/api/toggle-trading', {method: 'POST'})
+      .then(r => r.json())
+      .then(d => {
+        updateToggleButton(d.trading_paused);
+        updateQHToggle(d.quiet_hours_override, d.trading_paused);
+      })
+      .catch(err => console.error('toggle error', err));
+  };
+
+  // Quiet hours override toggle
+  window.toggleQuietHours = function() {
+    const wrap = $('qh-toggle');
+    if (wrap.classList.contains('disabled')) return;
+    fetch('/api/toggle-quiet-hours', {method: 'POST'})
+      .then(r => r.json())
+      .then(d => { if (!d.error) updateQHToggle(d.quiet_hours_override, false); })
+      .catch(err => console.error('qh toggle error', err));
+  };
+
+  function updateToggleButton(paused) {
+    const label = $('toggle-label');
+    const track = $('toggle-track');
+    if (paused) {
+      label.textContent = 'Paused';
+      label.className = 'toggle-label paused';
+      track.className = 'toggle-track paused';
+    } else {
+      label.textContent = 'Active';
+      label.className = 'toggle-label active';
+      track.className = 'toggle-track active';
+    }
+  }
+
+  function updateQHToggle(override, masterPaused) {
+    const wrap = $('qh-toggle');
+    const label = $('qh-label');
+    const track = $('qh-track');
+    if (masterPaused) {
+      wrap.className = 'toggle-wrap disabled';
+      label.className = 'toggle-label disabled';
+      track.className = 'toggle-track disabled';
+    } else if (override) {
+      wrap.className = 'toggle-wrap';
+      label.className = 'toggle-label active';
+      track.className = 'toggle-track active';
+    } else {
+      wrap.className = 'toggle-wrap';
+      label.className = 'toggle-label paused';
+      track.className = 'toggle-track paused';
     }
   }
 

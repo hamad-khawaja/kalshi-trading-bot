@@ -267,6 +267,67 @@ class TestRiskManager:
         )
         assert decision.approved
 
+    def test_current_exposure_overrides_approximation(
+        self, risk_manager: RiskManager, sample_signal: TradeSignal
+    ):
+        """When current_exposure_dollars is provided, it's used instead of the
+        hardcoded $0.50 per-contract approximation from positions."""
+        positions = [
+            Position(ticker="other-market", market_exposure=100),
+        ]
+        # With hardcoded approximation: 100 * $0.50 = $50 exposure, would pass
+        # With actual exposure: $490, only $10 headroom vs $500 limit
+        # Signal price is $0.53, count=50 => new exposure = $26.50, total = $516.50 > $500
+        decision = risk_manager.check(
+            sample_signal,
+            count=50,
+            balance=Decimal("1000"),
+            positions=positions,
+            time_to_expiry_seconds=600,
+            current_exposure_dollars=Decimal("490"),
+        )
+        assert not decision.approved
+        assert "exposure" in decision.reason.lower()
+
+    def test_current_exposure_none_uses_fallback(
+        self, risk_manager: RiskManager, sample_signal: TradeSignal
+    ):
+        """When current_exposure_dollars is None, falls back to position-based estimate."""
+        positions = [
+            Position(ticker="other-market", market_exposure=10),
+        ]
+        # Fallback: 10 * $0.50 = $5 exposure, well under $500 limit
+        decision = risk_manager.check(
+            sample_signal,
+            count=5,
+            balance=Decimal("1000"),
+            positions=positions,
+            time_to_expiry_seconds=600,
+            current_exposure_dollars=None,
+        )
+        assert decision.approved
+
+    def test_breakeven_trade_not_counted_as_win(self, risk_manager: RiskManager):
+        """Breakeven (pnl=0) trades don't count as wins or losses."""
+        risk_manager.record_trade(Decimal("-10"))
+        risk_manager.record_trade(Decimal("-10"))
+        assert risk_manager.consecutive_losses == 2
+
+        # Breakeven should NOT reset the loss streak
+        risk_manager.record_trade(Decimal("0"))
+        assert risk_manager.consecutive_losses == 2
+        assert risk_manager.win_rate == 0.0  # 0 wins / 3 settled
+
+    def test_breakeven_trade_not_counted_as_loss(self, risk_manager: RiskManager):
+        """Breakeven (pnl=0) trades don't extend the loss streak."""
+        risk_manager.record_trade(Decimal("5"))
+        assert risk_manager.consecutive_wins == 1
+
+        # Breakeven should NOT reset the win streak
+        risk_manager.record_trade(Decimal("0"))
+        assert risk_manager.consecutive_wins == 1
+        assert risk_manager.win_rate == 0.5  # 1 win / 2 settled
+
 
 class TestVolatilityTracker:
     def test_regime_classification(self):

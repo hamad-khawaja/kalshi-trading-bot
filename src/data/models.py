@@ -215,8 +215,9 @@ class TradeSignal(BaseModel):
     suggested_price_dollars: str
     suggested_count: int = 0
     timestamp: datetime
-    signal_type: Literal["directional", "market_making", "fomo", "averaging"] = "directional"
+    signal_type: Literal["directional", "market_making", "fomo", "averaging", "settlement_ride", "certainty_scalp"] = "directional"
     entry_zone: int = 0  # Risk zone 1-5 (0 = unknown/MM)
+    post_only: bool | None = None  # Override: True=maker, False=taker, None=default
 
 
 class CompletedTrade(BaseModel):

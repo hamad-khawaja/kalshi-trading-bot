@@ -43,6 +43,7 @@ class RiskManager:
         self._config = config
         self._daily_pnl = Decimal("0")
         self._daily_pnl_date: date | None = None
+        self._daily_pnl_peak = Decimal("0")  # High-water mark for drawdown tracking
         self._trades_today = 0
         self._trades_today_date: date | None = None
         self._consecutive_losses = 0
@@ -59,6 +60,7 @@ class RiskManager:
         balance: Decimal,
         positions: list[Position],
         time_to_expiry_seconds: float,
+        current_exposure_dollars: Decimal | None = None,
     ) -> RiskDecision:
         """Run all risk checks sequentially. Returns first failure or approval."""
         self._reset_daily_if_needed()
@@ -76,6 +78,16 @@ class RiskManager:
                 False,
                 f"Daily loss limit hit: ${self._daily_pnl}",
             )
+
+        # 2b. Drawdown circuit breaker: stop if daily P&L drops X from peak
+        if self._config.drawdown_limit_enabled:
+            drawdown = self._daily_pnl_peak - self._daily_pnl
+            limit = Decimal(str(self._config.drawdown_limit_dollars))
+            if drawdown >= limit:
+                return RiskDecision(
+                    False,
+                    f"Drawdown limit: PnL dropped ${float(drawdown):.2f} from peak ${float(self._daily_pnl_peak):.2f}",
+                )
 
         # 3. Position count per market (with per-asset override)
         max_position = self._config.max_position_per_market
@@ -96,11 +108,14 @@ class RiskManager:
                 f"Market position limit: {market_position} + {count} > {max_position}",
             )
 
-        # 4. Total exposure cap
-        total_exposure = sum(
-            abs(p.market_exposure) * Decimal("0.50")  # Approximate mid-price
-            for p in positions
-        )
+        # 4. Total exposure cap (use actual exposure from position tracker when available)
+        if current_exposure_dollars is not None:
+            total_exposure = current_exposure_dollars
+        else:
+            total_exposure = sum(
+                abs(p.market_exposure) * Decimal("0.50")
+                for p in positions
+            )
         new_exposure = Decimal(str(count)) * Decimal(signal.suggested_price_dollars)
         if total_exposure + new_exposure > Decimal(
             str(self._config.max_total_exposure_dollars)
@@ -157,10 +172,16 @@ class RiskManager:
         self._reset_daily_if_needed()
 
         self._daily_pnl += pnl
+        if self._daily_pnl > self._daily_pnl_peak:
+            self._daily_pnl_peak = self._daily_pnl
         self._total_settled += 1
         self._last_pnl = pnl
 
-        if pnl < 0:
+        if pnl > 0:
+            self._consecutive_losses = 0
+            self._consecutive_wins += 1
+            self._total_wins += 1
+        elif pnl < 0:
             self._consecutive_losses += 1
             self._consecutive_wins = 0
             if self._consecutive_losses >= self._config.max_consecutive_losses:
@@ -174,10 +195,7 @@ class RiskManager:
                     losses=self._consecutive_losses,
                     cooldown_until=self._cooldown_until.isoformat(),
                 )
-        else:
-            self._consecutive_losses = 0
-            self._consecutive_wins += 1
-            self._total_wins += 1
+        # pnl == 0: breakeven — don't count as win or loss, don't reset streaks
 
         logger.info(
             "risk_trade_recorded",
@@ -199,6 +217,7 @@ class RiskManager:
                     previous_trades=self._trades_today,
                 )
             self._daily_pnl = Decimal("0")
+            self._daily_pnl_peak = Decimal("0")
             self._daily_pnl_date = today
             self._trades_today = 0
             self._trades_today_date = today
@@ -232,6 +251,11 @@ class RiskManager:
     @property
     def total_settled(self) -> int:
         return self._total_settled
+
+    @property
+    def daily_pnl_peak(self) -> Decimal:
+        self._reset_daily_if_needed()
+        return self._daily_pnl_peak
 
     @property
     def last_pnl(self) -> Decimal | None:

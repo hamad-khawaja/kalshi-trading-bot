@@ -1,11 +1,14 @@
 """CLI entry point for the backtester.
 
 Usage:
-    python -m backtest --days 30 --bankroll 100
-    python -m backtest --days 30 --bankroll 100 --label baseline
-    python -m backtest --days 30 --bankroll 100 --label candidate
+    python -m backtest --days 30 --bankroll 1000
+    python -m backtest --days 30 --bankroll 1000 --asset BTC
+    python -m backtest --days 30 --bankroll 1000 --asset ETH
+    python -m backtest --days 30 --bankroll 1000 --asset all
+    python -m backtest --days 30 --bankroll 1000 --label baseline
+    python -m backtest --days 30 --bankroll 1000 --label candidate
     python -m backtest --compare results/baseline.json results/candidate.json
-    python -m backtest --days 30 --bankroll 100 --plot
+    python -m backtest --days 30 --bankroll 1000 --plot
 """
 
 from __future__ import annotations
@@ -20,10 +23,84 @@ from backtest.backtester import BacktestResult, Backtester
 from backtest.fetch_data import fetch_candles
 from src.config import load_settings
 
+ASSET_SYMBOLS = {"BTC": "BTCUSDT", "ETH": "ETHUSDT"}
+
+
+def _run_single(
+    asset: str,
+    symbol: str,
+    days: int,
+    bankroll: float,
+    config_path: str,
+    label: str,
+    plot: bool,
+    analyzer: BacktestAnalyzer,
+) -> BacktestResult:
+    """Run backtest for a single asset and print results."""
+    print(f"{asset} 15-Minute Backtester")
+    print(f"{'=' * 60}")
+    print(f"Days: {days} | Bankroll: ${bankroll:.2f} | Symbol: {symbol}")
+    print()
+
+    # Step 1: Fetch candles
+    print("Fetching historical candles...")
+    t0 = time.time()
+    candles = asyncio.run(fetch_candles(days, symbol=symbol))
+    fetch_time = time.time() - t0
+    print(f"  Fetched in {fetch_time:.1f}s")
+    print()
+
+    if candles.empty:
+        print(f"Error: No candle data fetched for {symbol}.")
+        return BacktestResult()
+
+    # Step 2: Load settings and run backtest
+    print("Running backtest...")
+    settings = load_settings(config_path)
+    backtester = Backtester(settings, asset=asset)
+
+    t0 = time.time()
+    result = backtester.run(candles, initial_bankroll=bankroll)
+    run_time = time.time() - t0
+    print(f"  Simulated {result.total_windows} windows in {run_time:.1f}s")
+    print()
+
+    # Step 3: Print results
+    if label:
+        result.label = label
+    result.asset = asset
+    print(analyzer.summary(result))
+
+    # Step 4: Signal type breakdown
+    print()
+    print(analyzer.signal_type_breakdown(result))
+
+    # Step 5: Exit type breakdown
+    print()
+    print(analyzer.exit_type_breakdown(result))
+
+    # Step 6: Calibration report
+    print()
+    print(analyzer.calibration_report(result))
+
+    # Step 7: Save results if labeled
+    if label:
+        save_path = f"results/{label}_{asset}.json" if asset else f"results/{label}.json"
+        result.to_json(save_path)
+        print(f"\nResults saved to {save_path}")
+
+    # Step 8: Generate plots if requested
+    if plot:
+        prefix = f"results/{label}_{asset}_" if label else f"results/backtest_{asset}_"
+        analyzer.plot_equity_curve(result, f"{prefix}equity.png")
+        analyzer.plot_edge_distribution(result, f"{prefix}edges.png")
+
+    return result
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="BTC 15-minute binary options backtester"
+        description="BTC/ETH 15-minute binary options backtester"
     )
     parser.add_argument(
         "--days",
@@ -41,7 +118,7 @@ def main() -> None:
         "--label",
         type=str,
         default="",
-        help="Label for this run; saves results to results/<label>.json",
+        help="Label for this run; saves results to results/<label>_<asset>.json",
     )
     parser.add_argument(
         "--compare",
@@ -66,6 +143,13 @@ def main() -> None:
         default="BTCUSDT",
         help="Binance symbol (default: BTCUSDT)",
     )
+    parser.add_argument(
+        "--asset",
+        type=str,
+        choices=["BTC", "ETH", "all"],
+        default="BTC",
+        help="Asset to backtest: BTC, ETH, or all (default: BTC)",
+    )
 
     args = parser.parse_args()
     analyzer = BacktestAnalyzer()
@@ -84,59 +168,55 @@ def main() -> None:
         print(report)
         return
 
-    # --- Normal backtest mode ---
-    print(f"BTC 15-Minute Backtester")
-    print(f"{'=' * 60}")
-    print(f"Days: {args.days} | Bankroll: ${args.bankroll:.2f} | Symbol: {args.symbol}")
-    print()
+    # --- Determine assets to run ---
+    if args.asset == "all":
+        assets = [("BTC", "BTCUSDT"), ("ETH", "ETHUSDT")]
+    else:
+        symbol = ASSET_SYMBOLS.get(args.asset, args.symbol)
+        assets = [(args.asset, symbol)]
 
-    # Step 1: Fetch candles
-    print("Fetching historical candles...")
-    t0 = time.time()
-    candles = asyncio.run(fetch_candles(args.days, symbol=args.symbol))
-    fetch_time = time.time() - t0
-    print(f"  Fetched in {fetch_time:.1f}s")
-    print()
+    # --- Run backtests ---
+    results: list[BacktestResult] = []
+    for asset_name, symbol in assets:
+        if len(assets) > 1:
+            print(f"\n{'#' * 60}")
+            print(f"# {asset_name} Backtest")
+            print(f"{'#' * 60}\n")
 
-    if candles.empty:
-        print("Error: No candle data fetched. Check your network connection.")
-        sys.exit(1)
+        result = _run_single(
+            asset=asset_name,
+            symbol=symbol,
+            days=args.days,
+            bankroll=args.bankroll,
+            config_path=args.config,
+            label=args.label,
+            plot=args.plot,
+            analyzer=analyzer,
+        )
+        results.append(result)
 
-    # Step 2: Load settings and run backtest
-    print("Running backtest...")
-    settings = load_settings(args.config)
-    backtester = Backtester(settings)
-
-    t0 = time.time()
-    result = backtester.run(candles, initial_bankroll=args.bankroll)
-    run_time = time.time() - t0
-    print(f"  Simulated {result.total_windows} windows in {run_time:.1f}s")
-    print()
-
-    # Step 3: Print results
-    if args.label:
-        result.label = args.label
-    print(analyzer.summary(result))
-
-    # Step 4: Signal type breakdown
-    print()
-    print(analyzer.signal_type_breakdown(result))
-
-    # Step 5: Calibration report
-    print()
-    print(analyzer.calibration_report(result))
-
-    # Step 6: Save results if labeled
-    if args.label:
-        save_path = f"results/{args.label}.json"
-        result.to_json(save_path)
-        print(f"\nResults saved to {save_path}")
-
-    # Step 7: Generate plots if requested
-    if args.plot:
-        plot_prefix = f"results/{args.label}_" if args.label else "results/backtest_"
-        analyzer.plot_equity_curve(result, f"{plot_prefix}equity.png")
-        analyzer.plot_edge_distribution(result, f"{plot_prefix}edges.png")
+    # --- Combined summary for multi-asset ---
+    if len(results) > 1:
+        print(f"\n{'=' * 60}")
+        print("COMBINED SUMMARY")
+        print(f"{'=' * 60}")
+        total_trades = sum(r.total_trades for r in results)
+        total_pnl = sum(r.total_pnl for r in results)
+        total_fees = sum(r.total_fees for r in results)
+        for r in results:
+            asset_label = r.asset or "?"
+            print(
+                f"  {asset_label}: {r.total_trades} trades, "
+                f"${r.total_pnl:+.2f} PnL, "
+                f"{r.win_rate:.1%} WR"
+            )
+        print(f"  {'---':>4}")
+        print(
+            f"  Total: {total_trades} trades, "
+            f"${total_pnl:+.2f} PnL, "
+            f"${total_fees:.2f} fees"
+        )
+        print(f"{'=' * 60}")
 
 
 if __name__ == "__main__":

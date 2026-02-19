@@ -53,6 +53,9 @@ class DashboardState:
         # Per-asset trade history (last 5 results per asset)
         self.trade_history: dict[str, deque[dict[str, Any]]] = {}
 
+        # Cumulative realized P&L per asset (e.g. {"BTC": 12.50, "ETH": -3.20})
+        self.per_asset_pnl: dict[str, float] = {}
+
         # Kalshi settlement history (last 5 settled markets per asset)
         self.settlement_history: dict[str, list[dict[str, Any]]] = {}
 
@@ -62,9 +65,16 @@ class DashboardState:
         # Cumulative seconds where at least one position was open
         self.active_trading_seconds: float = 0.0
 
+        # Trading pause toggle (controlled from dashboard UI)
+        self.trading_paused: bool = False
+
+        # Quiet hours override (skip quiet hours when master toggle is active)
+        self.quiet_hours_override: bool = False
+
     def add_trade_result(
         self, asset: str, action: str, side: str, pnl: float, ticker: str,
         size_dollars: float = 0.0,
+        signal_type: str = "",
     ) -> None:
         """Record a completed trade result for the trade history panel."""
         if asset not in self.trade_history:
@@ -77,7 +87,12 @@ class DashboardState:
                 "pnl": round(pnl, 2),
                 "size": round(size_dollars, 2),
                 "ticker": ticker,
+                "signal_type": signal_type,
             }
+        )
+        # Accumulate per-asset realized P&L
+        self.per_asset_pnl[asset] = round(
+            self.per_asset_pnl.get(asset, 0.0) + pnl, 2
         )
 
     def add_decision(
@@ -130,8 +145,11 @@ class DashboardState:
                 for asset, trades in self.trade_history.items()
             },
             "settlement_history": self.settlement_history,
+            "per_asset_pnl": self.per_asset_pnl,
             "quiet_hours_utc": self.quiet_hours_utc,
             "active_trading_seconds": self.active_trading_seconds,
+            "trading_paused": self.trading_paused,
+            "quiet_hours_override": self.quiet_hours_override,
         }
         return json.dumps(payload, default=str)
 
@@ -152,6 +170,8 @@ class DashboardServer:
         self._app.router.add_get("/", self._handle_index)
         self._app.router.add_get("/events", self._handle_sse)
         self._app.router.add_get("/api/state", self._handle_api_state)
+        self._app.router.add_post("/api/toggle-trading", self._handle_toggle_trading)
+        self._app.router.add_post("/api/toggle-quiet-hours", self._handle_toggle_quiet_hours)
 
         self._runner = web.AppRunner(self._app)
         await self._runner.setup()
@@ -199,5 +219,40 @@ class DashboardServer:
     async def _handle_api_state(self, _request: web.Request) -> web.Response:
         return web.Response(
             text=self._state.to_json(),
+            content_type="application/json",
+        )
+
+    async def _handle_toggle_trading(self, _request: web.Request) -> web.Response:
+        self._state.trading_paused = not self._state.trading_paused
+        # Master off → force quiet hours override off
+        if self._state.trading_paused:
+            self._state.quiet_hours_override = False
+        status = "paused" if self._state.trading_paused else "active"
+        logger.info("trading_toggled", trading_status=status)
+        return web.Response(
+            text=json.dumps({
+                "trading_paused": self._state.trading_paused,
+                "quiet_hours_override": self._state.quiet_hours_override,
+            }),
+            content_type="application/json",
+        )
+
+    async def _handle_toggle_quiet_hours(self, _request: web.Request) -> web.Response:
+        # Only allow enabling if master toggle is active
+        if self._state.trading_paused:
+            return web.Response(
+                text=json.dumps({
+                    "quiet_hours_override": False,
+                    "error": "Cannot override quiet hours while trading is paused",
+                }),
+                content_type="application/json",
+            )
+        self._state.quiet_hours_override = not self._state.quiet_hours_override
+        logger.info(
+            "quiet_hours_override_toggled",
+            override=self._state.quiet_hours_override,
+        )
+        return web.Response(
+            text=json.dumps({"quiet_hours_override": self._state.quiet_hours_override}),
             content_type="application/json",
         )

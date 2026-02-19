@@ -18,11 +18,14 @@ class BacktestAnalyzer:
             "=" * 60,
             "BACKTEST RESULTS",
             f"  Label: {result.label}" if result.label else "",
+            f"  Asset: {result.asset}" if result.asset else "",
             "=" * 60,
             f"Windows Evaluated: {result.total_windows}",
             f"Total Trades:      {result.total_trades}",
             f"  Directional:     {result.directional_trades}",
             f"  FOMO:            {result.fomo_trades}",
+            f"  Sett. Ride:      {result.settlement_ride_trades}",
+            f"  Cert. Scalp:     {result.certainty_scalp_trades}",
             f"Trade Rate:        {result.trade_rate:.1%} of windows",
             f"Winning Trades:    {result.winning_trades}",
             f"Losing Trades:     {result.losing_trades}",
@@ -38,7 +41,12 @@ class BacktestAnalyzer:
             f"Avg Edge:          {result.avg_edge:.4f}",
         ]
 
-        # Remove empty label line
+        if result.stop_loss_exits > 0:
+            lines.append(f"Stop-Loss Exits:   {result.stop_loss_exits}")
+        if result.drawdown_blocks > 0:
+            lines.append(f"Drawdown Blocks:   {result.drawdown_blocks}")
+
+        # Remove empty label/asset lines
         lines = [l for l in lines if l != ""]
 
         if result.trades:
@@ -77,17 +85,17 @@ class BacktestAnalyzer:
         return "\n".join(lines)
 
     def signal_type_breakdown(self, result: BacktestResult) -> str:
-        """Performance breakdown by signal type (directional vs FOMO)."""
+        """Performance breakdown by signal type."""
         if not result.trades:
             return "No trades to analyze."
 
         lines = [
             "--- Signal Type Breakdown ---",
-            f"{'Type':<14} {'Count':<7} {'Win Rate':<10} {'PnL':<12} {'Avg Edge':<10}",
-            "-" * 53,
+            f"{'Type':<16} {'Count':<7} {'Win Rate':<10} {'PnL':<12} {'Avg Edge':<10}",
+            "-" * 55,
         ]
 
-        for sig_type in ["directional", "fomo"]:
+        for sig_type in ["directional", "fomo", "settlement_ride", "certainty_scalp"]:
             trades = [t for t in result.trades if t.signal_type == sig_type]
             if not trades:
                 continue
@@ -97,7 +105,7 @@ class BacktestAnalyzer:
             pnl = sum(t.pnl for t in trades)
             avg_edge = np.mean([t.edge for t in trades])
             lines.append(
-                f"{sig_type:<14} {count:<7} {wr:<10.1%} ${pnl:<11.2f} {avg_edge:<10.4f}"
+                f"{sig_type:<16} {count:<7} {wr:<10.1%} ${pnl:<11.2f} {avg_edge:<10.4f}"
             )
 
         # Total row
@@ -106,10 +114,36 @@ class BacktestAnalyzer:
         wr = result.win_rate
         pnl = result.total_pnl
         avg_edge = result.avg_edge
-        lines.append("-" * 53)
+        lines.append("-" * 55)
         lines.append(
-            f"{'TOTAL':<14} {count:<7} {wr:<10.1%} ${pnl:<11.2f} {avg_edge:<10.4f}"
+            f"{'TOTAL':<16} {count:<7} {wr:<10.1%} ${pnl:<11.2f} {avg_edge:<10.4f}"
         )
+
+        return "\n".join(lines)
+
+    def exit_type_breakdown(self, result: BacktestResult) -> str:
+        """Performance breakdown by exit type (settlement vs stop-loss)."""
+        if not result.trades:
+            return "No trades to analyze."
+
+        lines = [
+            "--- Exit Type Breakdown ---",
+            f"{'Type':<14} {'Count':<7} {'Win Rate':<10} {'PnL':<12} {'Avg PnL':<10}",
+            "-" * 53,
+        ]
+
+        for exit_type in ["settlement", "stop_loss"]:
+            trades = [t for t in result.trades if t.exit_type == exit_type]
+            if not trades:
+                continue
+            count = len(trades)
+            wins = sum(1 for t in trades if t.pnl > 0)
+            wr = wins / count if count > 0 else 0.0
+            pnl = sum(t.pnl for t in trades)
+            avg_pnl = np.mean([t.pnl for t in trades])
+            lines.append(
+                f"{exit_type:<14} {count:<7} {wr:<10.1%} ${pnl:<11.2f} ${avg_pnl:<9.4f}"
+            )
 
         return "\n".join(lines)
 
@@ -136,6 +170,8 @@ class BacktestAnalyzer:
             f"{'Total Trades':<22} {baseline.total_trades:>14} {candidate.total_trades:>14} {_delta(baseline.total_trades, candidate.total_trades, '+d'):>16}",
             f"{'  Directional':<22} {baseline.directional_trades:>14} {candidate.directional_trades:>14} {_delta(baseline.directional_trades, candidate.directional_trades, '+d'):>16}",
             f"{'  FOMO':<22} {baseline.fomo_trades:>14} {candidate.fomo_trades:>14} {_delta(baseline.fomo_trades, candidate.fomo_trades, '+d'):>16}",
+            f"{'  Sett. Ride':<22} {baseline.settlement_ride_trades:>14} {candidate.settlement_ride_trades:>14} {_delta(baseline.settlement_ride_trades, candidate.settlement_ride_trades, '+d'):>16}",
+            f"{'  Cert. Scalp':<22} {baseline.certainty_scalp_trades:>14} {candidate.certainty_scalp_trades:>14} {_delta(baseline.certainty_scalp_trades, candidate.certainty_scalp_trades, '+d'):>16}",
             f"{'Win Rate':<22} {baseline.win_rate:>13.1%} {candidate.win_rate:>13.1%} {_delta(baseline.win_rate * 100, candidate.win_rate * 100, '+.1f'):>15}pp",
             f"{'Total PnL':<22} {'$' + f'{baseline.total_pnl:.2f}':>13} {'$' + f'{candidate.total_pnl:.2f}':>13} {_delta(baseline.total_pnl, candidate.total_pnl, '+.2f'):>16}",
             f"{'Max Drawdown':<22} {'$' + f'{baseline.max_drawdown:.2f}':>13} {'$' + f'{candidate.max_drawdown:.2f}':>13} {_delta(baseline.max_drawdown, candidate.max_drawdown, '+.2f'):>16}",
@@ -144,6 +180,7 @@ class BacktestAnalyzer:
             f"{'Avg Edge':<22} {baseline.avg_edge:>14.4f} {candidate.avg_edge:>14.4f} {_delta(baseline.avg_edge, candidate.avg_edge):>16}",
             f"{'Total Fees':<22} {'$' + f'{baseline.total_fees:.2f}':>13} {'$' + f'{candidate.total_fees:.2f}':>13} {_delta(baseline.total_fees, candidate.total_fees, '+.2f'):>16}",
             f"{'Trade Rate':<22} {baseline.trade_rate:>13.1%} {candidate.trade_rate:>13.1%} {_delta(baseline.trade_rate * 100, candidate.trade_rate * 100, '+.1f'):>15}pp",
+            f"{'Stop-Loss Exits':<22} {baseline.stop_loss_exits:>14} {candidate.stop_loss_exits:>14} {_delta(baseline.stop_loss_exits, candidate.stop_loss_exits, '+d'):>16}",
             "=" * 70,
         ]
 
@@ -192,6 +229,8 @@ class BacktestAnalyzer:
         title = "Equity Curve"
         if result.label:
             title += f" — {result.label}"
+        if result.asset:
+            title += f" ({result.asset})"
         ax1.set_title(title)
         ax1.set_ylabel("Portfolio Value ($)")
         ax1.grid(True, alpha=0.3)
@@ -252,6 +291,8 @@ class BacktestAnalyzer:
         title = "Edge Distribution (Green=Win, Red=Loss)"
         if result.label:
             title += f" — {result.label}"
+        if result.asset:
+            title += f" ({result.asset})"
         ax.set_title(title)
         ax.set_xlabel("Trade #")
         ax.set_ylabel("Net Edge")
