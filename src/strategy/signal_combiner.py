@@ -13,6 +13,7 @@ from src.risk.volatility import VolatilityTracker
 from src.strategy.edge_detector import EdgeDetector
 from src.strategy.fomo_detector import FomoDetector
 from src.strategy.market_maker import MarketMaker
+from src.strategy.mc_detector import MCSignalDetector
 
 logger = structlog.get_logger()
 
@@ -42,12 +43,13 @@ class SignalCombiner:
         self._edge_detector = EdgeDetector(
             config, vol_tracker=vol_tracker, time_profiler=time_profiler
         )
-        self._fomo_detector = FomoDetector(config) if config.fomo_enabled else None
-        self._market_maker = (
-            MarketMaker(config) if config.use_market_maker else None
-        )
+        self._fomo_detector = FomoDetector(config)
+        self._market_maker = MarketMaker(config)
+        self._mc_detector = MCSignalDetector(config)
         # Edge persistence: track consecutive cycles with same-side edge
         self._edge_streak: dict[str, tuple[str, int]] = {}  # ticker → (side, count)
+        # Separate MC edge streak (independent from directional)
+        self._mc_edge_streak: dict[str, tuple[str, int]] = {}  # ticker → (side, count)
         # Phase 1 overreaction state: ticker → {direction, extreme}
         self._phase1_state: dict[str, dict] = {}
         # Simulated time for backtest quiet hours
@@ -122,8 +124,9 @@ class SignalCombiner:
                 )
 
         # 1. Check for directional edge (highest priority)
+        # Skip directional if globally disabled via config toggle
+        directional_disabled = not self._config.directional_enabled
         # Skip directional for disabled assets (MM-only mode)
-        directional_disabled = False
         if self._config.asset_directional_disabled:
             ticker_upper = snapshot.market_ticker.upper()
             for asset in self._config.asset_directional_disabled:
@@ -288,7 +291,7 @@ class SignalCombiner:
                 del self._edge_streak[ticker]
 
         # 2. Check for FOMO signal (second priority)
-        if self._fomo_detector is not None and features is not None:
+        if self._config.fomo_enabled and features is not None:
             fomo_signal = self._fomo_detector.detect(prediction, features, snapshot)
             if fomo_signal is not None:
                 signals.append(fomo_signal)
@@ -301,17 +304,102 @@ class SignalCombiner:
                 return signals
 
         # 2b. Certainty scalp: near-certain outcome in last 3 min, bet large
-        if not quiet_hours_active:
+        if self._config.certainty_scalp_enabled and not quiet_hours_active:
             certainty = self._evaluate_certainty_scalp(prediction, snapshot)
             if certainty is not None:
                 signals.append(certainty)
                 return signals
 
         # 2c. Settlement ride: fallback for late-window entry (hold to settlement)
-        if not quiet_hours_active:
+        if self._config.settlement_ride_enabled and not quiet_hours_active:
             settlement_ride = self._evaluate_settlement_ride(prediction, snapshot)
             if settlement_ride is not None:
                 signals.append(settlement_ride)
+                return signals
+
+        # 2d. Monte Carlo signal (independent parallel strategy)
+        if self._config.mc_enabled and not quiet_hours_active and features is not None:
+            mc_signal = self._mc_detector.detect(snapshot, features)
+
+            # Phase gating for MC signals (same rules as directional)
+            if mc_signal is not None and phase_enabled:
+                mc_ticker = snapshot.market_ticker
+                if phase == 1:
+                    logger.info(
+                        "phase_blocked_mc",
+                        ticker=mc_ticker,
+                        phase=1,
+                        side=mc_signal.side,
+                        net_edge=mc_signal.net_edge,
+                    )
+                    mc_signal = None
+                elif phase == 2:
+                    p1 = self._phase1_state.get(mc_ticker)
+                    bounce_back = False
+                    if p1 and features is not None and p1["direction"] != 0:
+                        reversal_thresh = self._config.overreaction_momentum_reversal_threshold
+                        if p1["direction"] > 0 and features.momentum_60s < -reversal_thresh:
+                            bounce_back = True
+                        elif p1["direction"] < 0 and features.momentum_60s > reversal_thresh:
+                            bounce_back = True
+                    if not bounce_back:
+                        logger.info(
+                            "phase2_no_bounce_back_mc",
+                            ticker=mc_ticker,
+                            side=mc_signal.side,
+                            net_edge=mc_signal.net_edge,
+                        )
+                        mc_signal = None
+                elif phase == 4:
+                    min_edge_late = self._config.mc_min_edge * self._config.phase_late_edge_multiplier
+                    if mc_signal.net_edge < min_edge_late:
+                        logger.info(
+                            "phase_late_tightened_mc",
+                            ticker=mc_ticker,
+                            phase=4,
+                            side=mc_signal.side,
+                            net_edge=mc_signal.net_edge,
+                            min_edge_late=round(min_edge_late, 4),
+                        )
+                        mc_signal = None
+                elif phase == 5:
+                    logger.info(
+                        "phase5_blocked_mc",
+                        ticker=mc_ticker,
+                        phase=5,
+                        side=mc_signal.side,
+                        net_edge=mc_signal.net_edge,
+                    )
+                    mc_signal = None
+
+            # Edge streak for MC signals (same logic, separate counter)
+            if mc_signal is not None:
+                mc_ticker = snapshot.market_ticker
+                required = self._config.edge_confirmation_cycles
+                prev = self._mc_edge_streak.get(mc_ticker)
+                if prev and prev[0] == mc_signal.side:
+                    mc_streak = prev[1] + 1
+                else:
+                    mc_streak = 1
+                self._mc_edge_streak[mc_ticker] = (mc_signal.side, mc_streak)
+
+                if mc_streak < required:
+                    logger.info(
+                        "mc_edge_streak_building",
+                        ticker=mc_ticker,
+                        side=mc_signal.side,
+                        streak=mc_streak,
+                        required=required,
+                        net_edge=mc_signal.net_edge,
+                    )
+                    mc_signal = None
+            else:
+                mc_ticker = snapshot.market_ticker
+                if mc_ticker in self._mc_edge_streak:
+                    del self._mc_edge_streak[mc_ticker]
+
+            if mc_signal is not None:
+                signals.append(mc_signal)
                 return signals
 
         # 3. No directional or FOMO edge — try market making (if session allows)
@@ -328,7 +416,7 @@ class SignalCombiner:
                     mm_allowed = False
                     break
 
-        if self._market_maker is not None and mm_allowed:
+        if self._config.use_market_maker and mm_allowed:
             mm_signals = self._market_maker.generate_quotes(
                 prediction, snapshot, current_position
             )

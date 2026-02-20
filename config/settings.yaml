@@ -40,9 +40,10 @@ strategy:
   mm_min_spread: 0.05           # Minimum spread ($) for market-making
   # Stop-loss: exit when position drops beyond threshold
   stop_loss_enabled: true
-  stop_loss_pct: 0.20              # Exit when loss > 20% of entry price (was 15% — too tight, noise triggered SL before recovery)
+  stop_loss_pct: 0.20              # Exit when loss > 20% of entry price (was 30% — avg SL loss $2.09 vs avg TP win $1.41)
   stop_loss_min_bid: 0.05          # Don't sell if bid is below $0.05
   stop_loss_min_hold_seconds: 60.0  # Wait 60s before SL can trigger (was 30s — noise triggered early exits)
+  stop_loss_max_dollar_loss: 20.00  # 10x for paper testing (was $2)
   # FOMO exploitation — DISABLED: 0/3 trades, all stopped out (-$1.41 total)
   fomo_enabled: false
   fomo_min_divergence: 0.20        # Require bigger gap (was 0.12)
@@ -78,7 +79,7 @@ strategy:
   asset_edge_multipliers:
     ETH: 2.0                         # ETH is noisier: require 2x edge (was 1.5)
   asset_stop_loss_pct:
-    ETH: 0.20                        # ETH gets wider stop (20%) to avoid noise stop-outs
+    ETH: 0.20                        # ETH matches tighter global SL (was 30%)
   asset_directional_disabled: [ETH]  # ETH: MM-only (45% directional WR was dragging BTC profits)
   # Zone filter: block expensive directional trades
   zone_filter_enabled: true
@@ -132,23 +133,34 @@ strategy:
   certainty_scalp_min_edge: 0.02            # Low bar (fees tiny at extremes)
   certainty_scalp_kelly_fraction: 0.30      # Aggressive sizing
   certainty_scalp_min_spot_distance_pct: 0.002  # 0.2% spot past strike
+  # Monte Carlo simulation strategy (parallel, independent)
+  mc_enabled: false
+  mc_samples: 10000
+  mc_drift_mode: "momentum"
+  mc_vol_multiplier: 1.0
+  mc_min_edge: 0.06
+  mc_min_confidence: 0.70
+  mc_min_implied_distance: 0.20
+  mc_kelly_fraction: 0.15
+  mc_min_ttx: 120.0
+  mc_max_ttx: 720.0
 
 risk:
-  max_position_per_market: 25    # Reduced — smaller positions to limit loss size
-  max_total_exposure_dollars: 500.0   # $1000 paper bankroll / 2 (paper balance = exposure * 2)
-  max_daily_loss_dollars: 300.0      # 30% of bankroll — hard stop
+  max_position_per_market: 250   # 10x for paper testing (was 25)
+  max_total_exposure_dollars: 500.0   # Paper balance = exposure * 2 = $1000
+  max_daily_loss_dollars: 3000.0      # 10x for paper testing (was 300)
   max_concurrent_positions: 5
-  kelly_fraction: 0.20          # Reduce risk (was 0.35)
+  kelly_fraction: 2.0            # 10x for paper testing (was 0.20)
   min_balance_dollars: 350.0    # Stop trading when balance drops to $700 (30% drawdown from $1000)
   max_trades_per_day: 1000       # Paper trading: no daily limit
   cooldown_after_streak_minutes: 30
   max_consecutive_losses: 5     # Paper: more room to test
-  # Drawdown circuit breaker: stop if daily P&L drops $20 from its peak
+  # Drawdown circuit breaker: stop if daily P&L drops from its peak
   drawdown_limit_enabled: true
-  drawdown_limit_dollars: 20.0
+  drawdown_limit_dollars: 200.0
   # Entry discipline
   entry_cooldown_seconds: 30     # Min seconds between fills on same market
-  max_contracts_per_cycle: 15    # Reduced — smaller entries to limit loss size
+  max_contracts_per_cycle: 150   # 10x for paper testing (was 15)
   # Fee-aware sizing at extreme prices
   fee_extreme_price_threshold: 0.25
   fee_extreme_kelly_multiplier: 1.5  # Enable fee boost at extremes (was 1.0)
@@ -159,12 +171,12 @@ risk:
   time_scale_full_seconds: 480.0  # Full size above 8 min remaining
   time_scale_min_multiplier: 0.4  # 40% size at expiry
   # Minimum position size: skip tiny positions that statistically lose
-  min_position_size: 5             # Lowered to match smaller max sizes
+  min_position_size: 50            # 10x for paper testing (was 5)
   # Per-asset position limits: ETH gets smaller sizes with wider stops
   asset_max_position:
-    ETH: 15                          # ETH max 15 contracts (was 10 — larger size for higher-conviction entries)
+    ETH: 150                         # 10x for paper testing (was 15)
   asset_max_per_cycle:
-    ETH: 10                          # ETH max 10 per cycle (BTC keeps 15)
+    ETH: 100                         # 10x for paper testing (was 10)
 
 averaging:
   enabled: false                # Disabled until profitable (was true)

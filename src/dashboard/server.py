@@ -71,6 +71,19 @@ class DashboardState:
         # Quiet hours override (skip quiet hours when master toggle is active)
         self.quiet_hours_override: bool = False
 
+        # ETH killswitch (disable all ETH trading from dashboard)
+        self.eth_disabled: bool = False
+
+        # Per-strategy toggles (runtime control from dashboard)
+        self.strategy_toggles: dict[str, bool] = {
+            "directional": True,
+            "fomo": True,
+            "certainty_scalp": True,
+            "settlement_ride": True,
+            "monte_carlo": False,
+            "market_making": True,
+        }
+
     def add_trade_result(
         self, asset: str, action: str, side: str, pnl: float, ticker: str,
         size_dollars: float = 0.0,
@@ -150,6 +163,8 @@ class DashboardState:
             "active_trading_seconds": self.active_trading_seconds,
             "trading_paused": self.trading_paused,
             "quiet_hours_override": self.quiet_hours_override,
+            "eth_disabled": self.eth_disabled,
+            "strategy_toggles": self.strategy_toggles,
         }
         return json.dumps(payload, default=str)
 
@@ -175,6 +190,8 @@ class DashboardServer:
         self._app.router.add_get("/api/state", self._handle_api_state)
         self._app.router.add_post("/api/toggle-trading", self._handle_toggle_trading)
         self._app.router.add_post("/api/toggle-quiet-hours", self._handle_toggle_quiet_hours)
+        self._app.router.add_post("/api/toggle-eth", self._handle_toggle_eth)
+        self._app.router.add_post("/api/toggle-strategy", self._handle_toggle_strategy)
         self._app.router.add_get("/api/trades", self._handle_trades)
 
         self._runner = web.AppRunner(self._app)
@@ -266,6 +283,39 @@ class DashboardServer:
                 text=json.dumps([]),
                 content_type="application/json",
             )
+
+    async def _handle_toggle_eth(self, _request: web.Request) -> web.Response:
+        self._state.eth_disabled = not self._state.eth_disabled
+        status = "disabled" if self._state.eth_disabled else "enabled"
+        logger.info("eth_trading_toggled", eth_status=status)
+        return web.Response(
+            text=json.dumps({"eth_disabled": self._state.eth_disabled}),
+            content_type="application/json",
+        )
+
+    async def _handle_toggle_strategy(self, request: web.Request) -> web.Response:
+        try:
+            body = await request.json()
+        except Exception:
+            return web.Response(
+                status=400,
+                text=json.dumps({"error": "Invalid JSON body"}),
+                content_type="application/json",
+            )
+        name = body.get("name", "")
+        if name not in self._state.strategy_toggles:
+            return web.Response(
+                status=400,
+                text=json.dumps({"error": f"Unknown strategy: {name}"}),
+                content_type="application/json",
+            )
+        self._state.strategy_toggles[name] = not self._state.strategy_toggles[name]
+        status = "enabled" if self._state.strategy_toggles[name] else "disabled"
+        logger.info("strategy_toggled", strategy=name, status=status)
+        return web.Response(
+            text=json.dumps({"strategy_toggles": self._state.strategy_toggles}),
+            content_type="application/json",
+        )
 
     async def _handle_toggle_quiet_hours(self, _request: web.Request) -> web.Response:
         # Only allow enabling if master toggle is active
