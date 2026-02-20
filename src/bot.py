@@ -63,10 +63,12 @@ class TradingBot:
         self._last_predictions: dict[str, object] = {}  # ticker → PredictionResult
 
         # Thesis-break cooldown: don't re-enter markets after getting stopped out
-        self._thesis_break_markets: set[str] = set()
+        # ticker → strategy_tag that caused the exit
+        self._thesis_break_markets: dict[str, str] = {}
 
         # Take-profit cooldown: block re-entry after TP for rest of window
-        self._take_profit_markets: dict[str, datetime] = {}  # ticker → exit time
+        # ticker → (exit_time, strategy_tag)
+        self._take_profit_markets: dict[str, tuple[datetime, str]] = {}
 
         # Fee tracking for dashboard
         self._total_fees: Decimal = Decimal("0")
@@ -123,6 +125,14 @@ class TradingBot:
         self._dashboard_state.mode = settings.mode
         if settings.strategy.quiet_hours_enabled:
             self._dashboard_state.quiet_hours_utc = settings.strategy.quiet_hours_utc
+        self._dashboard_state.strategy_toggles = {
+            "directional": settings.strategy.directional_enabled,
+            "fomo": settings.strategy.fomo_enabled,
+            "certainty_scalp": settings.strategy.certainty_scalp_enabled,
+            "settlement_ride": settings.strategy.settlement_ride_enabled,
+            "monte_carlo": settings.strategy.mc_enabled,
+            "market_making": settings.strategy.use_market_maker,
+        }
         self._dashboard_server = DashboardServer(
             self._dashboard_state,
             settings.dashboard.host,
@@ -308,6 +318,15 @@ class TradingBot:
         # Sync quiet hours override from dashboard to signal combiner
         self._signal_combiner.quiet_hours_override = self._dashboard_state.quiet_hours_override
 
+        # Sync strategy toggles from dashboard to config
+        st = self._dashboard_state.strategy_toggles
+        self._settings.strategy.directional_enabled = st.get("directional", True)
+        self._settings.strategy.fomo_enabled = st.get("fomo", False)
+        self._settings.strategy.certainty_scalp_enabled = st.get("certainty_scalp", True)
+        self._settings.strategy.settlement_ride_enabled = st.get("settlement_ride", True)
+        self._settings.strategy.mc_enabled = st.get("monte_carlo", False)
+        self._settings.strategy.use_market_maker = st.get("market_making", True)
+
         for market in markets_to_process:
             await self._process_market(market)
 
@@ -462,13 +481,14 @@ class TradingBot:
             "fomo": dict(ds.fomo) if ds.fomo else {},
         }
 
-        # Take-profit cooldown: block re-entry after taking profit
+        # Take-profit cooldown: only block re-entry from the same strategy that took profit
         tp_cooldown = self._settings.strategy.take_profit_cooldown_seconds
         if ticker in self._take_profit_markets and tp_cooldown > 0:
-            tp_exit_time = self._take_profit_markets[ticker]
+            tp_exit_time, tp_strategy = self._take_profit_markets[ticker]
             elapsed = (datetime.now(timezone.utc) - tp_exit_time).total_seconds()
             if elapsed < tp_cooldown:
-                buy_signals = [s for s in signals if s.action == "buy" and s.signal_type not in ("market_making", "settlement_ride", "certainty_scalp")]
+                exempt = ("market_making", "settlement_ride", "certainty_scalp")
+                buy_signals = [s for s in signals if s.action == "buy" and s.signal_type not in exempt and s.signal_type == tp_strategy]
                 if buy_signals:
                     logger.info(
                         "take_profit_cooldown_blocked",
@@ -476,22 +496,26 @@ class TradingBot:
                         elapsed=round(elapsed, 1),
                         cooldown=tp_cooldown,
                         blocked_count=len(buy_signals),
+                        cooldown_strategy=tp_strategy,
                     )
-                    signals = [s for s in signals if s.action != "buy" or s.signal_type in ("market_making", "settlement_ride", "certainty_scalp")]
+                    signals = [s for s in signals if s.action != "buy" or s.signal_type in exempt or s.signal_type != tp_strategy]
             else:
                 # Cooldown expired, remove from tracking
                 del self._take_profit_markets[ticker]
 
-        # Thesis-break cooldown: block buy signals for markets we got stopped out of
+        # Thesis-break cooldown: only block re-entry from the same strategy that got stopped out
         if ticker in self._thesis_break_markets and signals:
-            buy_signals = [s for s in signals if s.action == "buy" and s.signal_type not in ("market_making", "settlement_ride", "certainty_scalp")]
+            tb_strategy = self._thesis_break_markets[ticker]
+            exempt = ("market_making", "settlement_ride", "certainty_scalp")
+            buy_signals = [s for s in signals if s.action == "buy" and s.signal_type not in exempt and s.signal_type == tb_strategy]
             if buy_signals:
                 logger.info(
                     "thesis_break_cooldown_blocked",
                     ticker=ticker,
                     blocked_count=len(buy_signals),
+                    cooldown_strategy=tb_strategy,
                 )
-                signals = [s for s in signals if s.action != "buy" or s.signal_type in ("market_making", "settlement_ride", "certainty_scalp")]
+                signals = [s for s in signals if s.action != "buy" or s.signal_type in exempt or s.signal_type != tb_strategy]
 
         if not signals:
             # --- Averaging: check existing position for discount add ---
@@ -1166,7 +1190,7 @@ class TradingBot:
                             except Exception:
                                 logger.warning("trade_logging_failed", ticker=tp_ticker)
                             self._position_tracker.remove_expired_positions([tp_ticker])
-                            self._take_profit_markets[tp_ticker] = datetime.now(timezone.utc)
+                            self._take_profit_markets[tp_ticker] = (datetime.now(timezone.utc), pos.strategy_tag)
                             self._update_dashboard_positions()
 
                 # Check for stop-loss exits
@@ -1177,6 +1201,7 @@ class TradingBot:
                         min_bid=self._settings.strategy.stop_loss_min_bid,
                         min_hold_seconds=self._settings.strategy.stop_loss_min_hold_seconds,
                         asset_stop_loss_pct=self._settings.strategy.asset_stop_loss_pct or None,
+                        max_dollar_loss=self._settings.strategy.stop_loss_max_dollar_loss,
                     )
                     for sl_ticker, sell_price in sl_signals:
                         pos = self._position_tracker.get_position(sl_ticker)
@@ -1197,13 +1222,14 @@ class TradingBot:
                             suggested_count=pos.count,
                             timestamp=datetime.now(timezone.utc),
                             signal_type="directional",
+                            post_only=True,  # Maker order to reduce SL fee (1.75% vs 7%)
                         )
                         order_id = await self._order_manager.submit(sell_signal, pos.count)
                         if order_id:
                             entry_cost = pos.avg_entry_price * pos.count
                             exit_revenue = Decimal(sell_price) * pos.count
                             sell_fee = EdgeDetector.compute_fee_dollars(
-                                pos.count, float(sell_price), is_maker=False
+                                pos.count, float(sell_price), is_maker=True
                             )
                             pnl = exit_revenue - entry_cost - sell_fee - pos.fees_paid
                             self._total_fees += sell_fee
@@ -1328,7 +1354,7 @@ class TradingBot:
                             except Exception:
                                 logger.warning("trade_logging_failed", ticker=tb_ticker)
                             self._position_tracker.remove_expired_positions([tb_ticker])
-                            self._thesis_break_markets.add(tb_ticker)
+                            self._thesis_break_markets[tb_ticker] = pos.strategy_tag
                             self._update_dashboard_positions()
 
                 # Check for fills on resting orders (live mode only)

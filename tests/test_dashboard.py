@@ -41,12 +41,31 @@ class TestDashboardState:
         assert "eth_disabled" in data
 
 
+    def test_strategy_toggles_in_json(self, dashboard_state: DashboardState):
+        """All 6 strategy toggles are present in JSON output."""
+        data = json.loads(dashboard_state.to_json())
+        assert "strategy_toggles" in data
+        toggles = data["strategy_toggles"]
+        expected_keys = {"directional", "fomo", "certainty_scalp", "settlement_ride", "monte_carlo", "market_making"}
+        assert set(toggles.keys()) == expected_keys
+        # Defaults: all True except monte_carlo
+        assert toggles["directional"] is True
+        assert toggles["monte_carlo"] is False
+
+    def test_strategy_toggles_reflect_changes(self, dashboard_state: DashboardState):
+        """Mutating strategy_toggles dict is reflected in JSON."""
+        dashboard_state.strategy_toggles["fomo"] = False
+        data = json.loads(dashboard_state.to_json())
+        assert data["strategy_toggles"]["fomo"] is False
+
+
 def _build_app(state: DashboardState) -> web.Application:
     """Build a minimal aiohttp app with dashboard toggle routes."""
     server = DashboardServer(state, "127.0.0.1", 0)
     app = web.Application()
     app.router.add_post("/api/toggle-eth", server._handle_toggle_eth)
     app.router.add_post("/api/toggle-trading", server._handle_toggle_trading)
+    app.router.add_post("/api/toggle-strategy", server._handle_toggle_strategy)
     return app
 
 
@@ -84,3 +103,42 @@ async def test_eth_toggle_independent_of_master(dashboard_state: DashboardState)
         data = await resp.json()
         assert data["eth_disabled"] is True
         assert dashboard_state.eth_disabled is True
+
+
+@pytest.mark.asyncio
+async def test_toggle_strategy_endpoint(dashboard_state: DashboardState):
+    """POST /api/toggle-strategy flips the boolean and returns updated dict."""
+    app = _build_app(dashboard_state)
+    async with TestClient(TestServer(app)) as client:
+        # directional starts True, toggle off
+        resp = await client.post(
+            "/api/toggle-strategy",
+            json={"name": "directional"},
+        )
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["strategy_toggles"]["directional"] is False
+        assert dashboard_state.strategy_toggles["directional"] is False
+
+        # Toggle back on
+        resp = await client.post(
+            "/api/toggle-strategy",
+            json={"name": "directional"},
+        )
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["strategy_toggles"]["directional"] is True
+
+
+@pytest.mark.asyncio
+async def test_toggle_unknown_strategy(dashboard_state: DashboardState):
+    """POST /api/toggle-strategy returns 400 for unknown strategy name."""
+    app = _build_app(dashboard_state)
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.post(
+            "/api/toggle-strategy",
+            json={"name": "nonexistent"},
+        )
+        assert resp.status == 400
+        data = await resp.json()
+        assert "error" in data

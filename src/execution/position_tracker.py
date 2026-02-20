@@ -518,11 +518,13 @@ class PositionTracker:
         min_bid: float = 0.05,
         min_hold_seconds: float = 30.0,
         asset_stop_loss_pct: dict[str, float] | None = None,
+        max_dollar_loss: float = 0.0,
     ) -> list[tuple[str, str]]:
         """Check positions for stop-loss exits.
 
         Returns list of (ticker, sell_price) for positions where:
-        - Loss exceeds stop_loss_pct of entry price
+        - Loss exceeds stop_loss_pct of entry price, OR
+        - Unrealized dollar loss exceeds max_dollar_loss (if > 0)
         - Current bid >= min_bid (worth selling vs. fee)
         - Position held for at least min_hold_seconds (avoid momentary dips)
         """
@@ -536,10 +538,9 @@ class PositionTracker:
             if snapshot is None:
                 continue
 
-            # Check minimum hold time
+            # Check minimum hold time (but allow emergency exit for catastrophic losses)
             hold_seconds = (now - position.entry_time).total_seconds()
-            if hold_seconds < min_hold_seconds:
-                continue
+            within_hold_period = hold_seconds < min_hold_seconds
 
             ob = snapshot.orderbook
             if position.side == "yes":
@@ -571,7 +572,34 @@ class PositionTracker:
                         effective_sl = sl
                         break
 
+            # Compute unrealized dollar loss (entry cost - current value - fees)
+            dollar_loss = (entry_float - bid_float) * position.count + float(position.fees_paid)
+
+            # Emergency exit: bypass hold period if loss exceeds dollar cap
+            # This prevents catastrophic losses during the min hold window
+            if within_hold_period:
+                if max_dollar_loss > 0 and dollar_loss >= max_dollar_loss:
+                    logger.warning(
+                        "emergency_stop_loss",
+                        ticker=ticker,
+                        side=position.side,
+                        count=position.count,
+                        entry_price=entry_float,
+                        current_bid=bid_float,
+                        dollar_loss=round(dollar_loss, 2),
+                        max_dollar_loss=max_dollar_loss,
+                        hold_seconds=round(hold_seconds, 1),
+                    )
+                else:
+                    continue
+
+            triggered_by = None
             if loss_pct >= effective_sl:
+                triggered_by = "pct"
+            elif max_dollar_loss > 0 and dollar_loss >= max_dollar_loss:
+                triggered_by = "dollar_cap"
+
+            if triggered_by:
                 logger.info(
                     "stop_loss_signal",
                     ticker=ticker,
@@ -580,7 +608,10 @@ class PositionTracker:
                     entry_price=entry_float,
                     current_bid=bid_float,
                     loss_pct=round(loss_pct, 4),
+                    dollar_loss=round(dollar_loss, 2),
                     threshold=effective_sl,
+                    max_dollar_loss=max_dollar_loss,
+                    triggered_by=triggered_by,
                     hold_seconds=round(hold_seconds, 1),
                 )
                 results.append((ticker, str(current_bid)))

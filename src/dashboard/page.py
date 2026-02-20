@@ -160,6 +160,14 @@ a{color:#58a6ff}
 .nav-btn{padding:8px 20px;font-size:13px;font-weight:600;color:#8b949e;background:transparent;border:none;border-bottom:2px solid transparent;cursor:pointer;font-family:inherit;transition:color .2s,border-color .2s}
 .nav-btn:hover{color:#c9d1d9}
 .nav-btn.active{color:#f0f6fc;border-bottom-color:#58a6ff}
+.strategy-bar{display:flex;align-items:center;gap:6px;padding:6px 16px;background:#161b22;border-bottom:1px solid #30363d}
+.strategy-bar .strat-label{font-size:10px;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;margin-right:4px;font-weight:600}
+.strategy-bar .toggle-wrap{gap:5px}
+.strategy-bar .toggle-label{font-size:10px;min-width:32px;letter-spacing:0.3px}
+.strategy-bar .toggle-track{width:32px;height:16px;border-radius:8px}
+.strategy-bar .toggle-knob{width:10px;height:10px;top:2px}
+.strategy-bar .toggle-track.active .toggle-knob{left:18px}
+.strategy-bar .toggle-track.paused .toggle-knob{left:2px}
 </style>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
@@ -196,6 +204,34 @@ a{color:#58a6ff}
 <div class="nav-bar">
   <button class="nav-btn active" data-view="dashboard" onclick="switchView('dashboard')">Dashboard</button>
   <button class="nav-btn" data-view="trades" onclick="switchView('trades')">Trades</button>
+</div>
+
+<div class="strategy-bar" id="strategy-bar">
+  <span class="strat-label">Strategies:</span>
+  <div class="toggle-wrap" data-strategy="directional" onclick="toggleStrategy('directional')">
+    <span class="toggle-label active">DIR</span>
+    <div class="toggle-track active"><div class="toggle-knob"></div></div>
+  </div>
+  <div class="toggle-wrap" data-strategy="fomo" onclick="toggleStrategy('fomo')">
+    <span class="toggle-label active">FOMO</span>
+    <div class="toggle-track active"><div class="toggle-knob"></div></div>
+  </div>
+  <div class="toggle-wrap" data-strategy="certainty_scalp" onclick="toggleStrategy('certainty_scalp')">
+    <span class="toggle-label active">CERT</span>
+    <div class="toggle-track active"><div class="toggle-knob"></div></div>
+  </div>
+  <div class="toggle-wrap" data-strategy="settlement_ride" onclick="toggleStrategy('settlement_ride')">
+    <span class="toggle-label active">SETT</span>
+    <div class="toggle-track active"><div class="toggle-knob"></div></div>
+  </div>
+  <div class="toggle-wrap" data-strategy="monte_carlo" onclick="toggleStrategy('monte_carlo')">
+    <span class="toggle-label active">MC</span>
+    <div class="toggle-track active"><div class="toggle-knob"></div></div>
+  </div>
+  <div class="toggle-wrap" data-strategy="market_making" onclick="toggleStrategy('market_making')">
+    <span class="toggle-label active">MM</span>
+    <div class="toggle-track active"><div class="toggle-knob"></div></div>
+  </div>
 </div>
 
 <div id="dashboard-view">
@@ -489,6 +525,9 @@ a{color:#58a6ff}
     }
     if (s.eth_disabled != null) {
       updateETHToggle(s.eth_disabled);
+    }
+    if (s.strategy_toggles) {
+      updateStrategyToggles(s.strategy_toggles);
     }
 
     // Auto-detect available assets from per_asset keys and add tabs dynamically
@@ -991,6 +1030,35 @@ a{color:#58a6ff}
       label.className = 'toggle-label active';
       track.className = 'toggle-track active';
     }
+  }
+
+  // Strategy toggles
+  window.toggleStrategy = function(name) {
+    fetch('/api/toggle-strategy', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name: name}),
+    })
+      .then(r => r.json())
+      .then(d => { if (d.strategy_toggles) updateStrategyToggles(d.strategy_toggles); })
+      .catch(err => console.error('strategy toggle error', err));
+  };
+
+  function updateStrategyToggles(toggles) {
+    if (!toggles) return;
+    document.querySelectorAll('.strategy-bar .toggle-wrap[data-strategy]').forEach(wrap => {
+      const name = wrap.dataset.strategy;
+      const enabled = toggles[name];
+      const label = wrap.querySelector('.toggle-label');
+      const track = wrap.querySelector('.toggle-track');
+      if (enabled) {
+        label.className = 'toggle-label active';
+        track.className = 'toggle-track active';
+      } else {
+        label.className = 'toggle-label paused';
+        track.className = 'toggle-track paused';
+      }
+    });
   }
 
   function updateQHToggle(override, masterPaused) {

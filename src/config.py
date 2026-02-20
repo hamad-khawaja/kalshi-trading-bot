@@ -73,6 +73,7 @@ class StrategyConfig(BaseModel):
     directional_min_depth: int = 5  # Require at least this many contracts in orderbook
     use_statistical_fair_value: bool = True  # Use fair value when orderbook is thin
     thin_book_edge_multiplier: float = 1.5  # Require 1.5x edge on thin orderbooks
+    directional_enabled: bool = True
     use_market_maker: bool = True
     mm_min_spread: float = 0.05
     mm_max_spread: float = 0.30
@@ -94,6 +95,7 @@ class StrategyConfig(BaseModel):
     stop_loss_pct: float = 0.35  # Exit when loss > 35% of entry price
     stop_loss_min_bid: float = 0.05  # Don't sell if bid is below $0.05
     stop_loss_min_hold_seconds: float = 60.0  # Minimum hold before SL can trigger
+    stop_loss_max_dollar_loss: float = 2.0  # Cap absolute loss per position
     # Take-profit parameters
     take_profit_enabled: bool = True
     take_profit_min_profit_cents: float = 0.10
@@ -179,6 +181,17 @@ class StrategyConfig(BaseModel):
     certainty_scalp_min_edge: float = 0.02           # Low bar (fees tiny at extremes)
     certainty_scalp_kelly_fraction: float = 0.30     # Aggressive sizing
     certainty_scalp_min_spot_distance_pct: float = 0.002  # 0.2% spot past strike
+    # Monte Carlo simulation strategy (parallel, independent)
+    mc_enabled: bool = False
+    mc_samples: int = 10000
+    mc_drift_mode: str = "momentum"   # "momentum" | "zero"
+    mc_vol_multiplier: float = 1.0    # Scale realized vol
+    mc_min_edge: float = 0.04
+    mc_min_confidence: float = 0.65
+    mc_min_implied_distance: float = 0.10
+    mc_kelly_fraction: float = 0.15
+    mc_min_ttx: float = 120.0         # At least 2 min to expiry
+    mc_max_ttx: float = 720.0         # Only last 12 min
 
 
 class RiskConfig(BaseModel):
