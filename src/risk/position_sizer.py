@@ -248,4 +248,20 @@ class PositionSizer:
         max_contracts_by_risk = max(1, int(max_risk_dollars / price)) if price > 0 else 0
         count = min(count, max_contracts_by_risk)
 
+        # Cap 4: Max dollar loss cap — worst case (price → 0) must not exceed stop_loss_max_dollar_loss
+        if self._strategy_config and price > 0:
+            max_dollar_loss = self._strategy_config.stop_loss_max_dollar_loss
+            if max_dollar_loss > 0:
+                max_contracts_by_loss = int(max_dollar_loss / price)
+                if count > max_contracts_by_loss:
+                    logger.info(
+                        "position_capped_by_dollar_loss",
+                        ticker=ticker,
+                        original_count=count,
+                        capped_count=max_contracts_by_loss,
+                        price=price,
+                        max_dollar_loss=max_dollar_loss,
+                    )
+                    count = max_contracts_by_loss
+
         return max(0, count)
