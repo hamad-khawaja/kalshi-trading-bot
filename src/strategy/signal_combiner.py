@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 import structlog
 
@@ -60,11 +61,11 @@ class SignalCombiner:
         """Set simulated time for backtest. Pass None to use real time."""
         self._simulated_time = dt
 
-    def _get_current_utc_hour(self) -> int:
-        """Get current UTC hour, using simulated time if set."""
+    def _get_current_est_hour(self) -> int:
+        """Get current EST hour, using simulated time if set."""
         if self._simulated_time is not None:
-            return self._simulated_time.hour
-        return datetime.now(timezone.utc).hour
+            return self._simulated_time.astimezone(ZoneInfo("America/New_York")).hour
+        return datetime.now(ZoneInfo("America/New_York")).hour
 
     def evaluate(
         self,
@@ -111,16 +112,16 @@ class SignalCombiner:
                 # Clean up state past Phase 2
                 del self._phase1_state[ticker]
 
-        # Quiet hours: skip directional trading during low-volume UTC hours
+        # Quiet hours: skip directional trading during low-volume EST hours
         quiet_hours_active = False
-        if self._config.quiet_hours_enabled and self._config.quiet_hours_utc and not self.quiet_hours_override:
-            current_hour = self._get_current_utc_hour()
-            if current_hour in self._config.quiet_hours_utc:
+        if self._config.quiet_hours_enabled and self._config.quiet_hours_est and not self.quiet_hours_override:
+            current_hour = self._get_current_est_hour()
+            if current_hour in self._config.quiet_hours_est:
                 quiet_hours_active = True
                 logger.info(
                     "quiet_hours_blocked",
                     ticker=snapshot.market_ticker,
-                    hour_utc=current_hour,
+                    hour_est=current_hour,
                 )
 
         # 1. Check for directional edge (highest priority)

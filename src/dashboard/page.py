@@ -151,6 +151,9 @@ a{color:#58a6ff}
 .type-tag.settlement-ride{background:#2a1a2a;color:#d2a8ff}
 .type-tag.fomo{background:#2a2a1a;color:#d29922}
 .type-tag.certainty_scalp{background:#1a2a2a;color:#56d4dd}
+.type-tag.monte_carlo{background:#2a1a2a;color:#e0a0ff}
+.type-tag.market_making{background:#1a2a1a;color:#3fb950}
+.type-tag.averaging{background:#2a1a1a;color:#f0883e}
 .type-tag.stop_loss{background:#2a1a1a;color:#f85149}
 .type-tag.take_profit{background:#1a3a1a;color:#3fb950}
 .type-tag.settle{background:#1a1a2a;color:#8b949e}
@@ -183,7 +186,7 @@ a{color:#58a6ff}
     <span>Uptime <span id="uptime">0s</span></span>
     <span>Active <span id="active-time">0s</span></span>
     <span>Mode: <span id="mode">--</span></span>
-    <span id="utc-clock" style="font-weight:600;font-size:13px;padding:2px 8px;border-radius:4px">--:--:-- UTC</span>
+    <span id="utc-clock" style="font-weight:600;font-size:13px;padding:2px 8px;border-radius:4px">--:--:-- EST</span>
     <div class="toggle-wrap" id="trade-toggle" onclick="toggleTrading()">
       <span class="toggle-label active" id="toggle-label">Active</span>
       <div class="toggle-track active" id="toggle-track"><div class="toggle-knob"></div></div>
@@ -434,6 +437,11 @@ a{color:#58a6ff}
     <button class="chart-btn" data-action="stop_loss" onclick="filterAction('stop_loss')">Stop Loss</button>
     <button class="chart-btn" data-action="take_profit" onclick="filterAction('take_profit')">Take Profit</button>
     <button class="chart-btn" data-action="thesis_break" onclick="filterAction('thesis_break')">Thesis Break</button>
+    <span style="color:#30363d;margin:0 4px">|</span>
+    <button class="chart-btn active" data-strategy="all" onclick="filterStrategy('all')">All Strategies</button>
+    <button class="chart-btn" data-strategy="directional" onclick="filterStrategy('directional')">Directional</button>
+    <button class="chart-btn" data-strategy="monte_carlo" onclick="filterStrategy('monte_carlo')">Monte Carlo</button>
+    <button class="chart-btn" data-strategy="settlement_ride" onclick="filterStrategy('settlement_ride')">Settlement Ride</button>
     <span style="flex:1"></span>
     <button class="chart-btn" onclick="refreshTrades()" style="border-color:#58a6ff;color:#58a6ff">Refresh</button>
   </div>
@@ -445,7 +453,7 @@ a{color:#58a6ff}
   </div>
   <div class="chart-container" style="max-height:400px;overflow-y:auto">
     <table class="trade-table">
-      <thead><tr><th>Time</th><th>Market</th><th>Side</th><th>Action</th><th>Count</th><th>Price</th><th>Fees</th><th>P&amp;L</th></tr></thead>
+      <thead><tr><th>Time</th><th>Market</th><th>Side</th><th>Action</th><th>Strategy</th><th>Count</th><th>Price</th><th>Fees</th><th>P&amp;L</th></tr></thead>
       <tbody id="trade-table-body"></tbody>
     </table>
   </div>
@@ -516,7 +524,7 @@ a{color:#58a6ff}
     $('mode').textContent = s.mode || '--';
 
     // Update quiet hours from server config
-    if (s.quiet_hours_utc) quietHoursUTC = s.quiet_hours_utc;
+    if (s.quiet_hours_est) quietHoursEST = s.quiet_hours_est;
 
     // Sync trading toggles with server state
     if (s.trading_paused != null) {
@@ -738,7 +746,7 @@ a{color:#58a6ff}
           const arrow = isYes ? '\\u25B2' : '\\u25BC';
           const cls = isYes ? 'yes' : 'no';
           const label = m.result.toUpperCase();
-          const time = m.close_time ? new Date(m.close_time).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : '';
+          const time = m.close_time ? new Date(m.close_time).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',timeZone:'America/New_York'}) : '';
           return '<span class="settle-badge ' + cls + '">' + arrow + label + ' ' + time + '</span>';
         }).join('');
       }
@@ -954,17 +962,16 @@ a{color:#58a6ff}
     else { el.className = 'countdown ok'; }
   }
 
-  // UTC clock with quiet hours coloring
-  let quietHoursUTC = [];
+  // EST clock with quiet hours coloring
+  let quietHoursEST = [];
+  const estFmt = new Intl.DateTimeFormat('en-US', {timeZone:'America/New_York',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
+  function getESTHour() { return parseInt(new Intl.DateTimeFormat('en-US', {timeZone:'America/New_York',hour:'numeric',hour12:false}).format(new Date()), 10); }
   function tickUTCClock() {
     const now = new Date();
-    const h = now.getUTCHours();
-    const m = String(now.getUTCMinutes()).padStart(2, '0');
-    const s = String(now.getUTCSeconds()).padStart(2, '0');
-    const hh = String(h).padStart(2, '0');
+    const estH = getESTHour();
     const el = $('utc-clock');
-    el.textContent = hh + ':' + m + ':' + s + ' UTC';
-    if (quietHoursUTC.length > 0 && quietHoursUTC.includes(h)) {
+    el.textContent = estFmt.format(now) + ' EST';
+    if (quietHoursEST.length > 0 && quietHoursEST.includes(estH)) {
       el.style.background = '#2a1a1a';
       el.style.color = '#f85149';
       el.style.border = '1px solid #da3633';
@@ -1096,6 +1103,7 @@ a{color:#58a6ff}
   let allTrades = [];
   let chartFilter = 'all';
   let actionFilter = 'all';
+  let strategyFilter = 'all';
   let equityChart = null;
   let pnlChart = null;
 
@@ -1111,6 +1119,14 @@ a{color:#58a6ff}
     actionFilter = filter;
     document.querySelectorAll('.chart-btn[data-action]').forEach(b => {
       b.classList.toggle('active', b.dataset.action === filter);
+    });
+    renderCharts();
+  };
+
+  window.filterStrategy = function(filter) {
+    strategyFilter = filter;
+    document.querySelectorAll('.chart-btn[data-strategy]').forEach(b => {
+      b.classList.toggle('active', b.dataset.strategy === filter);
     });
     renderCharts();
   };
@@ -1135,6 +1151,7 @@ a{color:#58a6ff}
         if (chartFilter === 'ETH' && !ticker.includes('ETH')) return false;
       }
       if (actionFilter !== 'all' && t.action !== actionFilter) return false;
+      if (strategyFilter !== 'all' && (t.strategy_tag || 'directional') !== strategyFilter) return false;
       return true;
     });
   }
@@ -1252,6 +1269,7 @@ a{color:#58a6ff}
           legend: { display: false },
           tooltip: {
             callbacks: {
+              title: function(items) { if (!items.length) return ''; return new Date(items[0].parsed.x).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',timeZone:'America/New_York'}) + ' EST'; },
               label: function(ctx) {
                 const raw = ctx.raw;
                 if (raw.ticker) {
@@ -1278,7 +1296,7 @@ a{color:#58a6ff}
             type: 'time',
             time: { tooltipFormat: 'MMM d, HH:mm', displayFormats: { hour: 'HH:mm', minute: 'HH:mm' } },
             grid: { color: '#21262d' },
-            ticks: { color: '#8b949e', font: { size: 11 } },
+            ticks: { color: '#8b949e', font: { size: 11 }, callback: function(val) { return new Date(val).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',timeZone:'America/New_York'}); } },
           },
           y: {
             grid: { color: '#21262d' },
@@ -1324,6 +1342,7 @@ a{color:#58a6ff}
           legend: { display: false },
           tooltip: {
             callbacks: {
+              title: function(items) { if (!items.length) return ''; return new Date(items[0].parsed.x).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',timeZone:'America/New_York'}) + ' EST'; },
               label: function(ctx) {
                 const r = ctx.raw;
                 const sign = r.y >= 0 ? '+' : '';
@@ -1342,7 +1361,7 @@ a{color:#58a6ff}
             type: 'time',
             time: { tooltipFormat: 'MMM d, HH:mm', displayFormats: { hour: 'HH:mm', minute: 'HH:mm' } },
             grid: { color: '#21262d' },
-            ticks: { color: '#8b949e', font: { size: 11 } },
+            ticks: { color: '#8b949e', font: { size: 11 }, callback: function(val) { return new Date(val).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',timeZone:'America/New_York'}); } },
           },
           y: {
             grid: { color: '#21262d' },
@@ -1365,14 +1384,17 @@ a{color:#58a6ff}
       const pnlCls = pnl >= 0 ? 'pnl-pos' : 'pnl-neg';
       const sign = pnl >= 0 ? '+' : '';
       const sideCls = t.side === 'yes' ? 'side-yes' : 'side-no';
-      const time = t.exit_time ? new Date(t.exit_time).toLocaleString([], {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'}) : '--';
+      const time = t.exit_time ? new Date(t.exit_time).toLocaleString([], {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit', timeZone:'America/New_York'}) : '--';
       const actionLabel = (t.action || '').replace('_', ' ');
       const actionCls = (t.action || '').replace('_', '-');
+      const strat = t.strategy_tag || 'directional';
+      const stratLabel = strat.replace('_', ' ');
       return '<tr>' +
         '<td style="color:#8b949e">' + time + '</td>' +
         '<td style="color:#c9d1d9">' + (t.market_ticker || '') + '</td>' +
         '<td class="' + sideCls + '">' + (t.side || '').toUpperCase() + '</td>' +
         '<td><span class="type-tag ' + actionCls + '">' + actionLabel + '</span></td>' +
+        '<td><span class="type-tag ' + strat + '">' + stratLabel + '</span></td>' +
         '<td>' + (t.count || 0) + '</td>' +
         '<td>$' + (t.price_dollars || 0).toFixed(2) + '</td>' +
         '<td style="color:#8b949e">$' + (t.fees_dollars || 0).toFixed(2) + '</td>' +

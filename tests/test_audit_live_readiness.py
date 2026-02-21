@@ -1843,7 +1843,7 @@ class TestConfigDefaults:
         assert c.pre_expiry_exit_seconds == 90.0
         assert c.pre_expiry_exit_min_pnl_cents == -0.03
         assert c.yes_side_edge_multiplier == 1.4
-        assert c.min_entry_price == 0.25
+        assert c.min_entry_price == 0.30
         assert c.max_directional_price == 0.60
         assert c.min_quality_score == 0.80
         assert c.certainty_scalp_max_ttx == 180.0

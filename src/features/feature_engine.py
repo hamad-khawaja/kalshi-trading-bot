@@ -65,6 +65,15 @@ class FeatureEngine:
         mom_180s = self._compute_momentum(prices, self._momentum_windows[2])
         mom_600s = self._compute_momentum(prices, self._momentum_windows[3])
 
+        # 30min momentum: use dedicated 30min price array for better accuracy
+        prices_30min = self._to_price_array(snapshot.btc_prices_30min)
+        mom_1800s = self._compute_momentum(prices_30min, 1800)
+
+        # Hour-of-day cyclical encoding
+        hour = snapshot.timestamp.hour
+        hour_of_day_sin = math.sin(2 * math.pi * hour / 24)
+        hour_of_day_cos = math.cos(2 * math.pi * hour / 24)
+
         # Realized volatility
         vol_5min = volatility_realized(prices, self._vol_window)
 
@@ -116,6 +125,7 @@ class FeatureEngine:
             momentum_60s=mom_60s,
             momentum_180s=mom_180s,
             momentum_600s=mom_600s,
+            momentum_1800s=mom_1800s,
             realized_vol_5min=vol_5min,
             rsi_14=rsi_val,
             vwap_deviation=vwap_dev,
@@ -137,8 +147,12 @@ class FeatureEngine:
             chainlink_divergence=snapshot.chainlink_divergence or 0.0,
             chainlink_confirmation=1.0 if snapshot.chainlink_round_updated else 0.0,
             btc_beta_signal=max(-1.0, min(1.0, math.tanh((snapshot.btc_momentum_lead or 0.0) / 0.003) * 1.3)),
+            funding_rate_signal=self._compute_funding_signal(snapshot),
+            liquidation_imbalance=self._compute_liquidation_imbalance(snapshot),
             time_elapsed_seconds=snapshot.time_elapsed_seconds,
             window_phase=snapshot.window_phase,
+            hour_of_day_sin=hour_of_day_sin,
+            hour_of_day_cos=hour_of_day_cos,
         )
 
     @staticmethod
@@ -199,6 +213,35 @@ class FeatureEngine:
 
         # Map [0, 1] → [-1, 1]
         return (weighted_yes / total_weight) * 2.0 - 1.0
+
+    @staticmethod
+    def _compute_funding_signal(snapshot: MarketSnapshot) -> float:
+        """Compute funding rate signal in [-1, 1].
+
+        Negative = high positive funding (crowded longs, bearish).
+        Centers on neutral 0.01% (0.0001) rate.
+        """
+        rate = snapshot.funding_rate
+        if rate is None:
+            return 0.0
+        # -tanh((rate - 0.0001) / 0.0003): high funding → negative signal (bearish)
+        return -math.tanh((rate - 0.0001) / 0.0003)
+
+    @staticmethod
+    def _compute_liquidation_imbalance(snapshot: MarketSnapshot) -> float:
+        """Compute liquidation imbalance in [-1, 1].
+
+        Positive = more longs liquidated → bearish pressure.
+        Scaled by magnitude: $1M total liquidations = full signal strength.
+        """
+        long_liq = snapshot.liquidation_long_usd or 0.0
+        short_liq = snapshot.liquidation_short_usd or 0.0
+        total = long_liq + short_liq
+        if total <= 0:
+            return 0.0
+        direction = (long_liq - short_liq) / total  # [-1, 1]
+        magnitude = min(1.0, total / 1_000_000)  # scale: $1M = full signal
+        return direction * magnitude
 
     @staticmethod
     def _extract_asset_symbol(market_ticker: str) -> str:

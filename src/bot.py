@@ -15,6 +15,7 @@ import structlog
 
 from src.config import AssetConfig, BinanceConfig, BotSettings, KalshiConfig, load_settings
 from src.data.binance_feed import BinanceFeed
+from src.data.binance_futures_feed import BinanceFuturesFeed
 from src.data.chainlink_feed import ChainlinkFeed
 from src.data.time_profile import TimeProfiler
 from src.data.data_hub import DataHub
@@ -108,6 +109,17 @@ class TradingBot:
             scanner_config = settings.kalshi.model_copy(update={"series_ticker": asset.series_ticker})
             self._scanners[asset.symbol] = MarketScanner(self._kalshi_rest, scanner_config)
 
+        # Binance Futures feed (funding rate + liquidations)
+        self._futures_feed: BinanceFuturesFeed | None = None
+        if settings.binance_futures.enabled:
+            fc = settings.binance_futures
+            self._futures_feed = BinanceFuturesFeed(
+                symbols=fc.symbols,
+                funding_poll_interval=fc.funding_poll_interval,
+                liquidation_ws_url=fc.liquidation_ws_url,
+                funding_api_base=fc.funding_api_base,
+            )
+
         self._data_hub = DataHub(
             self._kalshi_rest,
             self._kalshi_ws,
@@ -115,6 +127,7 @@ class TradingBot:
             scanners=self._scanners,
             secondary_feeds=self._secondary_feeds,
             chainlink_feeds=self._chainlink_feeds,
+            futures_feed=self._futures_feed,
             strategy_config=settings.strategy,
             asset_configs=settings.kalshi.assets,
         )
@@ -124,7 +137,7 @@ class TradingBot:
         self._dashboard_state = DashboardState()
         self._dashboard_state.mode = settings.mode
         if settings.strategy.quiet_hours_enabled:
-            self._dashboard_state.quiet_hours_utc = settings.strategy.quiet_hours_utc
+            self._dashboard_state.quiet_hours_est = settings.strategy.quiet_hours_est
         self._dashboard_state.strategy_toggles = {
             "directional": settings.strategy.directional_enabled,
             "fomo": settings.strategy.fomo_enabled,
@@ -433,6 +446,8 @@ class TradingBot:
                 "cross_asset": prediction.features_used.get("cross_asset_signal", 0),
                 "chainlink": prediction.features_used.get("chainlink_signal", 0),
                 "btc_beta": prediction.features_used.get("btc_beta_signal", 0),
+                "funding_rate": prediction.features_used.get("funding_signal", 0),
+                "liquidation": prediction.features_used.get("liquidation_signal", 0),
                 "time_decay": prediction.features_used.get("time_decay_signal", 0),
             },
         }
@@ -745,6 +760,7 @@ class TradingBot:
                             model_probability=signal_item.model_probability,
                             implied_probability=signal_item.implied_probability,
                             entry_time=datetime.now(timezone.utc),
+                            strategy_tag=signal_item.signal_type,
                         )
                         await self._db.insert_trade(completed)
                     except Exception:
@@ -930,6 +946,7 @@ class TradingBot:
                                         pnl_dollars=pnl,
                                         entry_time=pos.entry_time,
                                         exit_time=datetime.now(timezone.utc),
+                                        strategy_tag=pos.strategy_tag,
                                     )
                                     await self._db.insert_trade(completed)
                                 except Exception:
@@ -982,6 +999,7 @@ class TradingBot:
                                             pnl_dollars=pnl,
                                             entry_time=pos.entry_time,
                                             exit_time=datetime.now(timezone.utc),
+                                            strategy_tag=pos.strategy_tag,
                                         )
                                         await self._db.insert_trade(completed)
                                     except Exception:
@@ -1036,6 +1054,7 @@ class TradingBot:
                                     pnl_dollars=pnl,
                                     entry_time=pos.entry_time,
                                     exit_time=datetime.now(timezone.utc),
+                                    strategy_tag=pos.strategy_tag,
                                 )
                                 await self._db.insert_trade(completed)
                             except Exception:
@@ -1112,6 +1131,7 @@ class TradingBot:
                                     pnl_dollars=pnl,
                                     entry_time=pos.entry_time,
                                     exit_time=datetime.now(timezone.utc),
+                                    strategy_tag=pos.strategy_tag,
                                 )
                                 await self._db.insert_trade(completed)
                             except Exception:
@@ -1185,6 +1205,7 @@ class TradingBot:
                                     pnl_dollars=pnl,
                                     entry_time=pos.entry_time,
                                     exit_time=datetime.now(timezone.utc),
+                                    strategy_tag=pos.strategy_tag,
                                 )
                                 await self._db.insert_trade(completed)
                             except Exception:
@@ -1264,6 +1285,7 @@ class TradingBot:
                                     pnl_dollars=pnl,
                                     entry_time=pos.entry_time,
                                     exit_time=datetime.now(timezone.utc),
+                                    strategy_tag=pos.strategy_tag,
                                 )
                                 await self._db.insert_trade(completed)
                             except Exception:
@@ -1349,6 +1371,7 @@ class TradingBot:
                                     pnl_dollars=pnl,
                                     entry_time=pos.entry_time,
                                     exit_time=datetime.now(timezone.utc),
+                                    strategy_tag=pos.strategy_tag,
                                 )
                                 await self._db.insert_trade(completed)
                             except Exception:

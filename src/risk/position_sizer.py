@@ -103,6 +103,13 @@ class PositionSizer:
             zone_mult = self._config.zone_kelly_multipliers[signal.entry_zone - 1]
             f *= zone_mult
 
+        # Directional high-price boost: 92-99% WR at $0.50+ deserves bigger size
+        if (
+            signal.signal_type == "directional"
+            and price >= self._config.directional_high_price_threshold
+        ):
+            f *= self._config.directional_high_price_boost
+
         # Scale by confidence (linear for stronger differentiation)
         f *= signal.confidence
 
