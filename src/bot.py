@@ -744,6 +744,19 @@ class TradingBot:
                         market_volume=local_market.get("volume"),
                         cycle=self._cycle_count,
                     )
+                    # Log MM fill event for immediate market-making fills
+                    if signal_item.signal_type == "market_making":
+                        logger.info(
+                            "mm_fill",
+                            ticker=ticker,
+                            side=signal_item.side,
+                            price=signal_item.suggested_price_dollars,
+                            count=order_state.filled_count,
+                            raw_edge=signal_item.raw_edge,
+                            net_edge=signal_item.net_edge,
+                            model_prob=signal_item.model_probability,
+                            implied_prob=signal_item.implied_probability,
+                        )
                     # Track buy fee in position for accurate PnL
                     buy_fee = EdgeDetector.compute_fee_dollars(
                         order_state.filled_count,
@@ -1377,6 +1390,19 @@ class TradingBot:
                         side=filled_state.signal.side,
                         filled=filled_state.filled_count,
                     )
+                    # Log MM fill event for market-making orders
+                    if filled_state.signal.signal_type == "market_making":
+                        logger.info(
+                            "mm_fill",
+                            ticker=filled_state.signal.market_ticker,
+                            side=filled_state.signal.side,
+                            price=filled_state.signal.suggested_price_dollars,
+                            count=filled_state.filled_count,
+                            raw_edge=filled_state.signal.raw_edge,
+                            net_edge=filled_state.signal.net_edge,
+                            model_prob=filled_state.signal.model_probability,
+                            implied_prob=filled_state.signal.implied_probability,
+                        )
                     # Force-refresh balance after resting fill
                     await self._get_balance(force=True)
                     self._update_dashboard_positions()
@@ -1391,6 +1417,19 @@ class TradingBot:
                 # Track cumulative time with open positions
                 if self._position_tracker._positions:
                     self._dashboard_state.active_trading_seconds += 10
+
+                # Quote refresh: cancel and re-quote when fair value moves >$0.03
+                for qticker, pred in self._last_predictions.items():
+                    mm = self._signal_combiner._market_maker
+                    fair_value = Decimal(str(round(pred.probability_yes, 2)))
+                    if mm.should_requote(qticker, fair_value):
+                        await self._order_manager.cancel_market_orders(qticker)
+                        mm.clear_quote_state(qticker)
+                        logger.info(
+                            "mm_requote_triggered",
+                            ticker=qticker,
+                            fair_value=float(fair_value),
+                        )
 
                 # Cancel stale resting orders (older than 90s)
                 await self._order_manager.cancel_stale_orders(max_age_seconds=90)
