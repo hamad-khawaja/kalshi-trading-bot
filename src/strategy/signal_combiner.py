@@ -164,26 +164,48 @@ class SignalCombiner:
                 ]
                 positive = sum(1 for m in momentums if m > trend_min_magnitude)
                 negative = sum(1 for m in momentums if m < -trend_min_magnitude)
+                # Settlement override: if recent settlements contradict the
+                # momentum-based block, the cross-window trend trumps
+                # intra-window noise.
+                settlement_override_threshold = 0.3
                 if negative >= 2 and directional.side == "yes":
-                    logger.info(
-                        "trend_guard_blocked",
-                        ticker=snapshot.market_ticker,
-                        side="yes",
-                        reason="majority_momentum_negative",
-                        negative_count=negative,
-                        net_edge=directional.net_edge,
-                    )
-                    directional = None
+                    if features.settlement_bias > settlement_override_threshold:
+                        logger.info(
+                            "trend_guard_settlement_override",
+                            ticker=snapshot.market_ticker,
+                            side="yes",
+                            settlement_bias=round(features.settlement_bias, 4),
+                            negative_count=negative,
+                        )
+                    else:
+                        logger.info(
+                            "trend_guard_blocked",
+                            ticker=snapshot.market_ticker,
+                            side="yes",
+                            reason="majority_momentum_negative",
+                            negative_count=negative,
+                            net_edge=directional.net_edge,
+                        )
+                        directional = None
                 elif positive >= 2 and directional.side == "no":
-                    logger.info(
-                        "trend_guard_blocked",
-                        ticker=snapshot.market_ticker,
-                        side="no",
-                        reason="majority_momentum_positive",
-                        positive_count=positive,
-                        net_edge=directional.net_edge,
-                    )
-                    directional = None
+                    if features.settlement_bias < -settlement_override_threshold:
+                        logger.info(
+                            "trend_guard_settlement_override",
+                            ticker=snapshot.market_ticker,
+                            side="no",
+                            settlement_bias=round(features.settlement_bias, 4),
+                            positive_count=positive,
+                        )
+                    else:
+                        logger.info(
+                            "trend_guard_blocked",
+                            ticker=snapshot.market_ticker,
+                            side="no",
+                            reason="majority_momentum_positive",
+                            positive_count=positive,
+                            net_edge=directional.net_edge,
+                        )
+                        directional = None
 
         # Phase gating for directional signals
         if directional is not None and phase_enabled:
