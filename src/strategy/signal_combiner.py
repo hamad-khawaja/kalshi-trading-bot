@@ -151,38 +151,39 @@ class SignalCombiner:
         directional = None if ((directional_disabled and not btc_beta_override) or quiet_hours_active) else self._edge_detector.detect(prediction, snapshot)
 
         if directional is not None:
-            # Trend guard: if all momentum timeframes agree on a direction,
-            # don't trade against the trend. The model hovers near 0.50 and
-            # generates fake edges against clear trends.
+            # Trend guard: if majority of momentum timeframes agree on a
+            # direction, don't trade against the trend. Uses 60s/180s/600s
+            # (skip 15s — too noisy) with a magnitude threshold to ignore
+            # near-zero values that are effectively noise.
             if features is not None:
+                trend_min_magnitude = 0.0001  # ~0.01% move
                 momentums = [
-                    features.momentum_15s,
                     features.momentum_60s,
                     features.momentum_180s,
                     features.momentum_600s,
                 ]
-                nonzero = [m for m in momentums if m != 0]
-                if len(nonzero) >= 3:
-                    all_negative = all(m < 0 for m in nonzero)
-                    all_positive = all(m > 0 for m in nonzero)
-                    if all_negative and directional.side == "yes":
-                        logger.info(
-                            "trend_guard_blocked",
-                            ticker=snapshot.market_ticker,
-                            side="yes",
-                            reason="all_momentum_negative",
-                            net_edge=directional.net_edge,
-                        )
-                        directional = None
-                    elif all_positive and directional.side == "no":
-                        logger.info(
-                            "trend_guard_blocked",
-                            ticker=snapshot.market_ticker,
-                            side="no",
-                            reason="all_momentum_positive",
-                            net_edge=directional.net_edge,
-                        )
-                        directional = None
+                positive = sum(1 for m in momentums if m > trend_min_magnitude)
+                negative = sum(1 for m in momentums if m < -trend_min_magnitude)
+                if negative >= 2 and directional.side == "yes":
+                    logger.info(
+                        "trend_guard_blocked",
+                        ticker=snapshot.market_ticker,
+                        side="yes",
+                        reason="majority_momentum_negative",
+                        negative_count=negative,
+                        net_edge=directional.net_edge,
+                    )
+                    directional = None
+                elif positive >= 2 and directional.side == "no":
+                    logger.info(
+                        "trend_guard_blocked",
+                        ticker=snapshot.market_ticker,
+                        side="no",
+                        reason="majority_momentum_positive",
+                        positive_count=positive,
+                        net_edge=directional.net_edge,
+                    )
+                    directional = None
 
         # Phase gating for directional signals
         if directional is not None and phase_enabled:
