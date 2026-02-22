@@ -53,6 +53,8 @@ class SignalCombiner:
         self._mc_edge_streak: dict[str, tuple[str, int]] = {}  # ticker → (side, count)
         # Phase 1 overreaction state: ticker → {direction, extreme}
         self._phase1_state: dict[str, dict] = {}
+        # Block reasons from last evaluate() call (for logging)
+        self.last_block_reasons: list[str] = []
         # Simulated time for backtest quiet hours
         self._simulated_time: datetime | None = None
         self.quiet_hours_override: bool = False
@@ -85,8 +87,12 @@ class SignalCombiner:
         Returns:
             List of trade signals to execute (may be empty)
         """
+        # Reset block reasons for this cycle
+        self.last_block_reasons = []
+
         # Time-to-expiry gate
         if snapshot.time_to_expiry_seconds < self.MIN_TIME_TO_TRADE_SECONDS:
+            self.last_block_reasons.append("ttx_too_low")
             return []
 
         signals: list[TradeSignal] = []
@@ -118,6 +124,7 @@ class SignalCombiner:
             current_hour = self._get_current_est_hour()
             if current_hour in self._config.quiet_hours_est:
                 quiet_hours_active = True
+                self.last_block_reasons.append(f"quiet_hours(hr={current_hour})")
                 logger.info(
                     "quiet_hours_blocked",
                     ticker=snapshot.market_ticker,
@@ -155,7 +162,7 @@ class SignalCombiner:
             # direction, don't trade against the trend. Uses 60s/180s/600s
             # (skip 15s — too noisy) with a magnitude threshold to ignore
             # near-zero values that are effectively noise.
-            if features is not None:
+            if features is not None and self._config.trend_guard_enabled:
                 trend_min_magnitude = 0.0001  # ~0.01% move
                 momentums = [
                     features.momentum_60s,
@@ -178,6 +185,9 @@ class SignalCombiner:
                             negative_count=negative,
                         )
                     else:
+                        self.last_block_reasons.append(
+                            f"trend_guard(yes vs {negative}neg)"
+                        )
                         logger.info(
                             "trend_guard_blocked",
                             ticker=snapshot.market_ticker,
@@ -197,6 +207,9 @@ class SignalCombiner:
                             positive_count=positive,
                         )
                     else:
+                        self.last_block_reasons.append(
+                            f"trend_guard(no vs {positive}pos)"
+                        )
                         logger.info(
                             "trend_guard_blocked",
                             ticker=snapshot.market_ticker,
@@ -212,6 +225,7 @@ class SignalCombiner:
             ticker = snapshot.market_ticker
             if phase == 1:
                 # Observation phase: no directional trades
+                self.last_block_reasons.append("phase1_observation")
                 logger.info(
                     "phase_blocked_directional",
                     ticker=ticker,
@@ -241,6 +255,7 @@ class SignalCombiner:
                         mom_60s=features.momentum_60s if features else 0,
                     )
                 else:
+                    self.last_block_reasons.append("phase2_no_bounce")
                     logger.info(
                         "phase2_no_bounce_back",
                         ticker=ticker,
@@ -253,6 +268,7 @@ class SignalCombiner:
                 min_edge_late = self._config.min_edge_threshold * self._config.phase_late_edge_multiplier
                 min_conf_late = self._config.confidence_min + self._config.phase_late_confidence_boost
                 if directional.net_edge < min_edge_late or directional.confidence < min_conf_late:
+                    self.last_block_reasons.append("phase4_tightened")
                     logger.info(
                         "phase_late_tightened",
                         ticker=ticker,
@@ -267,6 +283,7 @@ class SignalCombiner:
             elif phase == 5:
                 # Final phase (last 60s): no new entries — contracts are lottery
                 # tickets with unpredictable resolution
+                self.last_block_reasons.append("phase5_final")
                 logger.info(
                     "phase5_blocked",
                     ticker=ticker,
@@ -291,6 +308,9 @@ class SignalCombiner:
             self._edge_streak[ticker] = (directional.side, streak)
 
             if streak < required:
+                self.last_block_reasons.append(
+                    f"edge_streak({streak}/{required})"
+                )
                 logger.info(
                     "edge_streak_building",
                     ticker=ticker,
@@ -347,8 +367,13 @@ class SignalCombiner:
                     signals.append(settlement_ride)
                     return signals
 
-            # 2d. Monte Carlo signal (independent parallel strategy)
-            if self._config.mc_enabled and not quiet_hours_active and features is not None:
+            # 2d. Monte Carlo signal (standalone mode — only when not used as model signal)
+            if (
+                self._config.mc_enabled
+                and not self._config.mc_as_model_signal
+                and not quiet_hours_active
+                and features is not None
+            ):
                 mc_signal = self._mc_detector.detect(snapshot, features)
 
                 # Phase gating for MC signals (same rules as directional)
@@ -460,6 +485,15 @@ class SignalCombiner:
                     num_quotes=len(mm_signals),
                     alongside_directional=confirmed_directional_side is not None,
                 )
+            elif not signals:
+                # MM returned nothing — check why
+                mm_vol = self._market_maker._vol_tracker
+                if (
+                    self._config.mm_vol_filter_enabled
+                    and mm_vol is not None
+                    and mm_vol.current_regime == "extreme"
+                ):
+                    self.last_block_reasons.append("mm_extreme_vol")
 
         return signals
 

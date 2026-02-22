@@ -97,8 +97,12 @@ class MarketMaker:
             current_position: Net YES contracts held (positive = long YES)
             directional_side: If set, only generate MM quotes on the opposite side
         """
-        # Skip market-making in extreme volatility
-        if self._vol_tracker is not None and self._vol_tracker.current_regime == "extreme":
+        # Skip market-making in extreme volatility (togglable from dashboard)
+        if (
+            self._config.mm_vol_filter_enabled
+            and self._vol_tracker is not None
+            and self._vol_tracker.current_regime == "extreme"
+        ):
             logger.info(
                 "mm_skipped_extreme_vol",
                 ticker=snapshot.market_ticker,

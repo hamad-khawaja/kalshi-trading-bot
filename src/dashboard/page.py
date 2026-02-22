@@ -235,6 +235,15 @@ a{color:#58a6ff}
     <span class="toggle-label active">MM</span>
     <div class="toggle-track active"><div class="toggle-knob"></div></div>
   </div>
+  <span class="strat-label" style="margin-left:8px">Guards:</span>
+  <div class="toggle-wrap" data-strategy="trend_guard" onclick="toggleStrategy('trend_guard')">
+    <span class="toggle-label active">TREND</span>
+    <div class="toggle-track active"><div class="toggle-knob"></div></div>
+  </div>
+  <div class="toggle-wrap" data-strategy="mm_vol_filter" onclick="toggleStrategy('mm_vol_filter')">
+    <span class="toggle-label active">MMVOL</span>
+    <div class="toggle-track active"><div class="toggle-knob"></div></div>
+  </div>
 </div>
 
 <div id="dashboard-view">

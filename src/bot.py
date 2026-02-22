@@ -27,6 +27,7 @@ from src.data.market_scanner import MarketScanner
 from src.execution.order_manager import OrderManager
 from src.execution.position_tracker import PositionTracker
 from src.features.feature_engine import FeatureEngine
+from src.model.monte_carlo import MonteCarloSimulator
 from src.model.predict import HeuristicModel, ProbabilityModel
 from src.risk.position_sizer import PositionSizer
 from src.risk.risk_manager import RiskManager
@@ -148,6 +149,8 @@ class TradingBot:
             "settlement_ride": settings.strategy.settlement_ride_enabled,
             "monte_carlo": settings.strategy.mc_enabled,
             "market_making": settings.strategy.use_market_maker,
+            "trend_guard": settings.strategy.trend_guard_enabled,
+            "mm_vol_filter": settings.strategy.mm_vol_filter_enabled,
         }
         self._dashboard_server = DashboardServer(
             self._dashboard_state,
@@ -176,6 +179,14 @@ class TradingBot:
             self._time_profiler = TimeProfiler(
                 lookback_days=settings.strategy.time_profile_lookback_days
             )
+
+        # Monte Carlo simulator (for model confirmation signal)
+        self._mc_simulator = MonteCarloSimulator(
+            n_samples=settings.strategy.mc_samples,
+            drift_mode=settings.strategy.mc_drift_mode,
+            vol_multiplier=settings.strategy.mc_vol_multiplier,
+            min_bootstrap_returns=settings.strategy.mc_bootstrap_min_returns,
+        )
 
         # Strategy (needs vol_tracker, so must come after risk)
         self._signal_combiner = SignalCombiner(
@@ -341,6 +352,8 @@ class TradingBot:
         self._settings.strategy.settlement_ride_enabled = st.get("settlement_ride", True)
         self._settings.strategy.mc_enabled = st.get("monte_carlo", False)
         self._settings.strategy.use_market_maker = st.get("market_making", True)
+        self._settings.strategy.trend_guard_enabled = st.get("trend_guard", True)
+        self._settings.strategy.mm_vol_filter_enabled = st.get("mm_vol_filter", True)
 
         await asyncio.gather(*(self._process_market(m) for m in markets_to_process))
         await self._db.flush()
@@ -419,6 +432,18 @@ class TradingBot:
         }
         ds.features = local_features
 
+        # Monte Carlo as model confirmation signal
+        if (
+            self._settings.strategy.mc_enabled
+            and self._settings.strategy.mc_as_model_signal
+            and snapshot.strike_price is not None
+            and snapshot.time_to_expiry_seconds >= self._settings.strategy.mc_min_ttx
+            and snapshot.time_to_expiry_seconds <= self._settings.strategy.mc_max_ttx
+        ):
+            mc_prob, mc_conf = self._mc_simulator.estimate_probability(snapshot, features)
+            features.mc_probability = mc_prob
+            features.mc_confidence = mc_conf
+
         # Update volatility tracker
         self._vol_tracker.update(features.realized_vol_5min)
 
@@ -455,6 +480,7 @@ class TradingBot:
                 "funding_rate": prediction.features_used.get("funding_signal", 0),
                 "liquidation": prediction.features_used.get("liquidation_signal", 0),
                 "time_decay": prediction.features_used.get("time_decay_signal", 0),
+                "mc": prediction.features_used.get("mc_signal", 0),
             },
         }
         ds.prediction = local_prediction
@@ -553,6 +579,15 @@ class TradingBot:
 
             if not signals:
                 reason = edge_analysis.get("decision", "No signal generated") if edge_analysis else "No signal generated"
+                block_reasons = self._signal_combiner.last_block_reasons
+                if block_reasons:
+                    reason = " | ".join(block_reasons)
+                    logger.info(
+                        "cycle_no_trade",
+                        ticker=ticker,
+                        blocks=block_reasons,
+                        phase=snapshot.window_phase,
+                    )
                 ds.add_decision(self._cycle_count, "reject", reason)
                 return
 
