@@ -44,7 +44,14 @@ class MarketMaker:
         Returns 0-2 TradeSignals (YES bid, NO bid).
         """
         spread = snapshot.spread
-        if spread is None or float(spread) < self._min_spread:
+        effective_min_spread = self._min_spread
+        if self._config.asset_mm_min_spread:
+            ticker_upper = snapshot.market_ticker.upper()
+            for asset, asset_spread in self._config.asset_mm_min_spread.items():
+                if asset.upper() in ticker_upper:
+                    effective_min_spread = asset_spread
+                    break
+        if spread is None or float(spread) < effective_min_spread:
             return []
 
         # Don't market-make into dead/illiquid markets

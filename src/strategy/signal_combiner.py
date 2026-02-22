@@ -445,6 +445,13 @@ class SignalCombiner:
         if not cfg.settlement_ride_enabled:
             return None
 
+        # Per-asset settlement ride disable
+        if cfg.asset_settlement_ride_disabled:
+            ticker_upper = snapshot.market_ticker.upper()
+            for asset in cfg.asset_settlement_ride_disabled:
+                if asset.upper() in ticker_upper:
+                    return None
+
         # Must be late enough in the window
         if snapshot.time_elapsed_seconds < cfg.settlement_ride_min_elapsed_seconds:
             return None

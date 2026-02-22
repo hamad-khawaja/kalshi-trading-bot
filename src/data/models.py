@@ -200,6 +200,9 @@ class MarketSnapshot(BaseModel):
     predicted_funding_rate: float | None = None
     liquidation_long_usd: float | None = None
     liquidation_short_usd: float | None = None
+    other_asset_funding_rate: float | None = None
+    other_asset_liquidation_long_usd: float | None = None
+    other_asset_liquidation_short_usd: float | None = None
     time_to_expiry_seconds: float = 0.0
     time_elapsed_seconds: float = 0.0
     window_phase: int = 0  # 1-5
@@ -278,6 +281,8 @@ class FeatureVector(BaseModel):
     btc_beta_signal: float = 0.0  # BTC-led directional signal for non-BTC assets
     funding_rate_signal: float = 0.0  # [-1, 1]: negative = high positive funding (crowded longs, bearish)
     liquidation_imbalance: float = 0.0  # [-1, 1]: positive = more longs liquidated (bearish pressure)
+    funding_rate_divergence: float = 0.0  # [-1, 1]: cross-asset funding rate divergence
+    liquidation_ratio_divergence: float = 0.0  # [-1, 1]: cross-asset liquidation ratio divergence
     time_elapsed_seconds: float = 0.0
     window_phase: int = 0  # 1-5
     hour_of_day_sin: float = 0.0
@@ -315,6 +320,8 @@ class FeatureVector(BaseModel):
             self.btc_beta_signal,
             self.funding_rate_signal,
             self.liquidation_imbalance,
+            self.funding_rate_divergence,
+            self.liquidation_ratio_divergence,
             self.hour_of_day_sin,
             self.hour_of_day_cos,
         ]
@@ -352,6 +359,8 @@ class FeatureVector(BaseModel):
             "btc_beta_signal",
             "funding_rate_signal",
             "liquidation_imbalance",
+            "funding_rate_divergence",
+            "liquidation_ratio_divergence",
             "hour_of_day_sin",
             "hour_of_day_cos",
         ]

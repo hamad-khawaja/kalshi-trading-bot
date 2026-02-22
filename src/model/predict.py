@@ -59,6 +59,8 @@ class HeuristicModel(ProbabilityModel):
     HOUR_SIGNAL_WEIGHT = 0.01  # Hour-of-day awareness (reduced for futures signals)
     FUNDING_RATE_WEIGHT = 0.02  # Binance futures funding rate
     LIQUIDATION_WEIGHT = 0.01  # Binance futures liquidation cascades
+    FUNDING_DIVERGENCE_WEIGHT = 0.02  # Cross-asset funding rate divergence
+    LIQUIDATION_RATIO_WEIGHT = 0.01  # Cross-asset liquidation ratio divergence
 
     # Maximum adjustment from 0.50 base
     MAX_ADJUSTMENT = 0.30  # Raised from 0.18: match Kalshi's actual trading range (0.20–0.80)
@@ -215,6 +217,15 @@ class HeuristicModel(ProbabilityModel):
         # Invert: long liqs → price down → bearish
         liquidation_signal = -features.liquidation_imbalance
 
+        # --- 15. Cross-asset funding rate divergence ---
+        # Already computed by FeatureEngine: [-1, 1]
+        funding_divergence_signal = features.funding_rate_divergence
+
+        # --- 16. Cross-asset liquidation ratio divergence ---
+        # Already computed by FeatureEngine: [-1, 1]
+        # Invert: more long liqs in this asset vs other → bearish
+        liquidation_ratio_signal = -features.liquidation_ratio_divergence
+
         # --- 10. Time decay signal ---
         # Reduced weight: dampen signals near expiry but don't negate them
         time_decay_signal = 0.0
@@ -244,6 +255,8 @@ class HeuristicModel(ProbabilityModel):
         hr_w = self.HOUR_SIGNAL_WEIGHT * m.get("hour_signal", 1.0)
         fr_w = self.FUNDING_RATE_WEIGHT * m.get("funding_rate", 1.0)
         lq_w = self.LIQUIDATION_WEIGHT * m.get("liquidation", 1.0)
+        fd_w = self.FUNDING_DIVERGENCE_WEIGHT * m.get("funding_divergence", 1.0)
+        lr_w = self.LIQUIDATION_RATIO_WEIGHT * m.get("liquidation_ratio", 1.0)
 
         # Re-normalize so weights sum to the original total
         original_total = (
@@ -261,8 +274,10 @@ class HeuristicModel(ProbabilityModel):
             + self.HOUR_SIGNAL_WEIGHT
             + self.FUNDING_RATE_WEIGHT
             + self.LIQUIDATION_WEIGHT
+            + self.FUNDING_DIVERGENCE_WEIGHT
+            + self.LIQUIDATION_RATIO_WEIGHT
         )
-        adjusted_total = mom_w + tech_w + flow_w + mr_w + td_w + cx_w + tk_w + sb_w + ca_w + cl_w + bb_w + hr_w + fr_w + lq_w
+        adjusted_total = mom_w + tech_w + flow_w + mr_w + td_w + cx_w + tk_w + sb_w + ca_w + cl_w + bb_w + hr_w + fr_w + lq_w + fd_w + lr_w
         if adjusted_total > 0:
             scale = original_total / adjusted_total
             mom_w *= scale
@@ -279,6 +294,8 @@ class HeuristicModel(ProbabilityModel):
             hr_w *= scale
             fr_w *= scale
             lq_w *= scale
+            fd_w *= scale
+            lr_w *= scale
 
         # --- Combine signals ---
         raw_adjustment = (
@@ -295,6 +312,8 @@ class HeuristicModel(ProbabilityModel):
             + hr_w * hour_signal
             + fr_w * funding_signal
             + lq_w * liquidation_signal
+            + fd_w * funding_divergence_signal
+            + lr_w * liquidation_ratio_signal
             + td_w * time_decay_signal
         )
 
@@ -305,6 +324,7 @@ class HeuristicModel(ProbabilityModel):
             cross_exchange_signal, taker_signal, settlement_signal,
             cross_asset_signal, chainlink_signal, btc_beta_signal,
             hour_signal, funding_signal, liquidation_signal,
+            funding_divergence_signal, liquidation_ratio_signal,
             time_decay_signal,
         ]
         active_signals = [s for s in all_signals if abs(s) > 0.05]
@@ -398,6 +418,8 @@ class HeuristicModel(ProbabilityModel):
             "hour_signal": round(hour_signal, 4),
             "funding_signal": round(funding_signal, 4),
             "liquidation_signal": round(liquidation_signal, 4),
+            "funding_divergence_signal": round(funding_divergence_signal, 4),
+            "liquidation_ratio_signal": round(liquidation_ratio_signal, 4),
             "time_decay_signal": round(time_decay_signal, 4),
             "consistency": round(consistency, 4),
             "raw_adjustment": round(raw_adjustment, 4),
