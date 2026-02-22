@@ -147,7 +147,6 @@ class TradingBot:
             "fomo": settings.strategy.fomo_enabled,
             "certainty_scalp": settings.strategy.certainty_scalp_enabled,
             "settlement_ride": settings.strategy.settlement_ride_enabled,
-            "monte_carlo": settings.strategy.mc_enabled,
             "market_making": settings.strategy.use_market_maker,
             "trend_guard": settings.strategy.trend_guard_enabled,
             "mm_vol_filter": settings.strategy.mm_vol_filter_enabled,
@@ -350,7 +349,6 @@ class TradingBot:
         self._settings.strategy.fomo_enabled = st.get("fomo", False)
         self._settings.strategy.certainty_scalp_enabled = st.get("certainty_scalp", True)
         self._settings.strategy.settlement_ride_enabled = st.get("settlement_ride", True)
-        self._settings.strategy.mc_enabled = st.get("monte_carlo", False)
         self._settings.strategy.use_market_maker = st.get("market_making", True)
         self._settings.strategy.trend_guard_enabled = st.get("trend_guard", True)
         self._settings.strategy.mm_vol_filter_enabled = st.get("mm_vol_filter", True)
@@ -432,10 +430,9 @@ class TradingBot:
         }
         ds.features = local_features
 
-        # Monte Carlo as model confirmation signal
+        # Monte Carlo as model confirmation signal (#17)
         if (
             self._settings.strategy.mc_enabled
-            and self._settings.strategy.mc_as_model_signal
             and snapshot.strike_price is not None
             and snapshot.time_to_expiry_seconds >= self._settings.strategy.mc_min_ttx
             and snapshot.time_to_expiry_seconds <= self._settings.strategy.mc_max_ttx

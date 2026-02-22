@@ -14,7 +14,6 @@ from src.risk.volatility import VolatilityTracker
 from src.strategy.edge_detector import EdgeDetector
 from src.strategy.fomo_detector import FomoDetector
 from src.strategy.market_maker import MarketMaker
-from src.strategy.mc_detector import MCSignalDetector
 
 logger = structlog.get_logger()
 
@@ -23,11 +22,12 @@ class SignalCombiner:
     """Combines directional and market-making signals with priority logic.
 
     Priority rules:
-    1. Strong directional signal -> trade directionally only
+    1. Strong directional signal -> trade directionally (MM can run alongside)
     2. FOMO signal -> buy underpriced side during retail panic
-    3. No directional/FOMO edge + wide spread -> market-making quotes
-    4. Neither -> no signals
-    5. Time-to-expiry filter: no new trades within 60s of expiry
+    3. Certainty scalp -> near-certain outcome in last 3 min
+    4. Settlement ride -> late-window hold-to-settlement
+    5. Market making -> spread capture (standalone or alongside directional)
+    6. Time-to-expiry filter: no new trades within 60s of expiry
     """
 
     MIN_TIME_TO_TRADE_SECONDS = 60.0  # No new positions < 60s to expiry
@@ -46,11 +46,8 @@ class SignalCombiner:
         )
         self._fomo_detector = FomoDetector(config)
         self._market_maker = MarketMaker(config, vol_tracker=vol_tracker)
-        self._mc_detector = MCSignalDetector(config, vol_tracker=vol_tracker)
         # Edge persistence: track consecutive cycles with same-side edge
         self._edge_streak: dict[str, tuple[str, int]] = {}  # ticker → (side, count)
-        # Separate MC edge streak (independent from directional)
-        self._mc_edge_streak: dict[str, tuple[str, int]] = {}  # ticker → (side, count)
         # Phase 1 overreaction state: ticker → {direction, extreme}
         self._phase1_state: dict[str, dict] = {}
         # Block reasons from last evaluate() call (for logging)
@@ -338,7 +335,7 @@ class SignalCombiner:
             if ticker in self._edge_streak:
                 del self._edge_streak[ticker]
 
-        # 2. FOMO / certainty / settlement / MC — only when no directional signal
+        # 2. FOMO / certainty / settlement — only when no directional signal
         if not signals:
             # 2a. Check for FOMO signal (second priority)
             if self._config.fomo_enabled and features is not None:
@@ -365,96 +362,6 @@ class SignalCombiner:
                 settlement_ride = self._evaluate_settlement_ride(prediction, snapshot)
                 if settlement_ride is not None:
                     signals.append(settlement_ride)
-                    return signals
-
-            # 2d. Monte Carlo signal (standalone mode — only when not used as model signal)
-            if (
-                self._config.mc_enabled
-                and not self._config.mc_as_model_signal
-                and not quiet_hours_active
-                and features is not None
-            ):
-                mc_signal = self._mc_detector.detect(snapshot, features)
-
-                # Phase gating for MC signals (same rules as directional)
-                if mc_signal is not None and phase_enabled:
-                    mc_ticker = snapshot.market_ticker
-                    if phase == 1:
-                        logger.info(
-                            "phase_blocked_mc",
-                            ticker=mc_ticker,
-                            phase=1,
-                            side=mc_signal.side,
-                            net_edge=mc_signal.net_edge,
-                        )
-                        mc_signal = None
-                    elif phase == 2:
-                        p1 = self._phase1_state.get(mc_ticker)
-                        bounce_back = False
-                        if p1 and features is not None and p1["direction"] != 0:
-                            reversal_thresh = self._config.overreaction_momentum_reversal_threshold
-                            if p1["direction"] > 0 and features.momentum_60s < -reversal_thresh:
-                                bounce_back = True
-                            elif p1["direction"] < 0 and features.momentum_60s > reversal_thresh:
-                                bounce_back = True
-                        if not bounce_back:
-                            logger.info(
-                                "phase2_no_bounce_back_mc",
-                                ticker=mc_ticker,
-                                side=mc_signal.side,
-                                net_edge=mc_signal.net_edge,
-                            )
-                            mc_signal = None
-                    elif phase == 4:
-                        min_edge_late = self._config.mc_min_edge * self._config.phase_late_edge_multiplier
-                        if mc_signal.net_edge < min_edge_late:
-                            logger.info(
-                                "phase_late_tightened_mc",
-                                ticker=mc_ticker,
-                                phase=4,
-                                side=mc_signal.side,
-                                net_edge=mc_signal.net_edge,
-                                min_edge_late=round(min_edge_late, 4),
-                            )
-                            mc_signal = None
-                    elif phase == 5:
-                        logger.info(
-                            "phase5_blocked_mc",
-                            ticker=mc_ticker,
-                            phase=5,
-                            side=mc_signal.side,
-                            net_edge=mc_signal.net_edge,
-                        )
-                        mc_signal = None
-
-                # Edge streak for MC signals (same logic, separate counter)
-                if mc_signal is not None:
-                    mc_ticker = snapshot.market_ticker
-                    required = self._config.edge_confirmation_cycles
-                    prev = self._mc_edge_streak.get(mc_ticker)
-                    if prev and prev[0] == mc_signal.side:
-                        mc_streak = prev[1] + 1
-                    else:
-                        mc_streak = 1
-                    self._mc_edge_streak[mc_ticker] = (mc_signal.side, mc_streak)
-
-                    if mc_streak < required:
-                        logger.info(
-                            "mc_edge_streak_building",
-                            ticker=mc_ticker,
-                            side=mc_signal.side,
-                            streak=mc_streak,
-                            required=required,
-                            net_edge=mc_signal.net_edge,
-                        )
-                        mc_signal = None
-                else:
-                    mc_ticker = snapshot.market_ticker
-                    if mc_ticker in self._mc_edge_streak:
-                        del self._mc_edge_streak[mc_ticker]
-
-                if mc_signal is not None:
-                    signals.append(mc_signal)
                     return signals
 
         # 3. Market making — always runs (alongside directional or standalone)

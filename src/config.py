@@ -181,21 +181,14 @@ class StrategyConfig(BaseModel):
     certainty_scalp_min_edge: float = 0.02           # Low bar (fees tiny at extremes)
     certainty_scalp_kelly_fraction: float = 0.30     # Aggressive sizing
     certainty_scalp_min_spot_distance_pct: float = 0.002  # 0.2% spot past strike
-    # Monte Carlo simulation strategy (parallel, independent)
-    mc_as_model_signal: bool = True  # MC runs as model signal #17 vs standalone
+    # Monte Carlo model confirmation signal (#17 in HeuristicModel)
     mc_enabled: bool = False
     mc_samples: int = 10000
     mc_drift_mode: str = "momentum"   # "momentum" | "zero"
     mc_vol_multiplier: float = 1.0    # Scale realized vol
-    mc_min_edge: float = 0.04
-    mc_min_confidence: float = 0.65
-    mc_min_implied_distance: float = 0.10
-    mc_kelly_fraction: float = 0.15
     mc_min_ttx: float = 120.0         # At least 2 min to expiry
     mc_max_ttx: float = 720.0         # Only last 12 min
-    mc_max_edge: float = 0.15         # Cap maximum reported edge (kill phantom edges)
     mc_bootstrap_min_returns: int = 30  # Min returns for bootstrap (else GBM fallback)
-    mc_settlement_discount: float = 0.7  # Confidence multiplier when MC disagrees with settlements
     # Trend guard: block trades against majority momentum direction
     trend_guard_enabled: bool = True
     # MM vol filter: skip market-making in extreme volatility regime

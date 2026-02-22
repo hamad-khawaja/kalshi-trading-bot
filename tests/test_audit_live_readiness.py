@@ -1719,11 +1719,11 @@ class TestStrategyAwareCooldowns:
         # Record TP exit for directional
         tp_markets["TICK-A"] = (NOW, "directional")
 
-        # monte_carlo attempting entry → allowed
+        # settlement_ride attempting entry → allowed
         check_time = NOW + timedelta(seconds=200)
         exit_time, exit_tag = tp_markets["TICK-A"]
         cooldown_active = (check_time - exit_time).total_seconds() < cooldown_seconds
-        same_strategy = exit_tag == "monte_carlo"
+        same_strategy = exit_tag == "settlement_ride"
         blocked = cooldown_active and same_strategy
         assert blocked is False
 
@@ -1855,9 +1855,6 @@ class TestConfigDefaults:
         assert c.settlement_ride_min_implied_distance == 0.12
         assert c.settlement_ride_kelly_fraction == 0.10
         assert c.mc_samples == 10000
-        assert c.mc_min_edge == 0.04
-        assert c.mc_min_confidence == 0.65
-        assert c.mc_kelly_fraction == 0.15
         assert c.take_profit_cooldown_seconds == 900.0
 
     def test_risk_defaults(self):

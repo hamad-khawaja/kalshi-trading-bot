@@ -151,7 +151,6 @@ a{color:#58a6ff}
 .type-tag.settlement-ride{background:#2a1a2a;color:#d2a8ff}
 .type-tag.fomo{background:#2a2a1a;color:#d29922}
 .type-tag.certainty_scalp{background:#1a2a2a;color:#56d4dd}
-.type-tag.monte_carlo{background:#2a1a2a;color:#e0a0ff}
 .type-tag.market_making{background:#1a2a1a;color:#3fb950}
 .type-tag.averaging{background:#2a1a1a;color:#f0883e}
 .type-tag.stop_loss{background:#2a1a1a;color:#f85149}
@@ -225,10 +224,6 @@ a{color:#58a6ff}
   </div>
   <div class="toggle-wrap" data-strategy="settlement_ride" onclick="toggleStrategy('settlement_ride')">
     <span class="toggle-label active">SETT</span>
-    <div class="toggle-track active"><div class="toggle-knob"></div></div>
-  </div>
-  <div class="toggle-wrap" data-strategy="monte_carlo" onclick="toggleStrategy('monte_carlo')">
-    <span class="toggle-label active">MC</span>
     <div class="toggle-track active"><div class="toggle-knob"></div></div>
   </div>
   <div class="toggle-wrap" data-strategy="market_making" onclick="toggleStrategy('market_making')">
@@ -449,7 +444,6 @@ a{color:#58a6ff}
     <span style="color:#30363d;margin:0 4px">|</span>
     <button class="chart-btn active" data-strategy="all" onclick="filterStrategy('all')">All Strategies</button>
     <button class="chart-btn" data-strategy="directional" onclick="filterStrategy('directional')">Directional</button>
-    <button class="chart-btn" data-strategy="monte_carlo" onclick="filterStrategy('monte_carlo')">Monte Carlo</button>
     <button class="chart-btn" data-strategy="settlement_ride" onclick="filterStrategy('settlement_ride')">Settlement Ride</button>
     <span style="flex:1"></span>
     <button class="chart-btn" onclick="refreshTrades()" style="border-color:#58a6ff;color:#58a6ff">Refresh</button>

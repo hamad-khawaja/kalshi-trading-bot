@@ -136,15 +136,11 @@ strategy:
   certainty_scalp_min_edge: 0.02            # Low bar (fees tiny at extremes)
   certainty_scalp_kelly_fraction: 0.30      # Aggressive sizing
   certainty_scalp_min_spot_distance_pct: 0.002  # 0.2% spot past strike
-  # Monte Carlo simulation strategy (parallel, independent)
+  # Monte Carlo model confirmation signal (#17 in HeuristicModel)
   mc_enabled: false
   mc_samples: 10000
   mc_drift_mode: "momentum"
   mc_vol_multiplier: 1.0
-  mc_min_edge: 0.06
-  mc_min_confidence: 0.70
-  mc_min_implied_distance: 0.20
-  mc_kelly_fraction: 0.15
   mc_min_ttx: 120.0
   mc_max_ttx: 720.0
 

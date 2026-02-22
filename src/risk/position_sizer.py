@@ -71,11 +71,6 @@ class PositionSizer:
         ):
             effective_kelly = self._strategy_config.certainty_scalp_kelly_fraction
         elif (
-            signal.signal_type == "monte_carlo"
-            and self._strategy_config is not None
-        ):
-            effective_kelly = self._strategy_config.mc_kelly_fraction
-        elif (
             signal.signal_type == "settlement_ride"
             and self._strategy_config is not None
         ):
