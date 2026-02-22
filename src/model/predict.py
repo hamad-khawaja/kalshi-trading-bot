@@ -19,7 +19,7 @@ class ProbabilityModel(ABC):
     """
 
     @abstractmethod
-    def predict(self, features: FeatureVector) -> PredictionResult:
+    def predict(self, features: FeatureVector, market_ticker: str = "") -> PredictionResult:
         """Return estimated probability and confidence."""
         ...
 
@@ -82,7 +82,7 @@ class HeuristicModel(ProbabilityModel):
     MARKET_ANCHOR_DISAGREE_WEIGHT = 0.55  # Stronger anchor when model disagrees with market
 
     def __init__(self, weight_multipliers: dict[str, float] | None = None) -> None:
-        self._prev_probability: float | None = None
+        self._prev_probabilities: dict[str, float] = {}
         self._weight_multipliers: dict[str, float] = weight_multipliers or {}
 
     def set_weight_multipliers(self, multipliers: dict[str, float]) -> None:
@@ -92,7 +92,7 @@ class HeuristicModel(ProbabilityModel):
     def name(self) -> str:
         return "heuristic_v2"
 
-    def predict(self, features: FeatureVector) -> PredictionResult:
+    def predict(self, features: FeatureVector, market_ticker: str = "") -> PredictionResult:
         """Estimate P(BTC up) using rule-based signals."""
         # --- 1. Momentum signal ---
         # Favor longer timeframes to reduce noise from short-term jitter
@@ -344,17 +344,18 @@ class HeuristicModel(ProbabilityModel):
         if abs(probability - 0.50) < self.DEAD_ZONE:
             probability = 0.50
 
-        # EMA smoothing to reduce oscillation
+        # EMA smoothing to reduce oscillation (per-market state)
         # Snap-through: skip EMA when prediction changes drastically
-        if self._prev_probability is not None:
-            delta = abs(probability - self._prev_probability)
+        prev_prob = self._prev_probabilities.get(market_ticker)
+        if prev_prob is not None:
+            delta = abs(probability - prev_prob)
             if delta < self.EMA_SNAP_THRESHOLD:
                 probability = (
                     self.EMA_ALPHA * probability
-                    + (1 - self.EMA_ALPHA) * self._prev_probability
+                    + (1 - self.EMA_ALPHA) * prev_prob
                 )
             # else: snap — use raw probability without smoothing
-        self._prev_probability = probability
+        self._prev_probabilities[market_ticker] = probability
 
         # Market-direction anchor: always blend toward implied probability.
         # When model agrees with market, use standard anchor weight.
@@ -516,7 +517,7 @@ class LightGBMModel(ProbabilityModel):
     def name(self) -> str:
         return "lightgbm_v1"
 
-    def predict(self, features: FeatureVector) -> PredictionResult:
+    def predict(self, features: FeatureVector, market_ticker: str = "") -> PredictionResult:
         """Predict using trained LightGBM model."""
         if self._model is None:
             raise RuntimeError(

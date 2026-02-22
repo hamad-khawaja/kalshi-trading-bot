@@ -5,6 +5,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 import numpy as np
+import pandas as pd
 
 
 def momentum(prices: np.ndarray, window: int) -> float:
@@ -203,14 +204,9 @@ def macd_signal(
 
     data = prices.astype(float)
 
-    # EMA helper
+    # EMA helper — delegates to C-level pandas internals
     def _ema(arr: np.ndarray, span: int) -> np.ndarray:
-        alpha = 2.0 / (span + 1)
-        result = np.empty_like(arr)
-        result[0] = arr[0]
-        for i in range(1, len(arr)):
-            result[i] = alpha * arr[i] + (1 - alpha) * result[i - 1]
-        return result
+        return pd.Series(arr).ewm(span=span, adjust=False).mean().values
 
     fast_ema = _ema(data, fast)
     slow_ema = _ema(data, slow)

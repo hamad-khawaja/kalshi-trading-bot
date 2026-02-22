@@ -46,6 +46,8 @@ class FeatureEngine:
         self._settlement_history: dict[str, list[dict[str, Any]]] = (
             settlement_history if settlement_history is not None else {}
         )
+        # Per-ticker indicator cache: ticker -> (cache_key, results_dict)
+        self._indicator_cache: dict[str, tuple[tuple, dict]] = {}
 
     def compute(self, snapshot: MarketSnapshot) -> FeatureVector:
         """Compute all features from a market snapshot."""
@@ -74,11 +76,13 @@ class FeatureEngine:
         hour_of_day_sin = math.sin(2 * math.pi * hour / 24)
         hour_of_day_cos = math.cos(2 * math.pi * hour / 24)
 
-        # Realized volatility
-        vol_5min = volatility_realized(prices, self._vol_window)
-
-        # RSI
-        rsi_val = rsi(prices, period=min(14, max(2, len(prices) - 1)))
+        # Cached expensive indicators (pure functions of price array)
+        cached = self._get_cached_indicators(prices, snapshot.market_ticker)
+        vol_5min = cached["vol_5min"]
+        rsi_val = cached["rsi_val"]
+        bb_pos = cached["bb_pos"]
+        macd_hist = cached["macd_hist"]
+        roc_accel = cached["roc_accel"]
 
         # VWAP and deviation
         vwap_val = vwap(prices_1min, volumes_1min) if len(volumes_1min) > 0 else 0.0
@@ -100,13 +104,6 @@ class FeatureEngine:
 
         # Time to expiry
         time_norm = time_decay_factor(snapshot.time_to_expiry_seconds)
-
-        # New technical indicators
-        bb_pos = bollinger_band_position(prices, window=20)
-
-        _, _, macd_hist = macd_signal(prices, fast=60, slow=130, signal_period=45)
-
-        roc_accel = rate_of_change_acceleration(prices, window=30)
 
         vol_mom = volume_weighted_momentum(prices_1min, volumes_1min, window=60)
 
@@ -183,6 +180,22 @@ class FeatureEngine:
         # Fallback: when array is shorter than estimated ticks, use full array
         window = min(estimated_ticks, len(prices))
         return momentum(prices, window)
+
+    def _get_cached_indicators(self, prices: np.ndarray, ticker: str) -> dict:
+        """Return expensive indicator results, cached per ticker when prices unchanged."""
+        cache_key = (len(prices), float(prices[-1])) if len(prices) > 0 else (0, 0.0)
+        cached = self._indicator_cache.get(ticker)
+        if cached and cached[0] == cache_key:
+            return cached[1]
+        results = {
+            "vol_5min": volatility_realized(prices, self._vol_window),
+            "rsi_val": rsi(prices, period=min(14, max(2, len(prices) - 1))),
+            "bb_pos": bollinger_band_position(prices, window=20),
+            "macd_hist": macd_signal(prices, fast=60, slow=130, signal_period=45)[2],
+            "roc_accel": rate_of_change_acceleration(prices, window=30),
+        }
+        self._indicator_cache[ticker] = (cache_key, results)
+        return results
 
     def _compute_settlement_bias(self, asset_symbol: str) -> float:
         """Compute directional bias from recent settlement outcomes.

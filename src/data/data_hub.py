@@ -269,10 +269,12 @@ class DataHub:
             logger.warning("snapshot_no_btc_price", symbol=symbol)
             return None
 
-        # Recent price history
-        ticks_1min = feed.get_prices_since(60)
-        ticks_5min = feed.get_prices_since(900)
+        # Recent price history — single deque scan, then cheap list filters
         ticks_30min = feed.get_prices_since(1800)
+        cutoff_5min = now.timestamp() - 900
+        cutoff_1min = now.timestamp() - 60
+        ticks_5min = [t for t in ticks_30min if t.timestamp.timestamp() >= cutoff_5min]
+        ticks_1min = [t for t in ticks_30min if t.timestamp.timestamp() >= cutoff_1min]
         prices_1min = [t.price for t in ticks_1min]
         prices_5min = [t.price for t in ticks_5min]
         prices_30min = [t.price for t in ticks_30min]
@@ -336,7 +338,8 @@ class DataHub:
                 cross_exchange_spread = (bn_price - cb_price) / cb_price
             # Lead signal: compare short-term momentum across exchanges
             bn_ticks = secondary_feed.get_prices_since(15)
-            cb_ticks = feed.get_prices_since(15)
+            cutoff_15s = now.timestamp() - 15
+            cb_ticks = [t for t in ticks_1min if t.timestamp.timestamp() >= cutoff_15s]
             if len(bn_ticks) >= 2 and len(cb_ticks) >= 2:
                 bn_start = float(bn_ticks[0].price)
                 bn_end = float(bn_ticks[-1].price)

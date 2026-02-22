@@ -1,7 +1,6 @@
 mode: paper  # paper | live
 
 kalshi:
-  environment: prod  # demo | prod
   api_key_id: ""     # Override via KALSHI_API_KEY_ID env var
   private_key_path: ""  # Override via KALSHI_PRIVATE_KEY_PATH env var
   series_ticker: "KXBTC15M"  # Kept for backward compat

@@ -74,6 +74,9 @@ class TradingBot:
         # Fee tracking for dashboard
         self._total_fees: Decimal = Decimal("0")
 
+        # Background settlement polling tasks (non-blocking)
+        self._pending_settlements: dict[str, asyncio.Task] = {}
+
         # Data layer
         self._auth = KalshiAuth(
             settings.kalshi.api_key_id,
@@ -201,7 +204,6 @@ class TradingBot:
         logger.info(
             "bot_starting",
             mode=self._settings.mode,
-            environment=self._settings.kalshi.environment,
             assets=asset_symbols,
         )
 
@@ -340,8 +342,8 @@ class TradingBot:
         self._settings.strategy.mc_enabled = st.get("monte_carlo", False)
         self._settings.strategy.use_market_maker = st.get("market_making", True)
 
-        for market in markets_to_process:
-            await self._process_market(market)
+        await asyncio.gather(*(self._process_market(m) for m in markets_to_process))
+        await self._db.flush()
 
     async def _process_market(self, market) -> None:
         """Process a single market within a strategy cycle."""
@@ -354,7 +356,8 @@ class TradingBot:
         if self._dashboard_state.eth_disabled and asset_symbol == "ETH":
             return
         close_time = market.close_time or market.expected_expiration_time or market.expiration_time
-        ds.market = {
+        # Use local variables to avoid race conditions with asyncio.gather
+        local_market = {
             "ticker": ticker,
             "event_ticker": market.event_ticker,
             "title": market.title,
@@ -363,6 +366,7 @@ class TradingBot:
             "close_time": close_time.isoformat() if close_time else None,
             "volume": market.volume,
         }
+        ds.market = local_market
 
         # Build snapshot
         snapshot = await self._data_hub.get_snapshot(ticker)
@@ -371,7 +375,7 @@ class TradingBot:
             return
 
         ob = snapshot.orderbook
-        ds.snapshot = {
+        local_snapshot = {
             "btc_price": float(snapshot.btc_price),
             "implied_prob": float(snapshot.implied_yes_prob) if snapshot.implied_yes_prob else None,
             "time_to_expiry": snapshot.time_to_expiry_seconds,
@@ -396,6 +400,7 @@ class TradingBot:
                 "implied_prob": float(ob.implied_yes_prob) if ob.implied_yes_prob else None,
             },
         }
+        ds.snapshot = local_snapshot
 
         # Compute features
         features = self._feature_engine.compute(snapshot)
@@ -408,10 +413,11 @@ class TradingBot:
                 raw_divergence = other_prob - this_implied
                 features.cross_asset_divergence = math.tanh(raw_divergence / 0.15)
 
-        ds.features = {
+        local_features = {
             name: getattr(features, name, 0.0) or 0.0
             for name in features.feature_names()
         }
+        ds.features = local_features
 
         # Update volatility tracker
         self._vol_tracker.update(features.realized_vol_5min)
@@ -429,9 +435,9 @@ class TradingBot:
             self._model.set_weight_multipliers({"chainlink": chainlink_mult})
 
         # Get model prediction
-        prediction = self._model.predict(features)
+        prediction = self._model.predict(features, market_ticker=ticker)
 
-        ds.prediction = {
+        local_prediction = {
             "probability": prediction.probability_yes,
             "confidence": prediction.confidence,
             "model": prediction.model_name,
@@ -451,6 +457,7 @@ class TradingBot:
                 "time_decay": prediction.features_used.get("time_decay_signal", 0),
             },
         }
+        ds.prediction = local_prediction
 
         # Cache prediction for thesis-break checks
         self._last_predictions[ticker] = prediction
@@ -487,23 +494,24 @@ class TradingBot:
                 ds.fomo = fomo_analysis
 
         # Write per-asset dashboard state for tabbed UI
+        # Use local variables to avoid cross-market contamination from asyncio.gather
         ds.per_asset[asset_symbol] = {
-            "market": ds.market,
-            "snapshot": ds.snapshot,
-            "features": dict(ds.features),
-            "prediction": dict(ds.prediction),
+            "market": local_market,
+            "snapshot": local_snapshot,
+            "features": dict(local_features),
+            "prediction": dict(local_prediction),
             "edge": dict(ds.edge) if ds.edge else {},
             "fomo": dict(ds.fomo) if ds.fomo else {},
         }
 
-        # Take-profit cooldown: only block re-entry from the same strategy that took profit
+        # Take-profit cooldown: block all re-entry after TP (except MM and certainty scalp)
         tp_cooldown = self._settings.strategy.take_profit_cooldown_seconds
         if ticker in self._take_profit_markets and tp_cooldown > 0:
             tp_exit_time, tp_strategy = self._take_profit_markets[ticker]
             elapsed = (datetime.now(timezone.utc) - tp_exit_time).total_seconds()
             if elapsed < tp_cooldown:
-                exempt = ("market_making", "settlement_ride", "certainty_scalp")
-                buy_signals = [s for s in signals if s.action == "buy" and s.signal_type not in exempt and s.signal_type == tp_strategy]
+                exempt = ("market_making", "certainty_scalp")
+                buy_signals = [s for s in signals if s.action == "buy" and s.signal_type not in exempt]
                 if buy_signals:
                     logger.info(
                         "take_profit_cooldown_blocked",
@@ -511,9 +519,9 @@ class TradingBot:
                         elapsed=round(elapsed, 1),
                         cooldown=tp_cooldown,
                         blocked_count=len(buy_signals),
-                        cooldown_strategy=tp_strategy,
+                        blocked_types=[s.signal_type for s in buy_signals],
                     )
-                    signals = [s for s in signals if s.action != "buy" or s.signal_type in exempt or s.signal_type != tp_strategy]
+                    signals = [s for s in signals if s.action != "buy" or s.signal_type in exempt]
             else:
                 # Cooldown expired, remove from tracking
                 del self._take_profit_markets[ticker]
@@ -891,6 +899,11 @@ class TradingBot:
                     t for t in orphaned_tickers if t not in exits
                 )
 
+                # Clean up completed background settlement tasks
+                done = [t for t, task in self._pending_settlements.items() if task.done()]
+                for t in done:
+                    del self._pending_settlements[t]
+
                 if exits:
                     actually_settled = []
                     for exit_ticker in exits:
@@ -953,65 +966,12 @@ class TradingBot:
                                     logger.warning("settlement_logging_failed", ticker=exit_ticker)
                                 actually_settled.append(exit_ticker)
                             else:
-                                # Result not available yet — expedited polling
-                                for _retry in range(10):
-                                    await asyncio.sleep(2)
-                                    try:
-                                        settlement_result = await self._kalshi_rest.get_market_result(exit_ticker)
-                                    except Exception:
-                                        pass
-                                    if settlement_result is not None:
-                                        break
-
-                                if settlement_result is not None:
-                                    won = (settlement_result == pos.side)
-                                    payout = Decimal(str(pos.count)) if won else Decimal("0")
-                                    pnl = payout - cost - pos.fees_paid
-                                    logger.info(
-                                        "position_settled_actual",
-                                        ticker=exit_ticker,
-                                        side=pos.side,
-                                        result=settlement_result,
-                                        won=won,
-                                        count=pos.count,
-                                        entry_price=float(pos.avg_entry_price),
-                                        fees=float(pos.fees_paid),
-                                        pnl=float(pnl),
-                                        expedited=True,
+                                # Result not available yet — poll in background to avoid blocking
+                                if exit_ticker not in self._pending_settlements:
+                                    self._pending_settlements[exit_ticker] = asyncio.create_task(
+                                        self._poll_settlement(exit_ticker, pos, cost)
                                     )
-                                    self._risk_manager.record_trade(pnl)
-                                    ds.add_trade_result(
-                                        self._data_hub._ticker_to_symbol(exit_ticker),
-                                        "settle", pos.side, float(pnl), exit_ticker,
-                                        size_dollars=float(cost),
-                                        signal_type=pos.strategy_tag,
-                                    )
-                                    try:
-                                        from src.data.models import CompletedTrade
-                                        completed = CompletedTrade(
-                                            order_id="settlement",
-                                            market_ticker=exit_ticker,
-                                            side=pos.side,
-                                            action="settle",
-                                            count=pos.count,
-                                            price_dollars=pos.avg_entry_price,
-                                            fees_dollars=pos.fees_paid,
-                                            pnl_dollars=pnl,
-                                            entry_time=pos.entry_time,
-                                            exit_time=datetime.now(timezone.utc),
-                                            strategy_tag=pos.strategy_tag,
-                                        )
-                                        await self._db.insert_trade(completed)
-                                    except Exception:
-                                        logger.warning("settlement_logging_failed", ticker=exit_ticker)
-                                    actually_settled.append(exit_ticker)
-                                else:
-                                    logger.info(
-                                        "settlement_pending",
-                                        ticker=exit_ticker,
-                                        side=pos.side,
-                                        count=pos.count,
-                                    )
+                                continue  # Don't block — check on next iteration
                         else:
                             # Paper mode: simulate binary settlement using implied prob
                             # If implied > 0.50, YES wins; otherwise NO wins
@@ -1423,6 +1383,9 @@ class TradingBot:
                 # Cleanup old terminal orders
                 self._order_manager.cleanup_terminal_orders()
 
+                # Flush any pending DB writes from this monitor cycle
+                await self._db.flush()
+
             except asyncio.CancelledError:
                 break
             except Exception:
@@ -1442,6 +1405,70 @@ class TradingBot:
                 break
             except Exception:
                 logger.exception("time_profile_refresh_error")
+
+    async def _poll_settlement(self, ticker: str, pos, cost: Decimal) -> None:
+        """Background task to poll for settlement result (non-blocking)."""
+        ds = self._dashboard_state
+        settlement_result = None
+        for _retry in range(10):
+            await asyncio.sleep(2)
+            try:
+                settlement_result = await self._kalshi_rest.get_market_result(ticker)
+            except Exception:
+                pass
+            if settlement_result is not None:
+                break
+
+        if settlement_result is not None:
+            won = (settlement_result == pos.side)
+            payout = Decimal(str(pos.count)) if won else Decimal("0")
+            pnl = payout - cost - pos.fees_paid
+            logger.info(
+                "position_settled_actual",
+                ticker=ticker,
+                side=pos.side,
+                result=settlement_result,
+                won=won,
+                count=pos.count,
+                entry_price=float(pos.avg_entry_price),
+                fees=float(pos.fees_paid),
+                pnl=float(pnl),
+                expedited=True,
+            )
+            self._risk_manager.record_trade(pnl)
+            ds.add_trade_result(
+                self._data_hub._ticker_to_symbol(ticker),
+                "settle", pos.side, float(pnl), ticker,
+                size_dollars=float(cost),
+                signal_type=pos.strategy_tag,
+            )
+            try:
+                from src.data.models import CompletedTrade
+                completed = CompletedTrade(
+                    order_id="settlement",
+                    market_ticker=ticker,
+                    side=pos.side,
+                    action="settle",
+                    count=pos.count,
+                    price_dollars=pos.avg_entry_price,
+                    fees_dollars=pos.fees_paid,
+                    pnl_dollars=pnl,
+                    entry_time=pos.entry_time,
+                    exit_time=datetime.now(timezone.utc),
+                    strategy_tag=pos.strategy_tag,
+                )
+                await self._db.insert_trade(completed)
+            except Exception:
+                logger.warning("settlement_logging_failed", ticker=ticker)
+            self._position_tracker.remove_expired_positions([ticker])
+            self._update_dashboard_positions()
+        else:
+            logger.info(
+                "settlement_pending",
+                ticker=ticker,
+                side=pos.side,
+                count=pos.count,
+            )
 
     async def _health_check_loop(self) -> None:
         """Log bot health status every 60 seconds."""
@@ -1739,12 +1766,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="trading mode — overrides config file",
     )
     parser.add_argument(
-        "-e", "--env",
-        choices=["demo", "prod"],
-        default=None,
-        help="Kalshi environment — overrides config file",
-    )
-    parser.add_argument(
         "-l", "--log-level",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         default=None,
@@ -1765,7 +1786,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="shortcut for --mode paper --env demo",
+        help="shortcut for --mode paper",
     )
     return parser
 
@@ -1778,18 +1799,14 @@ def main() -> None:
     # Load config from YAML
     settings = load_settings(args.config)
 
-    # Apply --dry-run defaults (overridden by explicit --mode/--env)
+    # Apply --dry-run default (overridden by explicit --mode)
     if args.dry_run:
         if args.mode is None:
             settings.mode = "paper"
-        if args.env is None:
-            settings.kalshi.environment = "demo"
 
     # Apply explicit CLI overrides
     if args.mode is not None:
         settings.mode = args.mode
-    if args.env is not None:
-        settings.kalshi.environment = args.env
     if args.log_level is not None:
         settings.logging.level = args.log_level
     if args.max_exposure is not None:
@@ -1803,7 +1820,6 @@ def main() -> None:
     logger.info(
         "kalshi_btc_bot_starting",
         mode=settings.mode,
-        environment=settings.kalshi.environment,
         assets=[a.symbol for a in settings.kalshi.assets],
         min_edge=settings.strategy.min_edge_threshold,
         kelly_fraction=settings.risk.kelly_fraction,

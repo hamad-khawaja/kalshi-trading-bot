@@ -137,6 +137,11 @@ class Database:
             await self._db.commit()
             logger.info("migrated_strategy_tag_column")
 
+    async def flush(self) -> None:
+        """Commit any pending writes in a single batch."""
+        if self._db:
+            await self._db.commit()
+
     async def insert_trade(self, trade: CompletedTrade) -> None:
         """Insert a completed trade record."""
         assert self._db is not None
@@ -162,7 +167,6 @@ class Database:
                 trade.strategy_tag,
             ),
         )
-        await self._db.commit()
 
     async def insert_prediction(
         self,
@@ -189,7 +193,6 @@ class Database:
                 datetime.now(timezone.utc).isoformat(),
             ),
         )
-        await self._db.commit()
 
     async def insert_outcome(
         self,
@@ -214,7 +217,6 @@ class Database:
                 settlement_time.isoformat() if settlement_time else None,
             ),
         )
-        await self._db.commit()
 
     async def insert_tick(
         self,
@@ -243,7 +245,6 @@ class Database:
                 market_ticker,
             ),
         )
-        await self._db.commit()
 
     async def get_daily_pnl(self, target_date: date) -> float:
         """Get total P&L for a specific date."""

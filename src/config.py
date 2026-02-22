@@ -22,7 +22,6 @@ class AssetConfig(BaseModel):
 
 
 class KalshiConfig(BaseModel):
-    environment: Literal["demo", "prod"] = "demo"
     api_key_id: str = ""
     private_key_path: str = ""
     series_ticker: str = "KXBTC15M"
@@ -31,14 +30,10 @@ class KalshiConfig(BaseModel):
 
     @property
     def base_url(self) -> str:
-        if self.environment == "demo":
-            return "https://demo-api.kalshi.co/trade-api/v2"
         return "https://api.elections.kalshi.com/trade-api/v2"
 
     @property
     def ws_url(self) -> str:
-        if self.environment == "demo":
-            return "wss://demo-api.kalshi.co/trade-api/ws/v2"
         return "wss://api.elections.kalshi.com/trade-api/ws/v2"
 
 
@@ -90,6 +85,7 @@ class StrategyConfig(BaseModel):
     fomo_min_implied_prob: float = 0.15
     fomo_min_confidence: float = 0.70
     fomo_min_score: float = 0.50
+    fomo_max_bet_dollars: float = 2.00  # Max dollar exposure per FOMO trade
     # Stop-loss parameters
     stop_loss_enabled: bool = True
     stop_loss_pct: float = 0.35  # Exit when loss > 35% of entry price

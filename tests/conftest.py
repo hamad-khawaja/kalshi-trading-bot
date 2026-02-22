@@ -123,7 +123,6 @@ def bot_settings() -> BotSettings:
     return BotSettings(
         mode="paper",
         kalshi=KalshiConfig(
-            environment="demo",
             api_key_id="test-key",
             private_key_path="/tmp/test-key.pem",
             series_ticker="KXBTC15M",

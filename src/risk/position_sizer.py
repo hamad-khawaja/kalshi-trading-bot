@@ -145,6 +145,14 @@ class PositionSizer:
         # Convert to dollar amount
         bet_dollars = f * float(balance_dollars)
 
+        # FOMO cap: limit total dollar exposure per FOMO trade
+        if (
+            signal.signal_type == "fomo"
+            and self._strategy_config is not None
+            and self._strategy_config.fomo_max_bet_dollars > 0
+        ):
+            bet_dollars = min(bet_dollars, self._strategy_config.fomo_max_bet_dollars)
+
         # Convert to contract count (each contract costs `price` dollars)
         count = int(bet_dollars / price)
 
