@@ -388,6 +388,19 @@ class DataHub:
                 liquidation_long_usd = long_liq
                 liquidation_short_usd = short_liq
 
+        # Cross-asset futures data (other asset's funding rate + liquidations)
+        other_asset_funding_rate = None
+        other_asset_liquidation_long_usd = None
+        other_asset_liquidation_short_usd = None
+        if self._futures_feed is not None:
+            other_symbol = "ETH" if symbol == "BTC" else "BTC"
+            other_futures = other_symbol + "USDT"
+            other_asset_funding_rate = self._futures_feed.get_funding_rate(other_futures)
+            other_long, other_short = self._futures_feed.get_liquidation_stats_since(other_futures, 300)
+            if other_long > 0 or other_short > 0:
+                other_asset_liquidation_long_usd = other_long
+                other_asset_liquidation_short_usd = other_short
+
         # BTC momentum lead for non-BTC assets
         btc_momentum_lead = None
         if symbol != "BTC":
@@ -449,6 +462,9 @@ class DataHub:
             predicted_funding_rate=predicted_funding_rate,
             liquidation_long_usd=liquidation_long_usd,
             liquidation_short_usd=liquidation_short_usd,
+            other_asset_funding_rate=other_asset_funding_rate,
+            other_asset_liquidation_long_usd=other_asset_liquidation_long_usd,
+            other_asset_liquidation_short_usd=other_asset_liquidation_short_usd,
             time_to_expiry_seconds=time_to_expiry,
             time_elapsed_seconds=time_elapsed,
             window_phase=window_phase,

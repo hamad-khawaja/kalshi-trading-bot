@@ -76,7 +76,7 @@ strategy:
   min_entry_price: 0.25             # Block entries below $0.25 (cheap contracts lose money)
   yes_side_edge_multiplier: 1.2     # Require 20% more edge for YES entries (NO side is more profitable)
   asset_edge_multipliers:
-    ETH: 2.0                         # ETH is noisier: require 2x edge (was 1.5)
+    ETH: 1.4                         # ETH is ~1.3-1.5x noisier than BTC, not 2x
   asset_stop_loss_pct:
     ETH: 0.20                        # ETH matches tighter global SL (was 30%)
   asset_directional_disabled: [ETH]  # ETH: MM-only (45% directional WR was dragging BTC profits)
@@ -106,7 +106,7 @@ strategy:
   min_quality_score: 0.80
   # BTC beta leader: use BTC momentum to enable ETH directional
   btc_beta_enabled: true
-  btc_beta_min_signal: 0.40    # |btc_beta_signal| threshold to allow ETH directional
+  btc_beta_min_signal: 0.20    # |btc_beta_signal| threshold to allow ETH directional (lowered: ~0.075% BTC move)
   # Quiet hours: skip directional trading during low-volume hours (MM still allowed)
   quiet_hours_enabled: true
   quiet_hours_est: [18, 19, 20, 21, 22, 23, 0, 1, 2, 3, 4]  # 6 PM - 4:59 AM EST — overnight low-volume, consistently unprofitable
@@ -121,8 +121,12 @@ strategy:
     ETH: 0.08
   asset_settlement_ride_min_implied_distance:
     ETH: 0.22
-  # Disable market-making for specific assets (ETH MM was mostly stopped out)
-  asset_market_maker_disabled: [ETH]
+  # Disable market-making for specific assets
+  asset_market_maker_disabled: []
+  # Per-asset minimum spread for market making (wider spread = safer for noisier assets)
+  asset_mm_min_spread: {ETH: 0.08}
+  # Disable settlement ride for specific assets
+  asset_settlement_ride_disabled: [ETH]
   # Certainty scalp: bet large on near-certain outcomes in last 3 min
   certainty_scalp_enabled: true
   certainty_scalp_max_ttx: 180.0            # Only when TTX <= 3 min

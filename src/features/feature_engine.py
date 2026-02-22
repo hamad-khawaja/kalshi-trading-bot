@@ -146,6 +146,8 @@ class FeatureEngine:
             btc_beta_signal=max(-1.0, min(1.0, math.tanh((snapshot.btc_momentum_lead or 0.0) / 0.003) * 1.3)),
             funding_rate_signal=self._compute_funding_signal(snapshot),
             liquidation_imbalance=self._compute_liquidation_imbalance(snapshot),
+            funding_rate_divergence=self._compute_funding_divergence(snapshot),
+            liquidation_ratio_divergence=self._compute_liquidation_ratio_divergence(snapshot),
             time_elapsed_seconds=snapshot.time_elapsed_seconds,
             window_phase=snapshot.window_phase,
             hour_of_day_sin=hour_of_day_sin,
@@ -255,6 +257,52 @@ class FeatureEngine:
         direction = (long_liq - short_liq) / total  # [-1, 1]
         magnitude = min(1.0, total / 1_000_000)  # scale: $1M = full signal
         return direction * magnitude
+
+    @staticmethod
+    def _compute_funding_divergence(snapshot: MarketSnapshot) -> float:
+        """Compute cross-asset funding rate divergence in [-1, 1].
+
+        When this asset's funding rate diverges from the other asset's,
+        it signals relative positioning imbalance. Negated so that
+        higher-than-other funding → negative signal (bearish for this asset).
+        """
+        this_rate = snapshot.funding_rate
+        other_rate = snapshot.other_asset_funding_rate
+        if this_rate is None or other_rate is None:
+            return 0.0
+        return -math.tanh((this_rate - other_rate) / 0.0003)
+
+    @staticmethod
+    def _compute_liquidation_ratio_divergence(snapshot: MarketSnapshot) -> float:
+        """Compute cross-asset liquidation ratio divergence in [-1, 1].
+
+        Compares long/short liquidation ratios between this asset and the other.
+        When this asset has relatively more long liquidations than the other,
+        signal is positive (bearish pressure unique to this asset).
+        Scaled by magnitude so small liquidations don't dominate.
+        """
+        this_long = snapshot.liquidation_long_usd or 0.0
+        this_short = snapshot.liquidation_short_usd or 0.0
+        other_long = snapshot.other_asset_liquidation_long_usd or 0.0
+        other_short = snapshot.other_asset_liquidation_short_usd or 0.0
+
+        this_total = this_long + this_short
+        other_total = other_long + other_short
+
+        if this_total <= 0 and other_total <= 0:
+            return 0.0
+
+        # Compute long/short ratio for each asset (0.5 = balanced)
+        this_ratio = this_long / this_total if this_total > 0 else 0.5
+        other_ratio = other_long / other_total if other_total > 0 else 0.5
+
+        # Divergence: positive = this asset has more long liqs relative to other
+        direction = this_ratio - other_ratio  # [-1, 1]
+
+        # Scale by combined magnitude: $1M total = full signal
+        magnitude = min(1.0, (this_total + other_total) / 1_000_000)
+
+        return max(-1.0, min(1.0, direction * magnitude * 2.0))
 
     @staticmethod
     def _extract_asset_symbol(market_ticker: str) -> str:

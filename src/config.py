@@ -168,6 +168,10 @@ class StrategyConfig(BaseModel):
     asset_settlement_ride_min_implied_distance: dict[str, float] = {}
     # Disable market-making for specific assets
     asset_market_maker_disabled: list[str] = []
+    # Per-asset minimum spread for market making
+    asset_mm_min_spread: dict[str, float] = {}
+    # Disable settlement ride for specific assets
+    asset_settlement_ride_disabled: list[str] = []
     # Certainty scalp: bet large on near-certain outcomes in last 3 min
     certainty_scalp_enabled: bool = True
     certainty_scalp_max_ttx: float = 180.0          # Only when TTX <= 3 min
