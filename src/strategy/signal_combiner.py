@@ -46,7 +46,7 @@ class SignalCombiner:
         )
         self._fomo_detector = FomoDetector(config)
         self._market_maker = MarketMaker(config, vol_tracker=vol_tracker)
-        self._mc_detector = MCSignalDetector(config)
+        self._mc_detector = MCSignalDetector(config, vol_tracker=vol_tracker)
         # Edge persistence: track consecutive cycles with same-side edge
         self._edge_streak: dict[str, tuple[str, int]] = {}  # ticker → (side, count)
         # Separate MC edge streak (independent from directional)

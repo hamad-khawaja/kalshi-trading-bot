@@ -192,6 +192,9 @@ class StrategyConfig(BaseModel):
     mc_kelly_fraction: float = 0.15
     mc_min_ttx: float = 120.0         # At least 2 min to expiry
     mc_max_ttx: float = 720.0         # Only last 12 min
+    mc_max_edge: float = 0.15         # Cap maximum reported edge (kill phantom edges)
+    mc_bootstrap_min_returns: int = 30  # Min returns for bootstrap (else GBM fallback)
+    mc_settlement_discount: float = 0.7  # Confidence multiplier when MC disagrees with settlements
     # Volatility regime filter: block entries when realized vol is too high (coin-flip territory)
     vol_regime_filter_enabled: bool = True
     vol_regime_max_realized_vol: float = 0.008
