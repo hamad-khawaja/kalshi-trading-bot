@@ -1,6 +1,6 @@
 # Kalshi Trading Bot
 
-Automated trading bot for [Kalshi](https://kalshi.com) prediction markets, targeting **15-minute price movement contracts** (`KXBTC15M`, `KXETH15M`). Monitors real-time price feeds from multiple exchanges, estimates settlement probability via a 9-signal heuristic model, identifies mispriced contracts, and executes trades with strict risk management.
+Automated trading bot for [Kalshi](https://kalshi.com) prediction markets, targeting **15-minute price movement contracts** (`KXBTC15M`, `KXETH15M`). Monitors real-time price feeds from multiple exchanges plus Bybit futures (funding rates, liquidations) and Chainlink oracles, estimates settlement probability via a 16-signal heuristic model, identifies mispriced contracts, and executes trades with strict risk management.
 
 **Multi-asset** · **Real-time dashboard** · **Paper & live modes** · **Fee-aware Kelly sizing**
 
@@ -67,9 +67,9 @@ kalshi-bot --mode live --env prod --max-exposure 1000 --max-daily-loss 200
 
 ### Main Loop (every ~4 seconds)
 
-1. **Snapshot** — Aggregate prices (Coinbase, Kraken), Kalshi orderbook
-2. **Features** — Compute 23 features: momentum, technicals, order flow, cross-exchange signals, settlement bias, cross-asset divergence, time decay
-3. **Predict** — 9 weighted signals → P(YES) estimate with market-direction anchor and confidence score
+1. **Snapshot** — Aggregate prices (Coinbase, Kraken), Kalshi orderbook, Bybit futures (funding rates, liquidations), Chainlink oracle
+2. **Features** — Compute 33 features: momentum (5 timeframes), technicals, order flow, cross-exchange signals, settlement bias, cross-asset divergence, funding rate signals, liquidation imbalance, cross-asset funding/liquidation divergence, time decay
+3. **Predict** — 16 weighted signals → P(YES) estimate with market-direction anchor and confidence score
 4. **Edge** — Compare model probability vs Kalshi implied probability, subtract fees, apply per-asset multipliers
 5. **Filter** — Phase gating, trend guard, edge persistence, zone filter, min price filter
 6. **Risk** — 9 independent safety checks with per-asset position limits
@@ -80,20 +80,25 @@ kalshi-bot --mode live --env prod --max-exposure 1000 --max-daily-loss 200
 
 | Strategy | Assets | Trigger | Description |
 |----------|--------|---------|-------------|
-| **Directional** | BTC | `net_edge > threshold` for N consecutive cycles | Model vs market probability mismatch |
-| **Market Making** | BTC, ETH | Wide spread (5-30%) | Resting limit orders to capture bid-ask spread |
+| **Directional** | BTC, ETH (BTC-beta led) | `net_edge > threshold` for N consecutive cycles | Model vs market probability mismatch |
+| **Market Making** | BTC, ETH (wider spread) | Wide spread (5% BTC, 8% ETH) | Resting limit orders to capture bid-ask spread |
+| **Settlement Ride** | BTC | After 10 min elapsed, hold to settlement | Late-window entry when implied prob is far from 0.50 |
+| **Certainty Scalp** | BTC, ETH | Last 3 min, 85%+ implied prob, spot past strike | Large bet on near-certain outcome, hold to settlement |
+| **Monte Carlo** | BTC, ETH | GBM simulation diverges from market | 10K-sample simulation-based probability estimate |
 
-ETH runs in **MM-only mode** — directional trading is disabled for ETH due to lower win rates from higher volatility. BTC directional is the primary profit engine.
+ETH directional is gated behind **BTC beta override** — requires BTC to show moderate directional momentum (`|btc_beta_signal| ≥ 0.20`) before ETH directional trades are allowed. Settlement rides are disabled for ETH.
 
 ### Per-Asset Risk Profiles
 
 | Setting | BTC | ETH |
 |---------|-----|-----|
-| Strategy | Directional + MM | **MM-only** |
-| Stop-loss | 15% | 20% (wider for volatility) |
-| Max position | 25 contracts | 10 contracts |
+| Strategy | Directional + MM + Settlement Ride | Directional (BTC-beta led) + MM (8¢ spread) |
+| Stop-loss | 20% | 20% |
+| Max position | 25 contracts | 15 contracts |
 | Max per cycle | 15 contracts | 10 contracts |
-| Edge multiplier | 1.0x | 2.0x |
+| Edge multiplier | 1.0x | 1.4x |
+| Settlement ride | Enabled | Disabled |
+| MM min spread | 5¢ | 8¢ |
 
 ### Phase-Gated Trading
 
@@ -101,9 +106,9 @@ Each 15-minute window is divided into 5 phases:
 
 | Phase | Window | Behavior |
 |-------|--------|----------|
-| 1. Observation | 0–3 min | No directional trades; record momentum direction |
-| 2. Confirmation | 3–8 min | Only trade if bounce-back from Phase 1 overreaction |
-| 3. Active | 8–12 min | Normal trading with full edge/confidence thresholds |
+| 1. Observation | 0–7 min | No directional trades; record momentum direction |
+| 2. Confirmation | 7–9 min | Only trade if bounce-back from Phase 1 overreaction |
+| 3. Active | 9–12 min | Normal trading with full edge/confidence thresholds |
 | 4. Late | 12–14 min | Tightened thresholds (1.3x edge, +5% confidence) |
 | 5. Final | 14–15 min | No new entries — contracts are unpredictable near settlement |
 
@@ -114,11 +119,13 @@ Each 15-minute window is divided into 5 phases:
 - **Min entry price** — No entries below $0.25 (cheap contracts lose money)
 - **Zone filter** — Block expensive directional trades above $0.60
 - **Quality score** — Combined edge + confidence must exceed minimum threshold
+- **Quiet hours** — No directional trading 6 PM–5 AM EST (low-volume, consistently unprofitable)
+- **Volatility regime** — Block entries when realized vol exceeds threshold
 
 ### Edge Calculation
 
 ```
-model_prob = heuristic_model(features)     # 9-signal weighted sum, ±0.30 range
+model_prob = heuristic_model(features)     # 16-signal weighted sum, ±0.30 range
                                            # + market-direction anchor (30% blend)
 market_prob = kalshi_midpoint              # e.g., 0.55
 raw_edge = |model_prob - market_prob|      # 0.07
@@ -131,7 +138,7 @@ net_edge = raw_edge - fee_drag             # ~0.04
 | Exit Type | Trigger | Description |
 |-----------|---------|-------------|
 | **Trailing take-profit** | Activate at +$0.08/contract, exit on $0.05 drop from peak | Let winners run |
-| **Stop-loss** | 15% loss (BTC) / 20% loss (ETH) from entry | Cut losers early |
+| **Stop-loss** | 20% loss from entry | Cut losers early |
 | **Pre-expiry exit** | 90 seconds before settlement | Sell if PnL ≥ -$0.03/contract |
 | **TP cooldown** | 15 min after take-profit | Block re-entry in same window |
 
@@ -169,7 +176,7 @@ Real-time browser dashboard at `http://localhost:8080` via Server-Sent Events (S
 **Positions** — Color-coded YES/NO with risk stats
 **Settlements** — Compact inline badges showing recent market outcomes
 **Trade history** — Per-asset with P&L coloring
-**Features** — Collapsible 29-feature grid
+**Features** — Collapsible 33-feature grid
 **Decision log** — Last 15 cycle decisions
 
 ---
@@ -185,8 +192,11 @@ All settings in `config/settings.yaml`:
 | `strategy.poll_interval_seconds` | `4` | Main loop interval |
 | `strategy.min_edge_threshold` | `0.05` | Minimum edge to trade (5%) |
 | `strategy.confidence_min` | `0.62` | Minimum model confidence |
-| `strategy.asset_edge_multipliers` | `{ETH: 2.0}` | Per-asset edge penalty |
-| `strategy.asset_directional_disabled` | `[ETH]` | MM-only assets |
+| `strategy.asset_edge_multipliers` | `{ETH: 1.4}` | Per-asset edge penalty |
+| `strategy.asset_directional_disabled` | `[ETH]` | Directional disabled (BTC-beta override still allows) |
+| `strategy.asset_settlement_ride_disabled` | `[ETH]` | Settlement ride disabled per asset |
+| `strategy.asset_mm_min_spread` | `{ETH: 0.08}` | Per-asset MM minimum spread |
+| `strategy.btc_beta_min_signal` | `0.20` | BTC momentum threshold for ETH directional |
 | `risk.max_position_per_market` | `25` | Max contracts per market |
 | `risk.max_total_exposure_dollars` | `500` | Total capital at risk |
 | `risk.max_daily_loss_dollars` | `300` | Daily loss stop |
@@ -222,7 +232,9 @@ kalshi:
 │   ├── bot.py                     # Main orchestrator — 5 concurrent loops
 │   ├── config.py                  # Pydantic settings with validation
 │   ├── data/
-│   │   ├── binance_feed.py        # WS price feeds (Coinbase/Kraken/Binance)
+│   │   ├── binance_feed.py        # WS price feeds (Coinbase/Kraken)
+│   │   ├── binance_futures_feed.py # Bybit futures (funding rates, liquidations)
+│   │   ├── chainlink_feed.py      # Chainlink on-chain oracle prices
 │   │   ├── kalshi_client.py       # Kalshi REST client (markets, orders, balance)
 │   │   ├── kalshi_ws.py           # Kalshi WS (orderbook deltas, fills)
 │   │   ├── kalshi_auth.py         # RSA-PSS authentication
@@ -232,17 +244,18 @@ kalshi:
 │   │   ├── database.py            # SQLite persistence (async)
 │   │   └── models.py              # Data models (Tick, Snapshot, Order, etc.)
 │   ├── features/
-│   │   ├── feature_engine.py      # Snapshot → 23 features
+│   │   ├── feature_engine.py      # Snapshot → 33 features
 │   │   └── indicators.py          # RSI, BB, MACD, ROC, VWAP
 │   ├── model/
-│   │   ├── predict.py             # Heuristic model (9 signals → P(YES))
+│   │   ├── predict.py             # Heuristic model (16 signals → P(YES))
 │   │   ├── calibrate.py           # Probability calibration
 │   │   └── train.py               # LightGBM training pipeline
 │   ├── strategy/
-│   │   ├── signal_combiner.py     # Signal prioritization
+│   │   ├── signal_combiner.py     # Signal prioritization + settlement ride + certainty scalp
 │   │   ├── edge_detector.py       # Model vs market edge calculation
 │   │   ├── fomo_detector.py       # Contrarian retail panic detector
-│   │   ├── market_maker.py        # Spread capture strategy
+│   │   ├── market_maker.py        # Spread capture strategy (per-asset min spread)
+│   │   ├── mc_detector.py         # Monte Carlo simulation strategy
 │   │   └── averager.py            # Asymmetric pyramiding
 │   ├── risk/
 │   │   ├── risk_manager.py        # 9 safety checks
