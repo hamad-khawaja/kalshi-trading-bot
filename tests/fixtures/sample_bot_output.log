@@ -1,0 +1,6 @@
+{"event": "trade_filled", "ticker": "kxbtc15m-26feb120900", "side": "yes", "count": 10, "price": 0.55, "signal_type": "directional", "timestamp": "2026-02-12T09:02:00Z"}
+{"event": "position_settled_paper", "ticker": "kxbtc15m-26feb120900", "side": "yes", "count": 10, "entry_price": 0.55, "pnl": 4.45, "implied_prob": 0.65, "won": true, "timestamp": "2026-02-12T09:15:00Z"}
+{"event": "trade_filled", "ticker": "kxbtc15m-26feb120915", "side": "no", "count": 5, "price": 0.45, "signal_type": "directional", "timestamp": "2026-02-12T09:17:00Z"}
+{"event": "stop_loss_executed", "ticker": "kxbtc15m-26feb120915", "side": "no", "count": 5, "entry_price": 0.45, "pnl": -1.35, "fee": 0.07, "timestamp": "2026-02-12T09:19:00Z"}
+{"event": "trade_filled", "ticker": "kxbtc15m-26feb120930", "side": "yes", "count": 8, "price": 0.60, "signal_type": "market_making", "timestamp": "2026-02-12T09:32:00Z"}
+{"event": "take_profit_executed", "ticker": "kxbtc15m-26feb120930", "side": "yes", "count": 8, "entry_price": 0.60, "pnl": 0.52, "fee": 0.04, "timestamp": "2026-02-12T09:40:00Z"}
