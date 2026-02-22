@@ -287,6 +287,11 @@ class EdgeDetector:
             min_threshold *= self._config.yes_side_edge_multiplier
             max_threshold *= self._config.yes_side_edge_multiplier
 
+        # NO-side penalty: model overconfident on contrarian NO bets (16.7% WR in backtest)
+        if side == "no" and self._config.no_side_edge_multiplier > 1.0:
+            min_threshold *= self._config.no_side_edge_multiplier
+            max_threshold *= self._config.no_side_edge_multiplier
+
         # Per-asset edge penalty: require more edge for noisier assets (e.g. ETH)
         if self._config.asset_edge_multipliers:
             ticker_upper = snapshot.market_ticker.upper()

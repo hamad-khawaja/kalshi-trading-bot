@@ -448,8 +448,8 @@ class TestWiderProbabilityRange:
 
     # --- Constants ---
 
-    def test_max_adjustment_is_030(self):
-        assert HeuristicModel.MAX_ADJUSTMENT == 0.30
+    def test_max_adjustment_is_022(self):
+        assert HeuristicModel.MAX_ADJUSTMENT == 0.22
 
     def test_strong_momentum_max_adjustment_is_045(self):
         assert HeuristicModel.STRONG_MOMENTUM_MAX_ADJUSTMENT == 0.45
@@ -476,9 +476,9 @@ class TestWiderProbabilityRange:
             settlement_bias=0.2,
         )
         result = model.predict(fv)
-        # With wider MAX_ADJUSTMENT=0.30 and override, probability should be well above 0.50
-        # (Stronger market anchor pulls toward implied ~0.50, so threshold is lower)
-        assert result.probability_yes > 0.58
+        # With MAX_ADJUSTMENT=0.22 and override, probability should be above 0.50
+        # (Stronger market anchor pulls toward implied ~0.50, so threshold is modest)
+        assert result.probability_yes > 0.55
 
     def test_override_does_not_trigger_below_03(self):
         """Override should NOT trigger when |mom_signal| <= 0.3."""
@@ -522,10 +522,10 @@ class TestWiderProbabilityRange:
     def test_graduated_interpolation_scales_linearly(self):
         """Effective max should scale linearly between MAX_ADJUSTMENT and STRONG_MAX."""
         # strength = (|mom_signal| - 0.3) / 0.7
-        # effective_max = 0.30 + strength * (0.45 - 0.30)
-        # At mom_signal=0.3: strength=0, effective_max=0.30
+        # effective_max = 0.22 + strength * (0.45 - 0.22)
+        # At mom_signal=0.3: strength=0, effective_max=0.22
         # At mom_signal=1.0: strength=1, effective_max=0.45
-        # At mom_signal=0.65: strength=0.5, effective_max=0.375
+        # At mom_signal=0.65: strength=0.5, effective_max=0.335
         model = HeuristicModel()
 
         # Very strong momentum: all timeframes at 0.01 → tanh(2.0)≈0.964
@@ -542,8 +542,8 @@ class TestWiderProbabilityRange:
             settlement_bias=0.5,
         )
         result = model.predict(fv)
-        # Should be well above 0.50 (stronger market anchor pulls toward implied)
-        assert result.probability_yes > 0.62
+        # Should be above 0.50 (stronger market anchor pulls toward implied)
+        assert result.probability_yes > 0.57
 
     # --- Market anchor ---
 

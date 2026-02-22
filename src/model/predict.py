@@ -64,7 +64,7 @@ class HeuristicModel(ProbabilityModel):
     MC_SIGNAL_WEIGHT = 0.04  # Monte Carlo confirmation signal
 
     # Maximum adjustment from 0.50 base
-    MAX_ADJUSTMENT = 0.30  # Raised from 0.18: match Kalshi's actual trading range (0.20–0.80)
+    MAX_ADJUSTMENT = 0.22  # Tightened: model overconfident at 0.30 (22.7% WR on 65% predictions)
 
     # Maximum adjustment when strong multi-timeframe momentum is detected.
     # Reflects empirical finding: BTC direction -> resolution 96.6% of time
@@ -82,7 +82,7 @@ class HeuristicModel(ProbabilityModel):
 
     # Market anchor: blend toward implied probability when model agrees with market direction
     MARKET_ANCHOR_WEIGHT = 0.45
-    MARKET_ANCHOR_DISAGREE_WEIGHT = 0.55  # Stronger anchor when model disagrees with market
+    MARKET_ANCHOR_DISAGREE_WEIGHT = 0.70  # Market is right ~83% when model disagrees (backtest)
 
     def __init__(self, weight_multipliers: dict[str, float] | None = None) -> None:
         self._prev_probabilities: dict[str, float] = {}

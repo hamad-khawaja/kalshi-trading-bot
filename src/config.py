@@ -117,6 +117,8 @@ class StrategyConfig(BaseModel):
     min_entry_price: float = 0.30
     # YES-side edge penalty: require more edge for YES (NO side is more profitable empirically)
     yes_side_edge_multiplier: float = 1.4
+    # NO-side edge penalty: require more edge for NO (16.7% WR in backtest, model fights market)
+    no_side_edge_multiplier: float = 1.5
     # Per-asset edge multipliers: require more edge for noisier assets
     # Keys are asset symbols (e.g. "ETH"), values are multipliers applied to edge thresholds
     asset_edge_multipliers: dict[str, float] = {}

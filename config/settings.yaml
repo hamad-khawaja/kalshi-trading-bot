@@ -75,6 +75,7 @@ strategy:
   # Entry filters
   min_entry_price: 0.20             # Block entries below $0.20 (lowered for testing)
   yes_side_edge_multiplier: 1.2     # Require 20% more edge for YES entries (NO side is more profitable)
+  no_side_edge_multiplier: 1.5      # NO side 16.7% WR — model fights market, require 50% more edge
   asset_edge_multipliers:
     ETH: 1.4                         # ETH is ~1.3-1.5x noisier than BTC, not 2x
   asset_stop_loss_pct:
@@ -113,7 +114,7 @@ strategy:
   # Settlement-ride: enter after 10 min, hold to settlement
   settlement_ride_enabled: true
   settlement_ride_min_elapsed_seconds: 600.0
-  settlement_ride_min_edge: 0.03
+  settlement_ride_min_edge: 0.06
   settlement_ride_min_implied_distance: 0.12
   settlement_ride_kelly_fraction: 0.10
   # Per-asset settlement ride overrides (ETH needs higher thresholds)
