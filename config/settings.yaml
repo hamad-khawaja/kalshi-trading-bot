@@ -109,7 +109,7 @@ strategy:
   btc_beta_min_signal: 0.40    # |btc_beta_signal| threshold to allow ETH directional
   # Quiet hours: skip directional trading during low-volume hours (MM still allowed)
   quiet_hours_enabled: true
-  quiet_hours_est: [19, 20, 21, 22, 23, 0, 1, 2]  # 7 PM - 2 AM EST — overnight low-volume, consistently unprofitable
+  quiet_hours_est: [18, 19, 20, 21, 22, 23, 0, 1, 2, 3, 4]  # 6 PM - 4:59 AM EST — overnight low-volume, consistently unprofitable
   # Settlement-ride: enter after 10 min, hold to settlement
   settlement_ride_enabled: true
   settlement_ride_min_elapsed_seconds: 600.0

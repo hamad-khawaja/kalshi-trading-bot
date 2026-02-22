@@ -122,8 +122,9 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_outcomes_ticker ON outcomes(market_ticker);
         """)
         await self._db.commit()
-        # Migrate: add strategy_tag column to existing databases
+        # Migrate: add new columns to existing databases
         await self._migrate_strategy_tag()
+        await self._migrate_market_volume()
 
     async def _migrate_strategy_tag(self) -> None:
         """Add strategy_tag column if missing (existing databases)."""
@@ -137,6 +138,18 @@ class Database:
             await self._db.commit()
             logger.info("migrated_strategy_tag_column")
 
+    async def _migrate_market_volume(self) -> None:
+        """Add market_volume column if missing (existing databases)."""
+        assert self._db is not None
+        cursor = await self._db.execute("PRAGMA table_info(trades)")
+        columns = {row[1] for row in await cursor.fetchall()}
+        if "market_volume" not in columns:
+            await self._db.execute(
+                "ALTER TABLE trades ADD COLUMN market_volume INTEGER"
+            )
+            await self._db.commit()
+            logger.info("migrated_market_volume_column")
+
     async def flush(self) -> None:
         """Commit any pending writes in a single batch."""
         if self._db:
@@ -149,8 +162,8 @@ class Database:
             """INSERT INTO trades
             (order_id, market_ticker, side, action, count, price_dollars,
              fees_dollars, pnl_dollars, model_probability, implied_probability,
-             entry_time, exit_time, strategy_tag)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+             entry_time, exit_time, strategy_tag, market_volume)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 trade.order_id,
                 trade.market_ticker,
@@ -165,6 +178,7 @@ class Database:
                 trade.entry_time.isoformat(),
                 trade.exit_time.isoformat() if trade.exit_time else None,
                 trade.strategy_tag,
+                trade.market_volume,
             ),
         )
 

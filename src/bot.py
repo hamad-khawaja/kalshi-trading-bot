@@ -741,6 +741,7 @@ class TradingBot:
                         edge=signal_item.net_edge,
                         model_prob=round(prediction.probability_yes, 4),
                         signal_type=signal_item.signal_type,
+                        market_volume=local_market.get("volume"),
                         cycle=self._cycle_count,
                     )
                     # Track buy fee in position for accurate PnL
@@ -769,6 +770,7 @@ class TradingBot:
                             implied_probability=signal_item.implied_probability,
                             entry_time=datetime.now(timezone.utc),
                             strategy_tag=signal_item.signal_type,
+                            market_volume=local_market.get("volume"),
                         )
                         await self._db.insert_trade(completed)
                     except Exception:
@@ -913,6 +915,8 @@ class TradingBot:
                             continue
 
                         cost = pos.avg_entry_price * pos.count
+                        exit_snap = snapshots.get(exit_ticker)
+                        exit_volume = exit_snap.volume if exit_snap else None
 
                         if self._settings.mode != "paper":
                             # Live mode: require actual settlement result
@@ -960,6 +964,7 @@ class TradingBot:
                                         entry_time=pos.entry_time,
                                         exit_time=datetime.now(timezone.utc),
                                         strategy_tag=pos.strategy_tag,
+                                        market_volume=exit_volume,
                                     )
                                     await self._db.insert_trade(completed)
                                 except Exception:
@@ -969,7 +974,7 @@ class TradingBot:
                                 # Result not available yet — poll in background to avoid blocking
                                 if exit_ticker not in self._pending_settlements:
                                     self._pending_settlements[exit_ticker] = asyncio.create_task(
-                                        self._poll_settlement(exit_ticker, pos, cost)
+                                        self._poll_settlement(exit_ticker, pos, cost, exit_volume)
                                     )
                                 continue  # Don't block — check on next iteration
                         else:
@@ -992,6 +997,7 @@ class TradingBot:
                                 implied_prob=float(snap.implied_yes_prob) if snap and snap.implied_yes_prob is not None else None,
                                 won=pnl > 0,
                                 pnl=float(pnl),
+                                market_volume=exit_volume,
                             )
                             self._risk_manager.record_trade(pnl)
                             ds.add_trade_result(
@@ -1015,6 +1021,7 @@ class TradingBot:
                                     entry_time=pos.entry_time,
                                     exit_time=datetime.now(timezone.utc),
                                     strategy_tag=pos.strategy_tag,
+                                    market_volume=exit_volume,
                                 )
                                 await self._db.insert_trade(completed)
                             except Exception:
@@ -1080,6 +1087,7 @@ class TradingBot:
                             # Log pre-expiry exit to database
                             try:
                                 from src.data.models import CompletedTrade
+                                pe_snap = snapshots.get(pe_ticker)
                                 completed = CompletedTrade(
                                     order_id=order_id,
                                     market_ticker=pe_ticker,
@@ -1092,6 +1100,7 @@ class TradingBot:
                                     entry_time=pos.entry_time,
                                     exit_time=datetime.now(timezone.utc),
                                     strategy_tag=pos.strategy_tag,
+                                    market_volume=pe_snap.volume if pe_snap else None,
                                 )
                                 await self._db.insert_trade(completed)
                             except Exception:
@@ -1154,6 +1163,7 @@ class TradingBot:
                             # Log take-profit to database
                             try:
                                 from src.data.models import CompletedTrade
+                                tp_snap = snapshots.get(tp_ticker)
                                 completed = CompletedTrade(
                                     order_id=order_id,
                                     market_ticker=tp_ticker,
@@ -1166,6 +1176,7 @@ class TradingBot:
                                     entry_time=pos.entry_time,
                                     exit_time=datetime.now(timezone.utc),
                                     strategy_tag=pos.strategy_tag,
+                                    market_volume=tp_snap.volume if tp_snap else None,
                                 )
                                 await self._db.insert_trade(completed)
                             except Exception:
@@ -1234,6 +1245,7 @@ class TradingBot:
                             # Log stop-loss to database
                             try:
                                 from src.data.models import CompletedTrade
+                                sl_snap = snapshots.get(sl_ticker)
                                 completed = CompletedTrade(
                                     order_id=order_id,
                                     market_ticker=sl_ticker,
@@ -1246,6 +1258,7 @@ class TradingBot:
                                     entry_time=pos.entry_time,
                                     exit_time=datetime.now(timezone.utc),
                                     strategy_tag=pos.strategy_tag,
+                                    market_volume=sl_snap.volume if sl_snap else None,
                                 )
                                 await self._db.insert_trade(completed)
                             except Exception:
@@ -1320,6 +1333,7 @@ class TradingBot:
                             # Log thesis-break exit to database
                             try:
                                 from src.data.models import CompletedTrade
+                                tb_snap = snapshots.get(tb_ticker)
                                 completed = CompletedTrade(
                                     order_id=order_id,
                                     market_ticker=tb_ticker,
@@ -1332,6 +1346,7 @@ class TradingBot:
                                     entry_time=pos.entry_time,
                                     exit_time=datetime.now(timezone.utc),
                                     strategy_tag=pos.strategy_tag,
+                                    market_volume=tb_snap.volume if tb_snap else None,
                                 )
                                 await self._db.insert_trade(completed)
                             except Exception:
@@ -1406,7 +1421,7 @@ class TradingBot:
             except Exception:
                 logger.exception("time_profile_refresh_error")
 
-    async def _poll_settlement(self, ticker: str, pos, cost: Decimal) -> None:
+    async def _poll_settlement(self, ticker: str, pos, cost: Decimal, market_volume: int | None = None) -> None:
         """Background task to poll for settlement result (non-blocking)."""
         ds = self._dashboard_state
         settlement_result = None
@@ -1456,6 +1471,7 @@ class TradingBot:
                     entry_time=pos.entry_time,
                     exit_time=datetime.now(timezone.utc),
                     strategy_tag=pos.strategy_tag,
+                    market_volume=market_volume,
                 )
                 await self._db.insert_trade(completed)
             except Exception:
