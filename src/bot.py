@@ -1051,6 +1051,8 @@ class TradingBot:
                         snapshots,
                         pre_expiry_seconds=self._settings.strategy.pre_expiry_exit_seconds,
                         min_pnl_per_contract=self._settings.strategy.pre_expiry_exit_min_pnl_cents,
+                        hold_to_settle_seconds=self._settings.strategy.hold_to_settle_seconds,
+                        hold_to_settle_min_profit_cents=self._settings.strategy.hold_to_settle_min_profit_cents,
                     )
                     for pe_ticker, sell_price in pe_signals:
                         pos = self._position_tracker.get_position(pe_ticker)
@@ -1071,13 +1073,14 @@ class TradingBot:
                             suggested_count=pos.count,
                             timestamp=datetime.now(timezone.utc),
                             signal_type="directional",
+                            post_only=True,
                         )
                         order_id = await self._order_manager.submit(sell_signal, pos.count)
                         if order_id:
                             entry_cost = pos.avg_entry_price * pos.count
                             exit_revenue = Decimal(sell_price) * pos.count
                             sell_fee = EdgeDetector.compute_fee_dollars(
-                                pos.count, float(sell_price), is_maker=False
+                                pos.count, float(sell_price), is_maker=True
                             )
                             pnl = exit_revenue - entry_cost - sell_fee - pos.fees_paid
                             self._total_fees += sell_fee
@@ -1317,13 +1320,14 @@ class TradingBot:
                             suggested_count=pos.count,
                             timestamp=datetime.now(timezone.utc),
                             signal_type="directional",
+                            post_only=True,
                         )
                         order_id = await self._order_manager.submit(sell_signal, pos.count)
                         if order_id:
                             entry_cost = pos.avg_entry_price * pos.count
                             exit_revenue = Decimal(sell_price) * pos.count
                             sell_fee = EdgeDetector.compute_fee_dollars(
-                                pos.count, float(sell_price), is_maker=False
+                                pos.count, float(sell_price), is_maker=True
                             )
                             pnl = exit_revenue - entry_cost - sell_fee - pos.fees_paid
                             self._total_fees += sell_fee

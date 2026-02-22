@@ -195,6 +195,10 @@ class StrategyConfig(BaseModel):
     # Volatility regime filter: block entries when realized vol is too high (coin-flip territory)
     vol_regime_filter_enabled: bool = True
     vol_regime_max_realized_vol: float = 0.008
+    # Hold-to-settlement: skip TP/pre-expiry exit for profitable positions near expiry
+    # Settling naturally avoids exit fees entirely ($0 vs maker/taker sell fee)
+    hold_to_settle_seconds: float = 180.0  # Within this many seconds of expiry
+    hold_to_settle_min_profit_cents: float = 0.15  # Min profit/contract to qualify
 
 
 class RiskConfig(BaseModel):

@@ -757,8 +757,8 @@ class TestTakeProfit:
 
     def test_fixed_tp_profit_minus_fee_above_threshold(self):
         """profit - fee >= threshold triggers TP.
-        entry=0.40, bid=0.55, profit=0.15. Fee at 0.55 taker ≈ $0.02.
-        Net = 0.15 - 0.02 = 0.13 >= 0.10 threshold.
+        entry=0.40, bid=0.55, profit=0.15. Fee at 0.55 maker ≈ $0.01.
+        Net = 0.15 - 0.01 = 0.14 >= 0.10 threshold.
         """
         config = StrategyConfig(
             take_profit_min_profit_cents=0.10,
@@ -802,14 +802,14 @@ class TestTakeProfit:
         # At TTX=165s: t = (165-30)/(300-30) = 135/270 = 0.5
         # threshold = 0.05 + 0.5 * (0.10 - 0.05) = 0.075
         tracker = self._make_tracker_with_position(entry_price=0.40)
-        # Bid=0.49 gives profit=0.09, fee≈$0.02, net≈0.07 < 0.075 → no trigger
-        snap_no = _make_snapshot(yes_bid=0.49, ttx=165.0)
+        # Bid=0.47 gives profit=0.07, maker fee≈$0.01, net≈0.06 < 0.075 → no trigger
+        snap_no = _make_snapshot(yes_bid=0.47, ttx=165.0)
         results = tracker.check_take_profit(
             {"KXBTC15M-26FEB201400": snap_no}, config,
         )
         assert len(results) == 0
 
-        # Bid=0.51 gives profit=0.11, fee≈$0.02, net≈0.09 > 0.075 → trigger
+        # Bid=0.51 gives profit=0.11, maker fee≈$0.01, net≈0.10 > 0.075 → trigger
         tracker2 = self._make_tracker_with_position(entry_price=0.40)
         snap_yes = _make_snapshot(yes_bid=0.51, ttx=165.0)
         results2 = tracker2.check_take_profit(
