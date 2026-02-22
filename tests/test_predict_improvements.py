@@ -35,6 +35,9 @@ class TestSignalWeights:
             + HeuristicModel.CROSS_ASSET_DIVERGENCE_WEIGHT
             + HeuristicModel.CHAINLINK_ORACLE_WEIGHT
             + HeuristicModel.BTC_BETA_WEIGHT
+            + HeuristicModel.HOUR_SIGNAL_WEIGHT
+            + HeuristicModel.FUNDING_RATE_WEIGHT
+            + HeuristicModel.LIQUIDATION_WEIGHT
         )
         assert total == pytest.approx(1.0, abs=0.001)
 
@@ -451,8 +454,8 @@ class TestWiderProbabilityRange:
     def test_strong_momentum_max_adjustment_is_045(self):
         assert HeuristicModel.STRONG_MOMENTUM_MAX_ADJUSTMENT == 0.45
 
-    def test_market_anchor_weight_is_030(self):
-        assert HeuristicModel.MARKET_ANCHOR_WEIGHT == 0.30
+    def test_market_anchor_weight_is_045(self):
+        assert HeuristicModel.MARKET_ANCHOR_WEIGHT == 0.45
 
     # --- Graduated override interpolation ---
 
@@ -473,8 +476,9 @@ class TestWiderProbabilityRange:
             settlement_bias=0.2,
         )
         result = model.predict(fv)
-        # With wider MAX_ADJUSTMENT=0.30 and override, probability should exceed 0.68
-        assert result.probability_yes > 0.68
+        # With wider MAX_ADJUSTMENT=0.30 and override, probability should be well above 0.50
+        # (Stronger market anchor pulls toward implied ~0.50, so threshold is lower)
+        assert result.probability_yes > 0.58
 
     def test_override_does_not_trigger_below_03(self):
         """Override should NOT trigger when |mom_signal| <= 0.3."""
@@ -538,8 +542,8 @@ class TestWiderProbabilityRange:
             settlement_bias=0.5,
         )
         result = model.predict(fv)
-        # Should be able to reach well above old 0.68 cap
-        assert result.probability_yes > 0.75
+        # Should be well above 0.50 (stronger market anchor pulls toward implied)
+        assert result.probability_yes > 0.62
 
     # --- Market anchor ---
 
@@ -563,8 +567,8 @@ class TestWiderProbabilityRange:
         # Model should be pulled toward 0.82
         assert result.probability_yes > 0.70
 
-    def test_market_anchor_not_applied_when_directions_disagree(self):
-        """Market anchor should NOT blend when model and market disagree."""
+    def test_market_anchor_applied_with_stronger_weight_when_disagree(self):
+        """Market anchor should apply with stronger weight when model and market disagree."""
         model = HeuristicModel()
         # Bullish model + bearish market
         fv = self._make_feature_vector(
@@ -579,7 +583,8 @@ class TestWiderProbabilityRange:
             settlement_bias=0.2,
         )
         result = model.predict(fv)
-        assert result.features_used["market_anchor_applied"] == 0.0
+        # Now anchor is always applied (stronger when disagreeing)
+        assert result.features_used["market_anchor_applied"] == 1.0
 
     def test_market_anchor_not_applied_at_neutral(self):
         """Market anchor should NOT apply when model probability is exactly 0.50."""

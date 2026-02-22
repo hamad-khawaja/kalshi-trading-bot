@@ -22,7 +22,6 @@ class AssetConfig(BaseModel):
 
 
 class KalshiConfig(BaseModel):
-    environment: Literal["demo", "prod"] = "demo"
     api_key_id: str = ""
     private_key_path: str = ""
     series_ticker: str = "KXBTC15M"
@@ -31,14 +30,10 @@ class KalshiConfig(BaseModel):
 
     @property
     def base_url(self) -> str:
-        if self.environment == "demo":
-            return "https://demo-api.kalshi.co/trade-api/v2"
         return "https://api.elections.kalshi.com/trade-api/v2"
 
     @property
     def ws_url(self) -> str:
-        if self.environment == "demo":
-            return "wss://demo-api.kalshi.co/trade-api/ws/v2"
         return "wss://api.elections.kalshi.com/trade-api/ws/v2"
 
 
@@ -90,6 +85,7 @@ class StrategyConfig(BaseModel):
     fomo_min_implied_prob: float = 0.15
     fomo_min_confidence: float = 0.70
     fomo_min_score: float = 0.50
+    fomo_max_bet_dollars: float = 2.00  # Max dollar exposure per FOMO trade
     # Stop-loss parameters
     stop_loss_enabled: bool = True
     stop_loss_pct: float = 0.35  # Exit when loss > 35% of entry price
@@ -118,7 +114,7 @@ class StrategyConfig(BaseModel):
     thesis_break_threshold: float = 0.05  # model must cross 0.50 +/- this to trigger exit
     thesis_break_min_hold_seconds: float = 60.0  # minimum hold before thesis break can fire
     # Entry price filter: block cheap contracts with poor hit rates
-    min_entry_price: float = 0.25
+    min_entry_price: float = 0.30
     # YES-side edge penalty: require more edge for YES (NO side is more profitable empirically)
     yes_side_edge_multiplier: float = 1.4
     # Per-asset edge multipliers: require more edge for noisier assets
@@ -137,8 +133,8 @@ class StrategyConfig(BaseModel):
     edge_expiry_decay_max: float = 1.8  # At 1 min left, require 1.8x normal edge
     # Phase timing: gate trades by window phase
     phase_filter_enabled: bool = True
-    phase_observation_end: float = 300.0
-    phase_confirmation_end: float = 480.0
+    phase_observation_end: float = 420.0  # 7 min observation (early entries lose money)
+    phase_confirmation_end: float = 540.0  # 9 min confirmation end
     phase_active_end: float = 720.0
     phase_late_end: float = 840.0
     phase_late_edge_multiplier: float = 1.3
@@ -159,8 +155,8 @@ class StrategyConfig(BaseModel):
     btc_beta_enabled: bool = True
     btc_beta_min_signal: float = 0.40  # Min |btc_beta_signal| to override ETH directional disable
     # Quiet hours: skip directional trading during low-volume hours (MM still allowed)
-    quiet_hours_enabled: bool = False
-    quiet_hours_utc: list[int] = []  # UTC hours to skip directional trading (e.g. [5, 6, 7])
+    quiet_hours_enabled: bool = True
+    quiet_hours_est: list[int] = [17, 18]  # Worst P&L hours (-$123): hard-block directional (EST)
     # Settlement-ride: enter late in window, hold to settlement (no TP/SL/pre-expiry)
     settlement_ride_enabled: bool = True
     settlement_ride_min_elapsed_seconds: float = 600.0  # Only enter after 10 min elapsed
@@ -192,6 +188,9 @@ class StrategyConfig(BaseModel):
     mc_kelly_fraction: float = 0.15
     mc_min_ttx: float = 120.0         # At least 2 min to expiry
     mc_max_ttx: float = 720.0         # Only last 12 min
+    # Volatility regime filter: block entries when realized vol is too high (coin-flip territory)
+    vol_regime_filter_enabled: bool = True
+    vol_regime_max_realized_vol: float = 0.008
 
 
 class RiskConfig(BaseModel):
@@ -221,6 +220,9 @@ class RiskConfig(BaseModel):
     time_scale_full_seconds: float = 480.0  # Full size above this time remaining
     time_scale_min_multiplier: float = 0.4  # Minimum scaling at expiry
     min_position_size: int = 5  # Don't enter with fewer than this many contracts
+    # Directional high-price boost: size up directional at $0.50+ (92-99% WR zone)
+    directional_high_price_boost: float = 1.5
+    directional_high_price_threshold: float = 0.50
     # Per-asset position limits: noisier assets get smaller positions
     asset_max_position: dict[str, int] = {}
     asset_max_per_cycle: dict[str, int] = {}
@@ -228,7 +230,7 @@ class RiskConfig(BaseModel):
 
 class FeatureConfig(BaseModel):
     lookback_seconds: int = 900
-    momentum_windows: list[int] = [15, 60, 180, 600]
+    momentum_windows: list[int] = [15, 60, 180, 600, 1800]
     volatility_window: int = 300
     orderbook_depth: int = 10
 
@@ -249,11 +251,20 @@ class DatabaseConfig(BaseModel):
     path: str = "data/bot.db"
 
 
+class BinanceFuturesConfig(BaseModel):
+    enabled: bool = True
+    symbols: list[str] = ["BTCUSDT", "ETHUSDT"]
+    funding_poll_interval: float = 45.0
+    liquidation_ws_url: str = "wss://stream.bybit.com/v5/public/linear"
+    funding_api_base: str = "https://api.bybit.com"
+
+
 class BotSettings(BaseModel):
     mode: Literal["paper", "live"] = "paper"
     kalshi: KalshiConfig = KalshiConfig()
     binance: BinanceConfig = BinanceConfig()
     secondary_feed: SecondaryFeedConfig = SecondaryFeedConfig()
+    binance_futures: BinanceFuturesConfig = BinanceFuturesConfig()
 
     strategy: StrategyConfig = StrategyConfig()
     risk: RiskConfig = RiskConfig()

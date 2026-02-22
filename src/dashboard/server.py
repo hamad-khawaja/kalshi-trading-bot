@@ -6,6 +6,7 @@ import asyncio
 import json
 from collections import deque
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from typing import Any
 
 import structlog
@@ -60,7 +61,7 @@ class DashboardState:
         self.settlement_history: dict[str, list[dict[str, Any]]] = {}
 
         # Quiet hours config (passed to frontend for clock coloring)
-        self.quiet_hours_utc: list[int] = []
+        self.quiet_hours_est: list[int] = []
 
         # Cumulative seconds where at least one position was open
         self.active_trading_seconds: float = 0.0
@@ -94,7 +95,7 @@ class DashboardState:
             self.trade_history[asset] = deque(maxlen=10)
         self.trade_history[asset].append(
             {
-                "time": datetime.now(timezone.utc).strftime("%H:%M:%S"),
+                "time": datetime.now(ZoneInfo("America/New_York")).strftime("%H:%M:%S"),
                 "action": action,
                 "side": side,
                 "pnl": round(pnl, 2),
@@ -121,7 +122,7 @@ class DashboardState:
         """
         self.recent_decisions.append(
             {
-                "time": datetime.now(timezone.utc).strftime("%H:%M:%S"),
+                "time": datetime.now(ZoneInfo("America/New_York")).strftime("%H:%M:%S"),
                 "cycle": cycle,
                 "type": decision_type,
                 "summary": summary,
@@ -159,7 +160,7 @@ class DashboardState:
             },
             "settlement_history": self.settlement_history,
             "per_asset_pnl": self.per_asset_pnl,
-            "quiet_hours_utc": self.quiet_hours_utc,
+            "quiet_hours_est": self.quiet_hours_est,
             "active_trading_seconds": self.active_trading_seconds,
             "trading_paused": self.trading_paused,
             "quiet_hours_override": self.quiet_hours_override,

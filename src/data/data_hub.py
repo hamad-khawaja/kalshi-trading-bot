@@ -10,6 +10,7 @@ import structlog
 
 from src.config import AssetConfig, BotSettings, StrategyConfig
 from src.data.binance_feed import BinanceFeed
+from src.data.binance_futures_feed import BinanceFuturesFeed
 from src.data.chainlink_feed import ChainlinkFeed
 from src.data.kalshi_client import KalshiRestClient
 from src.data.kalshi_ws import KalshiWebSocket
@@ -36,6 +37,7 @@ class DataHub:
         scanners: dict[str, MarketScanner],
         secondary_feeds: dict[str, BinanceFeed] | None = None,
         chainlink_feeds: dict[str, ChainlinkFeed] | None = None,
+        futures_feed: BinanceFuturesFeed | None = None,
         strategy_config: StrategyConfig | None = None,
         asset_configs: list[AssetConfig] | None = None,
     ):
@@ -44,6 +46,7 @@ class DataHub:
         self._feeds = feeds
         self._secondary_feeds = secondary_feeds or {}
         self._chainlink_feeds = chainlink_feeds or {}
+        self._futures_feed = futures_feed
         self._scanners = scanners
         self._strategy_config = strategy_config or StrategyConfig()
         self._asset_configs = asset_configs or []
@@ -85,6 +88,8 @@ class DataHub:
             best_effort.append((f"secondary_feed_{symbol}", feed.connect()))
         for symbol, feed in self._chainlink_feeds.items():
             best_effort.append((f"chainlink_feed_{symbol}", feed.start()))
+        if self._futures_feed is not None:
+            best_effort.append(("futures_feed", self._futures_feed.start()))
 
         for name, coro in best_effort:
             try:
@@ -106,6 +111,8 @@ class DataHub:
             coros.append(feed.close())
         for feed in self._chainlink_feeds.values():
             coros.append(feed.stop())
+        if self._futures_feed is not None:
+            coros.append(self._futures_feed.stop())
         await asyncio.gather(*coros, return_exceptions=True)
         logger.info("data_hub_stopped")
 
@@ -262,11 +269,15 @@ class DataHub:
             logger.warning("snapshot_no_btc_price", symbol=symbol)
             return None
 
-        # Recent price history
-        ticks_1min = feed.get_prices_since(60)
-        ticks_5min = feed.get_prices_since(900)
+        # Recent price history — single deque scan, then cheap list filters
+        ticks_30min = feed.get_prices_since(1800)
+        cutoff_5min = now.timestamp() - 900
+        cutoff_1min = now.timestamp() - 60
+        ticks_5min = [t for t in ticks_30min if t.timestamp.timestamp() >= cutoff_5min]
+        ticks_1min = [t for t in ticks_30min if t.timestamp.timestamp() >= cutoff_1min]
         prices_1min = [t.price for t in ticks_1min]
         prices_5min = [t.price for t in ticks_5min]
+        prices_30min = [t.price for t in ticks_30min]
         volumes_1min = [t.volume for t in ticks_1min]
 
         # Kalshi orderbook — use WS-maintained cache, REST fallback on cache miss
@@ -327,7 +338,8 @@ class DataHub:
                 cross_exchange_spread = (bn_price - cb_price) / cb_price
             # Lead signal: compare short-term momentum across exchanges
             bn_ticks = secondary_feed.get_prices_since(15)
-            cb_ticks = feed.get_prices_since(15)
+            cutoff_15s = now.timestamp() - 15
+            cb_ticks = [t for t in ticks_1min if t.timestamp.timestamp() >= cutoff_15s]
             if len(bn_ticks) >= 2 and len(cb_ticks) >= 2:
                 bn_start = float(bn_ticks[0].price)
                 bn_end = float(bn_ticks[-1].price)
@@ -361,6 +373,20 @@ class DataHub:
             if oracle_f > 0:
                 chainlink_divergence = (float(btc_price) - oracle_f) / oracle_f
             chainlink_round_updated = chainlink_feed.round_just_updated
+
+        # Binance Futures: funding rate + liquidation stats
+        funding_rate = None
+        predicted_funding_rate = None
+        liquidation_long_usd = None
+        liquidation_short_usd = None
+        if self._futures_feed is not None:
+            futures_symbol = symbol + "USDT"  # e.g. "BTCUSDT"
+            funding_rate = self._futures_feed.get_funding_rate(futures_symbol)
+            predicted_funding_rate = self._futures_feed.get_predicted_funding_rate(futures_symbol)
+            long_liq, short_liq = self._futures_feed.get_liquidation_stats_since(futures_symbol, 300)
+            if long_liq > 0 or short_liq > 0:
+                liquidation_long_usd = long_liq
+                liquidation_short_usd = short_liq
 
         # BTC momentum lead for non-BTC assets
         btc_momentum_lead = None
@@ -403,6 +429,7 @@ class DataHub:
             btc_price=btc_price,
             btc_prices_1min=prices_1min,
             btc_prices_5min=prices_5min,
+            btc_prices_30min=prices_30min,
             btc_volumes_1min=volumes_1min,
             orderbook=orderbook,
             implied_yes_prob=orderbook.implied_yes_prob,
@@ -418,6 +445,10 @@ class DataHub:
             chainlink_divergence=chainlink_divergence,
             chainlink_round_updated=chainlink_round_updated,
             btc_momentum_lead=btc_momentum_lead,
+            funding_rate=funding_rate,
+            predicted_funding_rate=predicted_funding_rate,
+            liquidation_long_usd=liquidation_long_usd,
+            liquidation_short_usd=liquidation_short_usd,
             time_to_expiry_seconds=time_to_expiry,
             time_elapsed_seconds=time_elapsed,
             window_phase=window_phase,

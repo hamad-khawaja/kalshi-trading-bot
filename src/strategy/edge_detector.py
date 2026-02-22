@@ -7,9 +7,12 @@ from decimal import ROUND_CEILING, Decimal
 
 import structlog
 
+import numpy as np
+
 from src.config import StrategyConfig
 from src.data.models import MarketSnapshot, PredictionResult, TradeSignal
 from src.data.time_profile import TimeProfiler
+from src.features.indicators import volatility_realized
 from src.risk.volatility import VolatilityTracker
 
 logger = structlog.get_logger()
@@ -173,6 +176,38 @@ class EdgeDetector:
                 "decision": f"NO TRADE: entry price {trade_price:.2f} < min {self._config.min_entry_price:.2f}",
             }
             return None
+
+        # Volatility regime filter: block when 5min realized vol is too high
+        if self._config.vol_regime_filter_enabled and snapshot.btc_prices_5min:
+            price_arr = np.array(
+                [float(p) for p in snapshot.btc_prices_5min], dtype=np.float64
+            )
+            realized_vol = volatility_realized(price_arr)
+            if realized_vol > self._config.vol_regime_max_realized_vol:
+                logger.info(
+                    "vol_regime_blocked",
+                    ticker=snapshot.market_ticker,
+                    side=side,
+                    realized_vol=round(realized_vol, 6),
+                    max_vol=self._config.vol_regime_max_realized_vol,
+                )
+                self.last_analysis = {
+                    "side": side,
+                    "raw_edge": round(raw_edge, 4),
+                    "fee_drag": round(fee_drag, 4),
+                    "net_edge": round(net_edge, 4),
+                    "model_prob": round(model_prob, 4),
+                    "implied_prob": round(implied, 4),
+                    "confidence": round(prediction.confidence, 4),
+                    "edge_passed": False,
+                    "confidence_ok": False,
+                    "passed": False,
+                    "using_fair_value": using_fair_value,
+                    "vol_regime_blocked": True,
+                    "realized_vol": round(realized_vol, 6),
+                    "decision": f"NO TRADE: vol regime filter (realized_vol={realized_vol:.6f} > max {self._config.vol_regime_max_realized_vol})",
+                }
+                return None
 
         # Zone filter: block expensive directional trades (Zone 4-5)
         if self._config.zone_filter_enabled and trade_price > self._config.max_directional_price:

@@ -90,6 +90,22 @@ class FomoDetector:
             underpriced_side = "yes"
             trade_price = implied
 
+        # Min entry price check (prevents cheap-contract losses)
+        if trade_price < self._config.min_entry_price:
+            logger.info(
+                "min_price_blocked_fomo",
+                ticker=snapshot.market_ticker,
+                trade_price=round(trade_price, 4),
+                min_entry_price=self._config.min_entry_price,
+            )
+            self.last_analysis = {
+                "decision": (
+                    f"NO FOMO: trade_price {trade_price:.4f} "
+                    f"< min_entry_price {self._config.min_entry_price:.4f}"
+                ),
+            }
+            return None
+
         if divergence < self._config.fomo_min_divergence:
             self.last_analysis = {
                 "decision": (

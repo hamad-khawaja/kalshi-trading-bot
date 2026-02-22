@@ -103,6 +103,13 @@ class PositionSizer:
             zone_mult = self._config.zone_kelly_multipliers[signal.entry_zone - 1]
             f *= zone_mult
 
+        # Directional high-price boost: 92-99% WR at $0.50+ deserves bigger size
+        if (
+            signal.signal_type == "directional"
+            and price >= self._config.directional_high_price_threshold
+        ):
+            f *= self._config.directional_high_price_boost
+
         # Scale by confidence (linear for stronger differentiation)
         f *= signal.confidence
 
@@ -137,6 +144,14 @@ class PositionSizer:
 
         # Convert to dollar amount
         bet_dollars = f * float(balance_dollars)
+
+        # FOMO cap: limit total dollar exposure per FOMO trade
+        if (
+            signal.signal_type == "fomo"
+            and self._strategy_config is not None
+            and self._strategy_config.fomo_max_bet_dollars > 0
+        ):
+            bet_dollars = min(bet_dollars, self._strategy_config.fomo_max_bet_dollars)
 
         # Convert to contract count (each contract costs `price` dollars)
         count = int(bet_dollars / price)

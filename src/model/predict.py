@@ -19,7 +19,7 @@ class ProbabilityModel(ABC):
     """
 
     @abstractmethod
-    def predict(self, features: FeatureVector) -> PredictionResult:
+    def predict(self, features: FeatureVector, market_ticker: str = "") -> PredictionResult:
         """Return estimated probability and confidence."""
         ...
 
@@ -47,15 +47,18 @@ class HeuristicModel(ProbabilityModel):
     # Noisy signals (flow, taker, settlement) reduced from 24% to 11%.
     MOMENTUM_WEIGHT = 0.38  # Core signal: BTC direction → resolution 96.6%
     TECHNICAL_WEIGHT = 0.18  # BB, MACD, ROC, vol-mom composite
-    ORDERFLOW_WEIGHT = 0.02  # Kalshi retail book = noise
+    ORDERFLOW_WEIGHT = 0.01  # Kalshi retail book = noise (reduced for futures signals)
     MEAN_REVERSION_WEIGHT = 0.10  # Keep (useful when not fighting trends)
     TIME_DECAY_WEIGHT = 0.10
     CROSS_EXCHANGE_WEIGHT = 0.07  # Somewhat useful lead signal
-    TAKER_FLOW_WEIGHT = 0.03  # Reduced to make room for chainlink
-    SETTLEMENT_BIAS_WEIGHT = 0.01  # Reduced to make room for btc_beta
+    TAKER_FLOW_WEIGHT = 0.01  # Reduced for futures signals
+    SETTLEMENT_BIAS_WEIGHT = 0.00  # Reallocated to hour signal
     CROSS_ASSET_DIVERGENCE_WEIGHT = 0.03  # Reduced to make room for btc_beta
     CHAINLINK_ORACLE_WEIGHT = 0.02  # Reduced to make room for btc_beta
     BTC_BETA_WEIGHT = 0.06  # BTC-led directional signal for non-BTC assets
+    HOUR_SIGNAL_WEIGHT = 0.01  # Hour-of-day awareness (reduced for futures signals)
+    FUNDING_RATE_WEIGHT = 0.02  # Binance futures funding rate
+    LIQUIDATION_WEIGHT = 0.01  # Binance futures liquidation cascades
 
     # Maximum adjustment from 0.50 base
     MAX_ADJUSTMENT = 0.30  # Raised from 0.18: match Kalshi's actual trading range (0.20–0.80)
@@ -75,10 +78,11 @@ class HeuristicModel(ProbabilityModel):
     EMA_SNAP_THRESHOLD = 0.08
 
     # Market anchor: blend toward implied probability when model agrees with market direction
-    MARKET_ANCHOR_WEIGHT = 0.30
+    MARKET_ANCHOR_WEIGHT = 0.45
+    MARKET_ANCHOR_DISAGREE_WEIGHT = 0.55  # Stronger anchor when model disagrees with market
 
     def __init__(self, weight_multipliers: dict[str, float] | None = None) -> None:
-        self._prev_probability: float | None = None
+        self._prev_probabilities: dict[str, float] = {}
         self._weight_multipliers: dict[str, float] = weight_multipliers or {}
 
     def set_weight_multipliers(self, multipliers: dict[str, float]) -> None:
@@ -88,15 +92,16 @@ class HeuristicModel(ProbabilityModel):
     def name(self) -> str:
         return "heuristic_v2"
 
-    def predict(self, features: FeatureVector) -> PredictionResult:
+    def predict(self, features: FeatureVector, market_ticker: str = "") -> PredictionResult:
         """Estimate P(BTC up) using rule-based signals."""
         # --- 1. Momentum signal ---
         # Favor longer timeframes to reduce noise from short-term jitter
         mom_signal = (
-            0.1 * self._normalize_momentum(features.momentum_15s)
-            + 0.2 * self._normalize_momentum(features.momentum_60s)
-            + 0.3 * self._normalize_momentum(features.momentum_180s)
-            + 0.4 * self._normalize_momentum(features.momentum_600s)
+            0.05 * self._normalize_momentum(features.momentum_15s)
+            + 0.10 * self._normalize_momentum(features.momentum_60s)
+            + 0.20 * self._normalize_momentum(features.momentum_180s)
+            + 0.30 * self._normalize_momentum(features.momentum_600s)
+            + 0.35 * self._normalize_momentum(features.momentum_1800s)
         )
 
         # Check momentum consistency (all timeframes agree = stronger signal)
@@ -105,6 +110,7 @@ class HeuristicModel(ProbabilityModel):
             features.momentum_60s,
             features.momentum_180s,
             features.momentum_600s,
+            features.momentum_1800s,
         ]
         nonzero = [m for m in momentums if m != 0]
         if nonzero:
@@ -187,6 +193,28 @@ class HeuristicModel(ProbabilityModel):
         # Only fires for non-BTC assets (btc_beta_signal = 0 for BTC).
         btc_beta_signal = features.btc_beta_signal  # Already normalized [-1, 1]
 
+        # --- 12. Hour-of-day signal ---
+        # Penalize known bad hours (22-23 UTC = -$123 worst hours)
+        # Reward known good hours (14-20 UTC = US trading session)
+        hour = features.timestamp.hour
+        if hour in (22, 23):
+            hour_signal = -0.5
+        elif 14 <= hour <= 20:
+            hour_signal = 0.2
+        else:
+            hour_signal = 0.0
+
+        # --- 13. Funding rate signal ---
+        # Already computed by FeatureEngine: [-1, 1]
+        # Negative = high positive funding (crowded longs, bearish)
+        funding_signal = features.funding_rate_signal
+
+        # --- 14. Liquidation imbalance signal ---
+        # Already computed by FeatureEngine: [-1, 1]
+        # Positive = more longs liquidated (bearish pressure)
+        # Invert: long liqs → price down → bearish
+        liquidation_signal = -features.liquidation_imbalance
+
         # --- 10. Time decay signal ---
         # Reduced weight: dampen signals near expiry but don't negate them
         time_decay_signal = 0.0
@@ -213,6 +241,9 @@ class HeuristicModel(ProbabilityModel):
         ca_w = self.CROSS_ASSET_DIVERGENCE_WEIGHT * m.get("cross_asset", 1.0)
         cl_w = self.CHAINLINK_ORACLE_WEIGHT * m.get("chainlink", 1.0)
         bb_w = self.BTC_BETA_WEIGHT * m.get("btc_beta", 1.0)
+        hr_w = self.HOUR_SIGNAL_WEIGHT * m.get("hour_signal", 1.0)
+        fr_w = self.FUNDING_RATE_WEIGHT * m.get("funding_rate", 1.0)
+        lq_w = self.LIQUIDATION_WEIGHT * m.get("liquidation", 1.0)
 
         # Re-normalize so weights sum to the original total
         original_total = (
@@ -227,8 +258,11 @@ class HeuristicModel(ProbabilityModel):
             + self.CROSS_ASSET_DIVERGENCE_WEIGHT
             + self.CHAINLINK_ORACLE_WEIGHT
             + self.BTC_BETA_WEIGHT
+            + self.HOUR_SIGNAL_WEIGHT
+            + self.FUNDING_RATE_WEIGHT
+            + self.LIQUIDATION_WEIGHT
         )
-        adjusted_total = mom_w + tech_w + flow_w + mr_w + td_w + cx_w + tk_w + sb_w + ca_w + cl_w + bb_w
+        adjusted_total = mom_w + tech_w + flow_w + mr_w + td_w + cx_w + tk_w + sb_w + ca_w + cl_w + bb_w + hr_w + fr_w + lq_w
         if adjusted_total > 0:
             scale = original_total / adjusted_total
             mom_w *= scale
@@ -242,6 +276,9 @@ class HeuristicModel(ProbabilityModel):
             ca_w *= scale
             cl_w *= scale
             bb_w *= scale
+            hr_w *= scale
+            fr_w *= scale
+            lq_w *= scale
 
         # --- Combine signals ---
         raw_adjustment = (
@@ -255,6 +292,9 @@ class HeuristicModel(ProbabilityModel):
             + ca_w * cross_asset_signal
             + cl_w * chainlink_signal
             + bb_w * btc_beta_signal
+            + hr_w * hour_signal
+            + fr_w * funding_signal
+            + lq_w * liquidation_signal
             + td_w * time_decay_signal
         )
 
@@ -264,6 +304,7 @@ class HeuristicModel(ProbabilityModel):
             mom_signal, tech_signal, flow_signal, mr_signal,
             cross_exchange_signal, taker_signal, settlement_signal,
             cross_asset_signal, chainlink_signal, btc_beta_signal,
+            hour_signal, funding_signal, liquidation_signal,
             time_decay_signal,
         ]
         active_signals = [s for s in all_signals if abs(s) > 0.05]
@@ -303,30 +344,36 @@ class HeuristicModel(ProbabilityModel):
         if abs(probability - 0.50) < self.DEAD_ZONE:
             probability = 0.50
 
-        # EMA smoothing to reduce oscillation
+        # EMA smoothing to reduce oscillation (per-market state)
         # Snap-through: skip EMA when prediction changes drastically
-        if self._prev_probability is not None:
-            delta = abs(probability - self._prev_probability)
+        prev_prob = self._prev_probabilities.get(market_ticker)
+        if prev_prob is not None:
+            delta = abs(probability - prev_prob)
             if delta < self.EMA_SNAP_THRESHOLD:
                 probability = (
                     self.EMA_ALPHA * probability
-                    + (1 - self.EMA_ALPHA) * self._prev_probability
+                    + (1 - self.EMA_ALPHA) * prev_prob
                 )
             # else: snap — use raw probability without smoothing
-        self._prev_probability = probability
+        self._prev_probabilities[market_ticker] = probability
 
-        # Market-direction anchor: when model direction matches market direction
-        # and momentum consistency is sufficient, blend toward implied probability.
-        # This prevents the model from stubbornly disagreeing with the market
-        # when its own signals confirm the market's direction.
+        # Market-direction anchor: always blend toward implied probability.
+        # When model agrees with market, use standard anchor weight.
+        # When model disagrees, use stronger anchor — the market is a better
+        # estimator than the model in many cases (actual WR 24.6% on settlements
+        # where model predicted 50-60%).
         market_anchor_applied = False
         implied = features.implied_probability
         model_bullish = probability > 0.50
         market_bullish = implied > 0.50
-        if consistency >= 0.5 and model_bullish == market_bullish and probability != 0.50:
+        if probability != 0.50:
+            if model_bullish == market_bullish:
+                anchor_w = self.MARKET_ANCHOR_WEIGHT
+            else:
+                anchor_w = self.MARKET_ANCHOR_DISAGREE_WEIGHT
             probability = (
-                (1 - self.MARKET_ANCHOR_WEIGHT) * probability
-                + self.MARKET_ANCHOR_WEIGHT * implied
+                (1 - anchor_w) * probability
+                + anchor_w * implied
             )
             market_anchor_applied = True
 
@@ -348,6 +395,9 @@ class HeuristicModel(ProbabilityModel):
             "cross_asset_signal": round(cross_asset_signal, 4),
             "chainlink_signal": round(chainlink_signal, 4),
             "btc_beta_signal": round(btc_beta_signal, 4),
+            "hour_signal": round(hour_signal, 4),
+            "funding_signal": round(funding_signal, 4),
+            "liquidation_signal": round(liquidation_signal, 4),
             "time_decay_signal": round(time_decay_signal, 4),
             "consistency": round(consistency, 4),
             "raw_adjustment": round(raw_adjustment, 4),
@@ -467,7 +517,7 @@ class LightGBMModel(ProbabilityModel):
     def name(self) -> str:
         return "lightgbm_v1"
 
-    def predict(self, features: FeatureVector) -> PredictionResult:
+    def predict(self, features: FeatureVector, market_ticker: str = "") -> PredictionResult:
         """Predict using trained LightGBM model."""
         if self._model is None:
             raise RuntimeError(

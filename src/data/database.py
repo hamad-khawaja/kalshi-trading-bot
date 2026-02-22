@@ -64,6 +64,7 @@ class Database:
                 implied_probability REAL,
                 entry_time TEXT NOT NULL,
                 exit_time TEXT,
+                strategy_tag TEXT NOT NULL DEFAULT 'directional',
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
@@ -121,6 +122,38 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_outcomes_ticker ON outcomes(market_ticker);
         """)
         await self._db.commit()
+        # Migrate: add new columns to existing databases
+        await self._migrate_strategy_tag()
+        await self._migrate_market_volume()
+
+    async def _migrate_strategy_tag(self) -> None:
+        """Add strategy_tag column if missing (existing databases)."""
+        assert self._db is not None
+        cursor = await self._db.execute("PRAGMA table_info(trades)")
+        columns = {row[1] for row in await cursor.fetchall()}
+        if "strategy_tag" not in columns:
+            await self._db.execute(
+                "ALTER TABLE trades ADD COLUMN strategy_tag TEXT NOT NULL DEFAULT 'directional'"
+            )
+            await self._db.commit()
+            logger.info("migrated_strategy_tag_column")
+
+    async def _migrate_market_volume(self) -> None:
+        """Add market_volume column if missing (existing databases)."""
+        assert self._db is not None
+        cursor = await self._db.execute("PRAGMA table_info(trades)")
+        columns = {row[1] for row in await cursor.fetchall()}
+        if "market_volume" not in columns:
+            await self._db.execute(
+                "ALTER TABLE trades ADD COLUMN market_volume INTEGER"
+            )
+            await self._db.commit()
+            logger.info("migrated_market_volume_column")
+
+    async def flush(self) -> None:
+        """Commit any pending writes in a single batch."""
+        if self._db:
+            await self._db.commit()
 
     async def insert_trade(self, trade: CompletedTrade) -> None:
         """Insert a completed trade record."""
@@ -129,8 +162,8 @@ class Database:
             """INSERT INTO trades
             (order_id, market_ticker, side, action, count, price_dollars,
              fees_dollars, pnl_dollars, model_probability, implied_probability,
-             entry_time, exit_time)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+             entry_time, exit_time, strategy_tag, market_volume)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 trade.order_id,
                 trade.market_ticker,
@@ -144,9 +177,10 @@ class Database:
                 trade.implied_probability,
                 trade.entry_time.isoformat(),
                 trade.exit_time.isoformat() if trade.exit_time else None,
+                trade.strategy_tag,
+                trade.market_volume,
             ),
         )
-        await self._db.commit()
 
     async def insert_prediction(
         self,
@@ -173,7 +207,6 @@ class Database:
                 datetime.now(timezone.utc).isoformat(),
             ),
         )
-        await self._db.commit()
 
     async def insert_outcome(
         self,
@@ -198,7 +231,6 @@ class Database:
                 settlement_time.isoformat() if settlement_time else None,
             ),
         )
-        await self._db.commit()
 
     async def insert_tick(
         self,
@@ -227,7 +259,6 @@ class Database:
                 market_ticker,
             ),
         )
-        await self._db.commit()
 
     async def get_daily_pnl(self, target_date: date) -> float:
         """Get total P&L for a specific date."""
@@ -259,7 +290,7 @@ class Database:
             """SELECT order_id, market_ticker, side, action, count,
                       price_dollars, fees_dollars, pnl_dollars,
                       model_probability, implied_probability,
-                      entry_time, exit_time
+                      entry_time, exit_time, strategy_tag
             FROM trades ORDER BY entry_time DESC LIMIT ?""",
             (limit,),
         )
@@ -268,7 +299,7 @@ class Database:
             "order_id", "market_ticker", "side", "action", "count",
             "price_dollars", "fees_dollars", "pnl_dollars",
             "model_probability", "implied_probability",
-            "entry_time", "exit_time",
+            "entry_time", "exit_time", "strategy_tag",
         ]
         return [dict(zip(columns, row)) for row in rows]
 
