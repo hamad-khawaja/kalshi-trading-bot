@@ -774,7 +774,7 @@ a{color:#58a6ff}
           const arrow = isYes ? '\\u25B2' : '\\u25BC';
           const cls = isYes ? 'yes' : 'no';
           const label = m.result.toUpperCase();
-          const time = m.close_time ? new Date(m.close_time).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',timeZone:'America/New_York'}) : '';
+          const time = (m.open_time || m.close_time) ? new Date(m.open_time || m.close_time).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',timeZone:'America/New_York'}) : '';
           return '<span class="settle-badge ' + cls + '">' + arrow + label + ' ' + time + '</span>';
         }).join('');
       }
