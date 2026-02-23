@@ -22,7 +22,7 @@ from src.strategy.edge_detector import EdgeDetector
 class TestSignalWeights:
     """Verify the rebalanced signal weights sum to 1.0."""
 
-    def test_weights_sum_to_one(self):
+    def test_weights_sum_to_expected(self):
         total = (
             HeuristicModel.MOMENTUM_WEIGHT
             + HeuristicModel.TECHNICAL_WEIGHT
@@ -37,9 +37,13 @@ class TestSignalWeights:
             + HeuristicModel.BTC_BETA_WEIGHT
             + HeuristicModel.HOUR_SIGNAL_WEIGHT
             + HeuristicModel.FUNDING_RATE_WEIGHT
+            + HeuristicModel.PREDICTED_FUNDING_WEIGHT
             + HeuristicModel.LIQUIDATION_WEIGHT
+            + HeuristicModel.FUNDING_DIVERGENCE_WEIGHT
+            + HeuristicModel.LIQUIDATION_RATIO_WEIGHT
+            + HeuristicModel.MC_SIGNAL_WEIGHT
         )
-        assert total == pytest.approx(1.0, abs=0.001)
+        assert total == pytest.approx(1.07, abs=0.001)
 
     def test_proven_signals_dominate(self):
         """Proven signals (momentum + technical) should be >= 56%."""

@@ -229,7 +229,11 @@ class BinanceFuturesFeed:
             try:
                 rate = float(rate_str)
                 self._funding_rates[symbol] = rate
-                self._predicted_funding_rates[symbol] = rate
+                predicted_str = data.get("nextFundingRate")
+                if predicted_str is not None:
+                    self._predicted_funding_rates[symbol] = float(predicted_str)
+                else:
+                    self._predicted_funding_rates[symbol] = rate
             except (TypeError, ValueError):
                 pass
 

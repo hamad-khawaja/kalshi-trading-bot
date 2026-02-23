@@ -304,3 +304,37 @@ def orderbook_depth_imbalance(
         return 0.0
 
     return float((yes_depth - no_depth) / total)
+
+
+def orderbook_top_concentration(
+    yes_levels: list, no_levels: list, top_n: int = 2
+) -> float:
+    """Measure how concentrated volume is at top levels vs total depth.
+
+    Returns value in [-1, 1]:
+    +1 = YES side has all volume at top (wall at best bid)
+    -1 = NO side has all volume at top (wall at best bid)
+     0 = balanced concentration on both sides
+
+    Detects walls/thin books: when one side has a large wall at
+    the best price, it signals strong support/resistance.
+    """
+    def _concentration(levels: list) -> float:
+        if not levels:
+            return 0.0
+        top_qty = sum(
+            level.quantity if hasattr(level, "quantity") else 0
+            for level in levels[:top_n]
+        )
+        total_qty = sum(
+            level.quantity if hasattr(level, "quantity") else 0
+            for level in levels
+        )
+        if total_qty == 0:
+            return 0.0
+        return top_qty / total_qty
+
+    yes_conc = _concentration(yes_levels)
+    no_conc = _concentration(no_levels)
+
+    return float(yes_conc - no_conc)

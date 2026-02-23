@@ -17,6 +17,7 @@ from src.features.indicators import (
     momentum,
     order_flow_imbalance,
     orderbook_depth_imbalance,
+    orderbook_top_concentration,
     rate_of_change_acceleration,
     rsi,
     spread_ratio,
@@ -110,6 +111,7 @@ class FeatureEngine:
         ob_depth = orderbook_depth_imbalance(
             ob.yes_levels, ob.no_levels, max_depth=5
         )
+        ob_top_conc = orderbook_top_concentration(ob.yes_levels, ob.no_levels)
 
         # Settlement bias from recent Kalshi outcomes
         asset_symbol = self._extract_asset_symbol(snapshot.market_ticker)
@@ -137,6 +139,7 @@ class FeatureEngine:
             roc_acceleration=roc_accel,
             volume_weighted_momentum=vol_mom,
             orderbook_depth_imbalance=ob_depth,
+            orderbook_top_concentration=ob_top_conc,
             cross_exchange_spread=snapshot.cross_exchange_spread or 0.0,
             cross_exchange_lead=snapshot.cross_exchange_lead or 0.0,
             taker_buy_sell_ratio=self._compute_taker_ratio(snapshot),
@@ -145,6 +148,7 @@ class FeatureEngine:
             chainlink_confirmation=1.0 if snapshot.chainlink_round_updated else 0.0,
             btc_beta_signal=max(-1.0, min(1.0, math.tanh((snapshot.btc_momentum_lead or 0.0) / 0.003) * 1.3)),
             funding_rate_signal=self._compute_funding_signal(snapshot),
+            predicted_funding_signal=self._compute_predicted_funding_signal(snapshot),
             liquidation_imbalance=self._compute_liquidation_imbalance(snapshot),
             funding_rate_divergence=self._compute_funding_divergence(snapshot),
             liquidation_ratio_divergence=self._compute_liquidation_ratio_divergence(snapshot),
@@ -240,6 +244,17 @@ class FeatureEngine:
         if rate is None:
             return 0.0
         # -tanh((rate - 0.0001) / 0.0003): high funding → negative signal (bearish)
+        return -math.tanh((rate - 0.0001) / 0.0003)
+
+    @staticmethod
+    def _compute_predicted_funding_signal(snapshot: MarketSnapshot) -> float:
+        """Compute predicted next funding rate signal in [-1, 1].
+
+        Same logic as current funding signal but uses predicted_funding_rate.
+        """
+        rate = snapshot.predicted_funding_rate
+        if rate is None:
+            return 0.0
         return -math.tanh((rate - 0.0001) / 0.0003)
 
     @staticmethod
