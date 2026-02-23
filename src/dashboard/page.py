@@ -196,6 +196,11 @@ a{color:#58a6ff}
       <div class="toggle-track disabled" id="qh-track"><div class="toggle-knob"></div></div>
     </div>
     <div class="toggle-divider"></div>
+    <div class="toggle-wrap" id="btc-toggle" onclick="toggleBTC()">
+      <span class="toggle-label active" id="btc-label">BTC</span>
+      <div class="toggle-track active" id="btc-track"><div class="toggle-knob"></div></div>
+    </div>
+    <div class="toggle-divider"></div>
     <div class="toggle-wrap" id="eth-toggle" onclick="toggleETH()">
       <span class="toggle-label active" id="eth-label">ETH</span>
       <div class="toggle-track active" id="eth-track"><div class="toggle-knob"></div></div>
@@ -533,6 +538,9 @@ a{color:#58a6ff}
     if (s.trading_paused != null) {
       updateToggleButton(s.trading_paused);
       updateQHToggle(s.quiet_hours_override || false, s.trading_paused);
+    }
+    if (s.btc_disabled != null) {
+      updateBTCToggle(s.btc_disabled);
     }
     if (s.eth_disabled != null) {
       updateETHToggle(s.eth_disabled);
@@ -1015,6 +1023,28 @@ a{color:#58a6ff}
       track.className = 'toggle-track paused';
     } else {
       label.textContent = 'Active';
+      label.className = 'toggle-label active';
+      track.className = 'toggle-track active';
+    }
+  }
+
+  // BTC killswitch toggle
+  window.toggleBTC = function() {
+    fetch('/api/toggle-btc', {method: 'POST'})
+      .then(r => r.json())
+      .then(d => updateBTCToggle(d.btc_disabled))
+      .catch(err => console.error('btc toggle error', err));
+  };
+
+  function updateBTCToggle(disabled) {
+    const label = $('btc-label');
+    const track = $('btc-track');
+    if (disabled) {
+      label.textContent = 'BTC Off';
+      label.className = 'toggle-label paused';
+      track.className = 'toggle-track paused';
+    } else {
+      label.textContent = 'BTC';
       label.className = 'toggle-label active';
       track.className = 'toggle-track active';
     }

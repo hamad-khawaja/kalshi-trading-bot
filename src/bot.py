@@ -363,7 +363,9 @@ class TradingBot:
         # Resolve asset symbol for per-asset dashboard state
         asset_symbol = self._data_hub._ticker_to_symbol(ticker)
 
-        # ETH killswitch: skip all ETH markets when disabled from dashboard
+        # Asset killswitches: skip markets when disabled from dashboard
+        if self._dashboard_state.btc_disabled and asset_symbol == "BTC":
+            return
         if self._dashboard_state.eth_disabled and asset_symbol == "ETH":
             return
         close_time = market.close_time or market.expected_expiration_time or market.expiration_time
@@ -1447,7 +1449,7 @@ class TradingBot:
                 unrealized_pnl = self._position_tracker.compute_unrealized_pnl(snapshots)
                 self._dashboard_state.risk["unrealized_pnl"] = float(unrealized_pnl)
                 self._dashboard_state.risk["total_pnl"] = float(
-                    self._risk_manager.daily_pnl + unrealized_pnl
+                    self._risk_manager.session_pnl + unrealized_pnl
                 )
 
                 # Track cumulative time with open positions
@@ -1647,7 +1649,7 @@ class TradingBot:
         """
         if self._settings.mode == "paper":
             paper_start = Decimal(str(self._settings.risk.max_total_exposure_dollars * 2))
-            return paper_start + self._risk_manager.daily_pnl
+            return paper_start + self._risk_manager.session_pnl
 
         import time
         now = time.monotonic()
@@ -1696,7 +1698,7 @@ class TradingBot:
         if balance is None:
             if self._settings.mode == "paper":
                 paper_start = Decimal(str(self._settings.risk.max_total_exposure_dollars * 2))
-                balance = float(paper_start + self._risk_manager.daily_pnl)
+                balance = float(paper_start + self._risk_manager.session_pnl)
             elif self._cached_balance is not None:
                 balance = float(self._cached_balance)
             else:
@@ -1704,11 +1706,12 @@ class TradingBot:
 
         prev_unrealized = self._dashboard_state.risk.get("unrealized_pnl", 0.0)
         daily_pnl = float(self._risk_manager.daily_pnl)
+        session_pnl = float(self._risk_manager.session_pnl)
         self._dashboard_state.risk = {
             "balance": balance,
             "daily_pnl": daily_pnl,
             "unrealized_pnl": prev_unrealized,
-            "total_pnl": daily_pnl + prev_unrealized,
+            "total_pnl": session_pnl + prev_unrealized,
             "trades_today": self._risk_manager.trades_today,
             "consecutive_losses": self._risk_manager.consecutive_losses,
             "consecutive_wins": self._risk_manager.consecutive_wins,

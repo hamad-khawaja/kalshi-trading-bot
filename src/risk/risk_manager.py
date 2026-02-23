@@ -44,6 +44,7 @@ class RiskManager:
         self._daily_pnl = Decimal("0")
         self._daily_pnl_date: date | None = None
         self._daily_pnl_peak = Decimal("0")  # High-water mark for drawdown tracking
+        self._session_pnl = Decimal("0")  # Cumulative PNL since bot start (never resets)
         self._trades_today = 0
         self._trades_today_date: date | None = None
         self._consecutive_losses = 0
@@ -172,6 +173,7 @@ class RiskManager:
         self._reset_daily_if_needed()
 
         self._daily_pnl += pnl
+        self._session_pnl += pnl
         if self._daily_pnl > self._daily_pnl_peak:
             self._daily_pnl_peak = self._daily_pnl
         self._total_settled += 1
@@ -227,6 +229,11 @@ class RiskManager:
         """Current daily P&L."""
         self._reset_daily_if_needed()
         return self._daily_pnl
+
+    @property
+    def session_pnl(self) -> Decimal:
+        """Cumulative realized P&L since bot start (never resets)."""
+        return self._session_pnl
 
     @property
     def trades_today(self) -> int:
