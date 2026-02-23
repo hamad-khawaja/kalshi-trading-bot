@@ -148,6 +148,7 @@ class TradingBot:
             "settlement_ride": settings.strategy.settlement_ride_enabled,
             "trend_continuation": settings.strategy.trend_continuation_enabled,
             "market_making": settings.strategy.use_market_maker,
+            "phase_filter": settings.strategy.phase_filter_enabled,
             "trend_guard": settings.strategy.trend_guard_enabled,
             "mm_vol_filter": settings.strategy.mm_vol_filter_enabled,
         }
@@ -344,6 +345,7 @@ class TradingBot:
         self._settings.strategy.settlement_ride_enabled = st.get("settlement_ride", True)
         self._settings.strategy.use_market_maker = st.get("market_making", True)
         self._settings.strategy.trend_continuation_enabled = st.get("trend_continuation", True)
+        self._settings.strategy.phase_filter_enabled = st.get("phase_filter", True)
         self._settings.strategy.trend_guard_enabled = st.get("trend_guard", True)
         self._settings.strategy.mm_vol_filter_enabled = st.get("mm_vol_filter", True)
 

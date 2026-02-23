@@ -183,6 +183,7 @@ class StrategyConfig(BaseModel):
     trend_continuation_streak_prob: float = 0.65
     trend_continuation_min_edge: float = 0.04
     trend_continuation_kelly_fraction: float = 0.15
+    trend_continuation_momentum_threshold: float = 0.001  # Skip if momentum fights streak
     # Certainty scalp: bet large on near-certain outcomes in last 3 min
     certainty_scalp_enabled: bool = True
     certainty_scalp_max_ttx: float = 180.0          # Only when TTX <= 3 min

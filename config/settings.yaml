@@ -139,13 +139,14 @@ strategy:
   certainty_scalp_min_spot_distance_pct: 0.002  # 0.2% spot past strike
   # Trend continuation: enter early when recent settlements show persistent trend
   trend_continuation_enabled: true
-  trend_continuation_min_streak: 3
+  trend_continuation_min_streak: 2
   trend_continuation_max_phase: 2
   trend_continuation_min_implied_prob: 0.35
   trend_continuation_max_implied_prob: 0.65
   trend_continuation_streak_prob: 0.65
   trend_continuation_min_edge: 0.04
-  trend_continuation_kelly_fraction: 0.15
+  trend_continuation_kelly_fraction: 1.50    # 10x for paper testing (was 0.15)
+  trend_continuation_momentum_threshold: 0.001  # Skip if 60s momentum fights streak by > 0.1%
 
 risk:
   max_position_per_market: 250   # 10x for paper testing (was 25)
@@ -173,7 +174,7 @@ risk:
   time_scale_full_seconds: 480.0  # Full size above 8 min remaining
   time_scale_min_multiplier: 0.4  # 40% size at expiry
   # Minimum position size: skip tiny positions that statistically lose
-  min_position_size: 50            # 10x for paper testing (was 5)
+  min_position_size: 5             # Original value (10x scaling applies to maximums, not floors)
   # Per-asset position limits: ETH gets smaller sizes with wider stops
   asset_max_position:
     ETH: 150                         # 10x for paper testing (was 15)

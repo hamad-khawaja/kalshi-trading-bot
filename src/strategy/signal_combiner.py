@@ -349,7 +349,9 @@ class SignalCombiner:
                 and features is not None
                 and not quiet_hours_active
             ):
-                trend_signal = self._trend_detector.detect(prediction, features, snapshot)
+                trend_signal = self._trend_detector.detect(
+                    prediction, features, snapshot, current_position=current_position,
+                )
                 if trend_signal is not None:
                     signals.append(trend_signal)
                     logger.debug(

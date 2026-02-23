@@ -86,6 +86,7 @@ class DashboardState:
             "settlement_ride": True,
             "trend_continuation": True,
             "market_making": True,
+            "phase_filter": True,
             "trend_guard": True,
             "mm_vol_filter": True,
         }

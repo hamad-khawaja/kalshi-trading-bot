@@ -84,6 +84,11 @@ class PositionSizer:
                 t = min(1.0, max(0.0, (implied_dist - min_dist) / (max_dist - min_dist)))
                 dist_mult = 0.5 + t * 1.0  # 0.5x → 1.5x
                 effective_kelly *= dist_mult
+        elif (
+            signal.signal_type == "trend_continuation"
+            and self._strategy_config is not None
+        ):
+            effective_kelly = self._strategy_config.trend_continuation_kelly_fraction
         else:
             effective_kelly = self._kelly_fraction
         f = kelly_f * effective_kelly

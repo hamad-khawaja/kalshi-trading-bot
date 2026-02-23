@@ -5,6 +5,10 @@ Core thesis:
   early prices (phase 1-2) are still near 50/50 — a perfect entry point.
 - Settlement history (last N windows all settled same direction) provides the signal.
 - Enters on the continuation side before the market moves to extremes.
+
+Safety guards:
+- Momentum confirmation: skip if current-window momentum fights the streak.
+- One entry per market: no accumulation into a losing position.
 """
 
 from __future__ import annotations
@@ -36,12 +40,15 @@ class TrendContinuationDetector:
         self._config = config
         self._settlement_history = settlement_history  # shared ref from DashboardState
         self.last_analysis: dict = {}
+        # Track which markets we've already entered this window to prevent accumulation
+        self._entered_markets: set[str] = set()
 
     def detect(
         self,
         prediction: PredictionResult,
         features: FeatureVector,
         snapshot: MarketSnapshot,
+        current_position: int = 0,
     ) -> TradeSignal | None:
         """Detect trend continuation opportunity and generate signal."""
         if not self._config.trend_continuation_enabled:
@@ -49,9 +56,12 @@ class TrendContinuationDetector:
             return None
 
         cfg = self._config
+        ticker = snapshot.market_ticker
 
         # Phase gate: only fire during early phases
         if snapshot.window_phase > cfg.trend_continuation_max_phase:
+            # Clean up entered_markets when we move past entry phases
+            self._entered_markets.discard(ticker)
             self.last_analysis = {
                 "decision": (
                     f"NO TREND: phase {snapshot.window_phase} "
@@ -60,8 +70,18 @@ class TrendContinuationDetector:
             }
             return None
 
+        # One entry per market: don't accumulate into same window
+        if current_position != 0 or ticker in self._entered_markets:
+            self.last_analysis = {
+                "decision": (
+                    f"NO TREND: already entered {ticker} "
+                    f"(pos={current_position}, tracked={ticker in self._entered_markets})"
+                ),
+            }
+            return None
+
         # Extract asset symbol from ticker
-        asset_symbol = self._extract_asset_symbol(snapshot.market_ticker)
+        asset_symbol = self._extract_asset_symbol(ticker)
 
         # Check settlement history for streak
         history = self._settlement_history.get(asset_symbol, [])
@@ -88,6 +108,28 @@ class TrendContinuationDetector:
         if streak_direction not in ("yes", "no"):
             self.last_analysis = {
                 "decision": f"NO TREND: unknown result type '{streak_direction}'",
+            }
+            return None
+
+        # Momentum confirmation: current-window momentum must agree with streak
+        # If streak says NO (price dropping) but 60s momentum is positive (price rising),
+        # skip — current window is reversing.
+        mom_60 = features.momentum_60s
+        mom_threshold = cfg.trend_continuation_momentum_threshold
+        if streak_direction == "no" and mom_60 > mom_threshold:
+            self.last_analysis = {
+                "decision": (
+                    f"NO TREND: momentum fighting streak "
+                    f"(streak=no, mom_60s={mom_60:+.5f} > +{mom_threshold})"
+                ),
+            }
+            return None
+        if streak_direction == "yes" and mom_60 < -mom_threshold:
+            self.last_analysis = {
+                "decision": (
+                    f"NO TREND: momentum fighting streak "
+                    f"(streak=yes, mom_60s={mom_60:+.5f} < -{mom_threshold})"
+                ),
             }
             return None
 
@@ -184,6 +226,9 @@ class TrendContinuationDetector:
 
         suggested_price = f"{min(0.99, max(0.01, price)):.2f}"
 
+        # Mark this market as entered so we don't accumulate
+        self._entered_markets.add(ticker)
+
         self.last_analysis = {
             "decision": (
                 f"TREND: buy {side.upper()} "
@@ -198,21 +243,23 @@ class TrendContinuationDetector:
             "streak_prob": streak_prob,
             "trade_price": round(trade_price, 4),
             "suggested_price": suggested_price,
+            "mom_60s": round(mom_60, 5),
         }
 
         logger.info(
             "trend_continuation_detected",
-            ticker=snapshot.market_ticker,
+            ticker=ticker,
             side=side,
             streak_direction=streak_direction,
             streak_length=min_streak,
             net_edge=round(net_edge, 4),
             implied=round(implied, 4),
             phase=snapshot.window_phase,
+            mom_60s=round(mom_60, 5),
         )
 
         return TradeSignal(
-            market_ticker=snapshot.market_ticker,
+            market_ticker=ticker,
             side=side,
             action="buy",
             raw_edge=round(raw_edge, 4),
