@@ -80,6 +80,7 @@ a{color:#58a6ff}
 .trade-tag.fomo{background:#2a2a1a;color:#d29922}
 .trade-tag.market-making{background:#1a2a1a;color:#3fb950}
 .trade-tag.averaging{background:#2a1a1a;color:#f0883e}
+.trade-tag.trend-continuation{background:#1a2a2a;color:#79c0ff}
 .toggle-wrap{display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none}
 .toggle-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;min-width:54px}
 .toggle-label.active{color:#3fb950}
@@ -158,6 +159,7 @@ a{color:#58a6ff}
 .type-tag.certainty_scalp{background:#1a2a2a;color:#56d4dd}
 .type-tag.market_making{background:#1a2a1a;color:#3fb950}
 .type-tag.averaging{background:#2a1a1a;color:#f0883e}
+.type-tag.trend_continuation{background:#1a2a2a;color:#79c0ff}
 .type-tag.stop_loss{background:#2a1a1a;color:#f85149}
 .type-tag.take_profit{background:#1a3a1a;color:#3fb950}
 .type-tag.settle{background:#1a1a2a;color:#8b949e}
@@ -234,6 +236,10 @@ a{color:#58a6ff}
   </div>
   <div class="toggle-wrap" data-strategy="settlement_ride" onclick="toggleStrategy('settlement_ride')">
     <span class="toggle-label active">SETT</span>
+    <div class="toggle-track active"><div class="toggle-knob"></div></div>
+  </div>
+  <div class="toggle-wrap" data-strategy="trend_continuation" onclick="toggleStrategy('trend_continuation')">
+    <span class="toggle-label active">TREND-C</span>
     <div class="toggle-track active"><div class="toggle-knob"></div></div>
   </div>
   <div class="toggle-wrap" data-strategy="market_making" onclick="toggleStrategy('market_making')">
@@ -460,6 +466,7 @@ a{color:#58a6ff}
     <button class="chart-btn" data-strategy="market_making" onclick="filterStrategy('market_making')">Market Making</button>
     <button class="chart-btn" data-strategy="certainty_scalp" onclick="filterStrategy('certainty_scalp')">Certainty Scalp</button>
     <button class="chart-btn" data-strategy="averaging" onclick="filterStrategy('averaging')">Averaging</button>
+    <button class="chart-btn" data-strategy="trend_continuation" onclick="filterStrategy('trend_continuation')">Trend Cont.</button>
     <span style="flex:1"></span>
     <button class="chart-btn" onclick="refreshTrades()" style="border-color:#58a6ff;color:#58a6ff">Refresh</button>
   </div>
@@ -1157,6 +1164,7 @@ a{color:#58a6ff}
     market_making: '#3fb950',
     certainty_scalp: '#56d4dd',
     averaging: '#f0883e',
+    trend_continuation: '#79c0ff',
   };
   const STRAT_LABELS = {
     directional: 'Directional',
@@ -1165,6 +1173,7 @@ a{color:#58a6ff}
     market_making: 'Market Making',
     certainty_scalp: 'Certainty Scalp',
     averaging: 'Averaging',
+    trend_continuation: 'Trend Cont.',
   };
 
   window.filterChart = function(filter) {

@@ -62,7 +62,6 @@ class HeuristicModel(ProbabilityModel):
     LIQUIDATION_WEIGHT = 0.01  # Binance futures liquidation cascades
     FUNDING_DIVERGENCE_WEIGHT = 0.02  # Cross-asset funding rate divergence
     LIQUIDATION_RATIO_WEIGHT = 0.01  # Cross-asset liquidation ratio divergence
-    MC_SIGNAL_WEIGHT = 0.02  # Monte Carlo confirmation signal (reduced for new signals)
 
     # Maximum adjustment from 0.50 base
     MAX_ADJUSTMENT = 0.22  # Tightened: model overconfident at 0.30 (22.7% WR on 65% predictions)
@@ -235,15 +234,6 @@ class HeuristicModel(ProbabilityModel):
         # Invert: more long liqs in this asset vs other → bearish
         liquidation_ratio_signal = -features.liquidation_ratio_divergence
 
-        # --- 17. Monte Carlo confirmation signal ---
-        mc_signal = 0.0
-        if features.mc_confidence > 0:
-            # Normalize MC probability to [-1, 1]: >0.5 bullish, <0.5 bearish
-            mc_signal = (features.mc_probability - 0.5) * 2.0
-            mc_signal = max(-1.0, min(1.0, mc_signal))
-            # Dampen by MC's own confidence
-            mc_signal *= features.mc_confidence
-
         # --- 10. Time decay signal ---
         # Reduced weight: dampen signals near expiry but don't negate them
         time_decay_signal = 0.0
@@ -276,7 +266,6 @@ class HeuristicModel(ProbabilityModel):
         lq_w = self.LIQUIDATION_WEIGHT * m.get("liquidation", 1.0)
         fd_w = self.FUNDING_DIVERGENCE_WEIGHT * m.get("funding_divergence", 1.0)
         lr_w = self.LIQUIDATION_RATIO_WEIGHT * m.get("liquidation_ratio", 1.0)
-        mc_w = self.MC_SIGNAL_WEIGHT * m.get("mc", 1.0)
 
         # Re-normalize so weights sum to the original total
         original_total = (
@@ -297,9 +286,8 @@ class HeuristicModel(ProbabilityModel):
             + self.LIQUIDATION_WEIGHT
             + self.FUNDING_DIVERGENCE_WEIGHT
             + self.LIQUIDATION_RATIO_WEIGHT
-            + self.MC_SIGNAL_WEIGHT
         )
-        adjusted_total = mom_w + tech_w + flow_w + mr_w + td_w + cx_w + tk_w + sb_w + ca_w + cl_w + bb_w + hr_w + fr_w + pf_w + lq_w + fd_w + lr_w + mc_w
+        adjusted_total = mom_w + tech_w + flow_w + mr_w + td_w + cx_w + tk_w + sb_w + ca_w + cl_w + bb_w + hr_w + fr_w + pf_w + lq_w + fd_w + lr_w
         if adjusted_total > 0:
             scale = original_total / adjusted_total
             mom_w *= scale
@@ -319,7 +307,6 @@ class HeuristicModel(ProbabilityModel):
             lq_w *= scale
             fd_w *= scale
             lr_w *= scale
-            mc_w *= scale
 
         # --- Combine signals ---
         raw_adjustment = (
@@ -340,7 +327,6 @@ class HeuristicModel(ProbabilityModel):
             + fd_w * funding_divergence_signal
             + lr_w * liquidation_ratio_signal
             + td_w * time_decay_signal
-            + mc_w * mc_signal
         )
 
         # --- Signal consensus gate ---
@@ -351,7 +337,7 @@ class HeuristicModel(ProbabilityModel):
             cross_asset_signal, chainlink_signal, btc_beta_signal,
             hour_signal, funding_signal, predicted_funding_signal,
             liquidation_signal, funding_divergence_signal, liquidation_ratio_signal,
-            time_decay_signal, mc_signal,
+            time_decay_signal,
         ]
         active_signals = [s for s in all_signals if abs(s) > 0.05]
         n_active = len(active_signals)
@@ -447,9 +433,6 @@ class HeuristicModel(ProbabilityModel):
             "funding_divergence_signal": round(funding_divergence_signal, 4),
             "liquidation_ratio_signal": round(liquidation_ratio_signal, 4),
             "time_decay_signal": round(time_decay_signal, 4),
-            "mc_signal": round(mc_signal, 4),
-            "mc_probability": round(features.mc_probability, 4),
-            "mc_confidence": round(features.mc_confidence, 4),
             "consistency": round(consistency, 4),
             "raw_adjustment": round(raw_adjustment, 4),
             "consensus_active_signals": n_active,

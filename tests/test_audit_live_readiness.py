@@ -29,7 +29,6 @@ from src.data.models import (
     TradeSignal,
 )
 from src.execution.position_tracker import PositionState, PositionTracker
-from src.model.monte_carlo import MonteCarloSimulator
 from src.risk.position_sizer import PositionSizer
 from src.risk.risk_manager import RiskDecision, RiskManager
 from src.strategy.edge_detector import EdgeDetector
@@ -1569,117 +1568,7 @@ class TestRiskManager:
 
 
 # ===========================================================================
-# 13. Monte Carlo Simulation
-# ===========================================================================
-
-class TestMonteCarlo:
-    """Verify GBM formula and probability clamping."""
-
-    def _make_snapshot(self, spot, strike, ttx):
-        return _make_snapshot(
-            btc_price=spot,
-            yes_bid=0.50, no_bid=0.50,
-            ttx=ttx, strike=strike,
-        )
-
-    def _make_features(self, vol=0.001, momentum=0.0):
-        return FeatureVector(
-            timestamp=NOW,
-            market_ticker="KXBTC15M-26FEB201400",
-            realized_vol_5min=vol,
-            momentum_180s=momentum,
-        )
-
-    def test_gbm_formula_components(self):
-        """Verify GBM: S(T) = S(0)*exp((mu-0.5*sigma^2)*dt + sigma*sqrt(dt)*Z)."""
-        sim = MonteCarloSimulator(n_samples=100000, drift_mode="zero", vol_multiplier=1.0)
-        snap = self._make_snapshot(spot=100.0, strike=100.0, ttx=100.0)
-        features = self._make_features(vol=0.001, momentum=0.0)
-
-        prob, conf = sim.estimate_probability(snap, features)
-        # With zero drift, spot==strike, prob should be ~0.50
-        assert prob == pytest.approx(0.50, abs=0.05)
-
-    def test_probability_clamping_floor(self):
-        """Probability clamped to [0.05, 0.95]: spot << strike → ~0.05."""
-        sim = MonteCarloSimulator(n_samples=10000, drift_mode="zero", vol_multiplier=1.0)
-        snap = self._make_snapshot(spot=50000.0, strike=200000.0, ttx=100.0)
-        features = self._make_features(vol=0.001)
-        prob, _ = sim.estimate_probability(snap, features)
-        assert prob == 0.05
-
-    def test_probability_clamping_ceiling(self):
-        """Probability clamped to [0.05, 0.95]: spot >> strike → ~0.95."""
-        sim = MonteCarloSimulator(n_samples=10000, drift_mode="zero", vol_multiplier=1.0)
-        snap = self._make_snapshot(spot=200000.0, strike=50000.0, ttx=100.0)
-        features = self._make_features(vol=0.001)
-        prob, _ = sim.estimate_probability(snap, features)
-        assert prob == 0.95
-
-    def test_confidence_from_binomial_se(self):
-        """confidence = max(0, 1 - 2*SE) where SE = sqrt(p*(1-p)/n)."""
-        sim = MonteCarloSimulator(n_samples=10000, drift_mode="zero")
-        snap = self._make_snapshot(spot=100.0, strike=100.0, ttx=100.0)
-        features = self._make_features(vol=0.001)
-        prob, conf = sim.estimate_probability(snap, features)
-        se = math.sqrt(prob * (1.0 - prob) / 10000)
-        expected_conf = max(0.0, 1.0 - 2.0 * se)
-        assert conf == pytest.approx(expected_conf, abs=0.01)
-
-    def test_zero_vol_uses_floor(self):
-        """When realized_vol <= 0, sigma is floored to 0.001."""
-        sim = MonteCarloSimulator(n_samples=10000, drift_mode="zero")
-        snap = self._make_snapshot(spot=100.0, strike=100.0, ttx=100.0)
-        features = self._make_features(vol=0.0)
-        prob, _ = sim.estimate_probability(snap, features)
-        # Should still produce a result (not NaN or error)
-        assert 0.05 <= prob <= 0.95
-
-    def test_momentum_drift_shifts_probability(self):
-        """Positive momentum drift should increase P(spot > strike)."""
-        sim_zero = MonteCarloSimulator(n_samples=50000, drift_mode="zero")
-        sim_mom = MonteCarloSimulator(n_samples=50000, drift_mode="momentum")
-        snap = self._make_snapshot(spot=100.0, strike=100.0, ttx=300.0)
-
-        features_zero = self._make_features(vol=0.001, momentum=0.0)
-        features_pos = self._make_features(vol=0.001, momentum=0.001)
-
-        prob_zero, _ = sim_zero.estimate_probability(snap, features_zero)
-        prob_pos, _ = sim_mom.estimate_probability(snap, features_pos)
-        # Positive momentum should push probability up
-        assert prob_pos > prob_zero
-
-    def test_vol_multiplier_affects_probability(self):
-        """Vol multiplier actually changes the probability output.
-        Under GBM with zero drift, the drift correction (-0.5*sigma^2*dt)
-        means higher vol shifts the log-price distribution left, so
-        P(S_T > K) at K=spot actually decreases with higher vol.
-        """
-        sim_1x = MonteCarloSimulator(n_samples=50000, drift_mode="zero", vol_multiplier=1.0)
-        sim_5x = MonteCarloSimulator(n_samples=50000, drift_mode="zero", vol_multiplier=5.0)
-        snap = self._make_snapshot(spot=100.0, strike=100.0, ttx=300.0)
-        features = self._make_features(vol=0.01)
-
-        prob_1x, _ = sim_1x.estimate_probability(snap, features)
-        prob_5x, _ = sim_5x.estimate_probability(snap, features)
-        # Probabilities differ — vol multiplier has an effect
-        assert prob_1x != prob_5x
-        # Higher vol → larger drift correction → lower P(above strike)
-        # This is the correct GBM property: median = S*exp(-0.5*sigma^2*dt)
-        assert prob_5x < prob_1x
-
-    def test_dt_at_least_1(self):
-        """dt = max(ttx, 1.0) — never zero."""
-        sim = MonteCarloSimulator(n_samples=10000, drift_mode="zero")
-        snap = self._make_snapshot(spot=100.0, strike=100.0, ttx=0.0)
-        features = self._make_features(vol=0.001)
-        prob, conf = sim.estimate_probability(snap, features)
-        # Should complete without error
-        assert 0.05 <= prob <= 0.95
-
-
-# ===========================================================================
-# 14. Strategy-Aware Cooldowns
+# 13. Strategy-Aware Cooldowns
 # ===========================================================================
 
 class TestStrategyAwareCooldowns:
@@ -1854,7 +1743,6 @@ class TestConfigDefaults:
         assert c.settlement_ride_min_edge == 0.03
         assert c.settlement_ride_min_implied_distance == 0.12
         assert c.settlement_ride_kelly_fraction == 0.10
-        assert c.mc_samples == 10000
         assert c.take_profit_cooldown_seconds == 900.0
 
     def test_risk_defaults(self):

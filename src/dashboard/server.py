@@ -84,6 +84,7 @@ class DashboardState:
             "fomo": True,
             "certainty_scalp": True,
             "settlement_ride": True,
+            "trend_continuation": True,
             "market_making": True,
             "trend_guard": True,
             "mm_vol_filter": True,

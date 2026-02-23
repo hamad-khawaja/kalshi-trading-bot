@@ -73,7 +73,7 @@ strategy:
   # Pre-expiry exit: only exit if profitable or near-breakeven (don't sell losers at rock bottom)
   pre_expiry_exit_min_pnl_cents: -0.03  # Only pre-expiry exit if PnL >= -$0.03/contract
   # Entry filters
-  min_entry_price: 0.20             # Block entries below $0.20 (lowered for testing)
+  min_entry_price: 0.15             # Block entries below $0.15
   yes_side_edge_multiplier: 1.2     # Require 20% more edge for YES entries (NO side is more profitable)
   no_side_edge_multiplier: 1.5      # NO side 16.7% WR — model fights market, require 50% more edge
   asset_edge_multipliers:
@@ -137,13 +137,15 @@ strategy:
   certainty_scalp_min_edge: 0.02            # Low bar (fees tiny at extremes)
   certainty_scalp_kelly_fraction: 0.30      # Aggressive sizing
   certainty_scalp_min_spot_distance_pct: 0.002  # 0.2% spot past strike
-  # Monte Carlo model confirmation signal (#17 in HeuristicModel)
-  mc_enabled: false
-  mc_samples: 10000
-  mc_drift_mode: "momentum"
-  mc_vol_multiplier: 1.0
-  mc_min_ttx: 120.0
-  mc_max_ttx: 720.0
+  # Trend continuation: enter early when recent settlements show persistent trend
+  trend_continuation_enabled: true
+  trend_continuation_min_streak: 3
+  trend_continuation_max_phase: 2
+  trend_continuation_min_implied_prob: 0.35
+  trend_continuation_max_implied_prob: 0.65
+  trend_continuation_streak_prob: 0.65
+  trend_continuation_min_edge: 0.04
+  trend_continuation_kelly_fraction: 0.15
 
 risk:
   max_position_per_market: 250   # 10x for paper testing (was 25)

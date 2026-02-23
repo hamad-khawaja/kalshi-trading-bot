@@ -174,6 +174,15 @@ class StrategyConfig(BaseModel):
     asset_mm_min_spread: dict[str, float] = {}
     # Disable settlement ride for specific assets
     asset_settlement_ride_disabled: list[str] = []
+    # Trend continuation: enter early when recent settlements show persistent trend
+    trend_continuation_enabled: bool = True
+    trend_continuation_min_streak: int = 3
+    trend_continuation_max_phase: int = 2
+    trend_continuation_min_implied_prob: float = 0.35
+    trend_continuation_max_implied_prob: float = 0.65
+    trend_continuation_streak_prob: float = 0.65
+    trend_continuation_min_edge: float = 0.04
+    trend_continuation_kelly_fraction: float = 0.15
     # Certainty scalp: bet large on near-certain outcomes in last 3 min
     certainty_scalp_enabled: bool = True
     certainty_scalp_max_ttx: float = 180.0          # Only when TTX <= 3 min
@@ -183,14 +192,6 @@ class StrategyConfig(BaseModel):
     certainty_scalp_min_edge: float = 0.02           # Low bar (fees tiny at extremes)
     certainty_scalp_kelly_fraction: float = 0.30     # Aggressive sizing
     certainty_scalp_min_spot_distance_pct: float = 0.002  # 0.2% spot past strike
-    # Monte Carlo model confirmation signal (#17 in HeuristicModel)
-    mc_enabled: bool = False
-    mc_samples: int = 10000
-    mc_drift_mode: str = "momentum"   # "momentum" | "zero"
-    mc_vol_multiplier: float = 1.0    # Scale realized vol
-    mc_min_ttx: float = 120.0         # At least 2 min to expiry
-    mc_max_ttx: float = 720.0         # Only last 12 min
-    mc_bootstrap_min_returns: int = 30  # Min returns for bootstrap (else GBM fallback)
     # Trend guard: block trades against majority momentum direction
     trend_guard_enabled: bool = True
     # MM vol filter: skip market-making in extreme volatility regime

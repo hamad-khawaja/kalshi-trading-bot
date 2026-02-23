@@ -41,9 +41,8 @@ class TestSignalWeights:
             + HeuristicModel.LIQUIDATION_WEIGHT
             + HeuristicModel.FUNDING_DIVERGENCE_WEIGHT
             + HeuristicModel.LIQUIDATION_RATIO_WEIGHT
-            + HeuristicModel.MC_SIGNAL_WEIGHT
         )
-        assert total == pytest.approx(1.07, abs=0.001)
+        assert total == pytest.approx(1.05, abs=0.001)
 
     def test_proven_signals_dominate(self):
         """Proven signals (momentum + technical) should be >= 56%."""
