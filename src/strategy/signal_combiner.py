@@ -96,6 +96,12 @@ class SignalCombiner:
         # Time-to-expiry gate
         if snapshot.time_to_expiry_seconds < self.MIN_TIME_TO_TRADE_SECONDS:
             self.last_block_reasons.append("ttx_too_low")
+            logger.debug(
+                "ttx_gate_blocked",
+                ticker=snapshot.market_ticker,
+                ttx=round(snapshot.time_to_expiry_seconds, 1),
+                min_ttx=self.MIN_TIME_TO_TRADE_SECONDS,
+            )
             return []
 
         signals: list[TradeSignal] = []

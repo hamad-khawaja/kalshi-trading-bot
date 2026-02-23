@@ -125,6 +125,10 @@ class EdgeDetector:
             # Use orderbook-derived implied probability
             implied_prob = snapshot.implied_yes_prob
             if implied_prob is None:
+                logger.info(
+                    "no_implied_prob",
+                    ticker=snapshot.market_ticker,
+                )
                 return None
             implied = float(implied_prob)
 
@@ -337,6 +341,13 @@ class EdgeDetector:
 
         # Check thresholds
         if net_edge < min_threshold:
+            logger.debug(
+                "edge_below_threshold",
+                ticker=snapshot.market_ticker,
+                side=side,
+                net_edge=round(net_edge, 4),
+                min_threshold=round(min_threshold, 4),
+            )
             return None
 
         if net_edge > max_threshold:
@@ -372,6 +383,14 @@ class EdgeDetector:
 
         # Confidence gate
         if prediction.confidence < self._config.confidence_min:
+            logger.info(
+                "confidence_blocked",
+                ticker=snapshot.market_ticker,
+                side=side,
+                confidence=round(prediction.confidence, 4),
+                confidence_min=self._config.confidence_min,
+                net_edge=round(net_edge, 4),
+            )
             return None
 
         # Composite quality score gate: require combined edge + confidence quality
@@ -409,11 +428,22 @@ class EdgeDetector:
                 # Fair value is used for edge detection only — pricing must
                 # be grounded in real levels to avoid post_only cross.
                 if best_bid is None or best_ask is None:
+                    logger.info(
+                        "thin_book_no_levels",
+                        ticker=snapshot.market_ticker,
+                        side="yes",
+                    )
                     self.last_analysis["decision"] = "NO TRADE: thin book, insufficient YES levels"
                     self.last_analysis["passed"] = False
                     return None
                 bid_f, ask_f = float(best_bid), float(best_ask)
                 if ask_f - bid_f < 0.03:
+                    logger.info(
+                        "thin_book_tight_spread",
+                        ticker=snapshot.market_ticker,
+                        side="yes",
+                        spread=round(ask_f - bid_f, 4),
+                    )
                     self.last_analysis["decision"] = "NO TRADE: thin book, spread too tight"
                     self.last_analysis["passed"] = False
                     return None
@@ -441,11 +471,22 @@ class EdgeDetector:
             if using_fair_value:
                 # Thin book: anchor to actual orderbook levels, not fair value.
                 if best_bid is None or best_no_ask is None:
+                    logger.info(
+                        "thin_book_no_levels",
+                        ticker=snapshot.market_ticker,
+                        side="no",
+                    )
                     self.last_analysis["decision"] = "NO TRADE: thin book, insufficient NO levels"
                     self.last_analysis["passed"] = False
                     return None
                 bid_f, ask_f = float(best_bid), float(best_no_ask)
                 if ask_f - bid_f < 0.03:
+                    logger.info(
+                        "thin_book_tight_spread",
+                        ticker=snapshot.market_ticker,
+                        side="no",
+                        spread=round(ask_f - bid_f, 4),
+                    )
                     self.last_analysis["decision"] = "NO TRADE: thin book, spread too tight"
                     self.last_analysis["passed"] = False
                     return None
@@ -461,6 +502,25 @@ class EdgeDetector:
                     price = min(price, float(best_no_ask) - 0.01)
 
             suggested_price = f"{min(0.99, max(0.01, price)):.2f}"
+
+        # Final min entry price check on actual order price
+        # (the earlier check uses implied/fair-value price which can diverge
+        # from the real order price on thin books)
+        if float(suggested_price) < self._config.min_entry_price:
+            logger.info(
+                "min_price_blocked",
+                ticker=snapshot.market_ticker,
+                side=side,
+                entry_price=float(suggested_price),
+                min_price=self._config.min_entry_price,
+                reason="order_price",
+            )
+            self.last_analysis["passed"] = False
+            self.last_analysis["decision"] = (
+                f"NO TRADE: order price {suggested_price} "
+                f"< min {self._config.min_entry_price:.2f}"
+            )
+            return None
 
         logger.info(
             "edge_detected",

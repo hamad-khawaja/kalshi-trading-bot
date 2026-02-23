@@ -177,6 +177,14 @@ a{color:#58a6ff}
 .strategy-bar .toggle-knob{width:10px;height:10px;top:2px}
 .strategy-bar .toggle-track.active .toggle-knob{left:18px}
 .strategy-bar .toggle-track.paused .toggle-knob{left:2px}
+/* Settings view */
+#settings-view{display:none;padding:16px}
+.settings-section{margin-bottom:16px}
+.settings-section h3{font-size:12px;text-transform:uppercase;color:#58a6ff;margin-bottom:6px;letter-spacing:0.5px;font-weight:600}
+.settings-grid{display:grid;grid-template-columns:1fr 1fr;gap:2px}
+.setting-row{display:flex;justify-content:space-between;padding:4px 8px;background:#161b22;border-radius:3px;font-size:12px}
+.setting-key{color:#8b949e}
+.setting-val{color:#c9d1d9;font-weight:500;max-width:60%;text-align:right;word-break:break-all}
 </style>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
@@ -218,6 +226,7 @@ a{color:#58a6ff}
 <div class="nav-bar">
   <button class="nav-btn active" data-view="dashboard" onclick="switchView('dashboard')">Dashboard</button>
   <button class="nav-btn" data-view="trades" onclick="switchView('trades')">Trades</button>
+  <button class="nav-btn" data-view="settings" onclick="switchView('settings')">Settings</button>
 </div>
 
 <div class="strategy-bar" id="strategy-bar">
@@ -486,6 +495,10 @@ a{color:#58a6ff}
       <tbody id="trade-table-body"></tbody>
     </table>
   </div>
+</div>
+
+<div id="settings-view">
+  <div id="settings-content"></div>
 </div>
 
 <script>
@@ -1150,8 +1163,42 @@ a{color:#58a6ff}
     });
     $('dashboard-view').style.display = view === 'dashboard' ? '' : 'none';
     $('chart-view').style.display = view === 'trades' ? 'block' : 'none';
+    $('settings-view').style.display = view === 'settings' ? 'block' : 'none';
     if (view === 'trades' && allTrades.length === 0) refreshTrades();
+    if (view === 'settings') renderSettings();
   };
+
+  // ===== Settings renderer =====
+  function renderSettings() {
+    const cfg = latestState && latestState.startup_config;
+    if (!cfg || Object.keys(cfg).length === 0) {
+      $('settings-content').innerHTML = '<p style="color:#8b949e">No config data available</p>';
+      return;
+    }
+    let html = '';
+    for (const [section, values] of Object.entries(cfg)) {
+      if (section === 'mode') {
+        html += '<div class="settings-section"><h3>Mode</h3>' +
+          '<div class="setting-row"><span class="setting-key">mode</span>' +
+          '<span class="setting-val">' + values + '</span></div></div>';
+        continue;
+      }
+      if (typeof values !== 'object' || values === null) {
+        html += '<div class="settings-section"><h3>' + section + '</h3>' +
+          '<div class="setting-row"><span class="setting-key">' + section + '</span>' +
+          '<span class="setting-val">' + values + '</span></div></div>';
+        continue;
+      }
+      html += '<div class="settings-section"><h3>' + section + '</h3><div class="settings-grid">';
+      for (const [k, v] of Object.entries(values)) {
+        const display = (typeof v === 'object' && v !== null) ? JSON.stringify(v) : String(v);
+        html += '<div class="setting-row"><span class="setting-key">' + k + '</span>' +
+          '<span class="setting-val">' + display + '</span></div>';
+      }
+      html += '</div></div>';
+    }
+    $('settings-content').innerHTML = html;
+  }
 
   // ===== Trade chart =====
   let allTrades = [];

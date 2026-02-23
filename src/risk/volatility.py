@@ -18,7 +18,7 @@ class VolatilityTracker:
     - low: Favorable for mean reversion / market making
     - normal: Standard conditions, directional trades viable
     - high: Increase edge threshold, reduce position size
-    - extreme: Consider sitting out entirely
+    - extreme: MM off, directional at half size with higher edge bar
     """
 
     HISTORY_SIZE = 2000  # ~500 minutes at 4s intervals
@@ -73,7 +73,7 @@ class VolatilityTracker:
             "low": 0.8,     # 20% less edge required
             "normal": 1.0,  # Standard threshold
             "high": 1.5,    # 50% more edge required
-            "extreme": 2.5, # 150% more edge required
+            "extreme": 1.5, # 50% more edge required
         }
 
         return base_threshold * multipliers[regime]
@@ -86,7 +86,7 @@ class VolatilityTracker:
             "low": 1.0,
             "normal": 1.0,
             "high": 0.5,
-            "extreme": 0.25,
+            "extreme": 0.50,
         }
 
         return base_kelly * multipliers[regime]

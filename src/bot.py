@@ -152,6 +152,14 @@ class TradingBot:
             "trend_guard": settings.strategy.trend_guard_enabled,
             "mm_vol_filter": settings.strategy.mm_vol_filter_enabled,
         }
+        # Snapshot startup config for dashboard Settings tab
+        self._dashboard_state.startup_config = {
+            "mode": settings.mode,
+            "strategy": settings.strategy.model_dump(),
+            "risk": settings.risk.model_dump(),
+            "features": settings.features.model_dump(),
+            "averaging": settings.averaging.model_dump(),
+        }
         self._dashboard_server = DashboardServer(
             self._dashboard_state,
             settings.dashboard.host,
