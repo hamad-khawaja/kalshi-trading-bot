@@ -291,7 +291,9 @@ class Database:
                       price_dollars, fees_dollars, pnl_dollars,
                       model_probability, implied_probability,
                       entry_time, exit_time, strategy_tag
-            FROM trades ORDER BY entry_time DESC LIMIT ?""",
+            FROM trades
+            WHERE strategy_tag != 'monte_carlo'
+            ORDER BY entry_time DESC LIMIT ?""",
             (limit,),
         )
         rows = await cursor.fetchall()

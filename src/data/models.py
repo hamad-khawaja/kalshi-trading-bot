@@ -274,6 +274,7 @@ class FeatureVector(BaseModel):
     roc_acceleration: float = 0.0
     volume_weighted_momentum: float = 0.0
     orderbook_depth_imbalance: float = 0.0
+    orderbook_top_concentration: float = 0.0  # [-1, 1]: top-level volume concentration imbalance
     cross_exchange_spread: float = 0.0
     cross_exchange_lead: float = 0.0
     taker_buy_sell_ratio: float = 0.0
@@ -283,6 +284,7 @@ class FeatureVector(BaseModel):
     chainlink_confirmation: float = 0.0
     btc_beta_signal: float = 0.0  # BTC-led directional signal for non-BTC assets
     funding_rate_signal: float = 0.0  # [-1, 1]: negative = high positive funding (crowded longs, bearish)
+    predicted_funding_signal: float = 0.0  # [-1, 1]: predicted next funding rate signal
     liquidation_imbalance: float = 0.0  # [-1, 1]: positive = more longs liquidated (bearish pressure)
     funding_rate_divergence: float = 0.0  # [-1, 1]: cross-asset funding rate divergence
     liquidation_ratio_divergence: float = 0.0  # [-1, 1]: cross-asset liquidation ratio divergence

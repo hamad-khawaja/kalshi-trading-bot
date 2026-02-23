@@ -139,6 +139,11 @@ a{color:#58a6ff}
 .chart-stat{flex:1;background:#0d1117;padding:12px 16px;text-align:center}
 .chart-stat .cs-val{font-size:20px;font-weight:700;font-variant-numeric:tabular-nums}
 .chart-stat .cs-label{font-size:10px;text-transform:uppercase;color:#8b949e;margin-top:2px;letter-spacing:0.5px}
+#strategy-stats{display:flex;gap:6px;padding:8px 16px;flex-wrap:wrap}
+.strat-stat{background:#161b22;border:1px solid #30363d;border-top:3px solid #8b949e;border-radius:6px;padding:8px 12px;min-width:130px;flex:1}
+.ss-name{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px}
+.ss-pnl{font-size:18px;font-weight:700;font-variant-numeric:tabular-nums}
+.ss-detail{font-size:11px;color:#8b949e;margin-top:2px}
 .trade-table{width:100%;border-collapse:collapse;font-size:12px}
 .trade-table th{text-align:left;padding:6px 8px;border-bottom:1px solid #30363d;color:#8b949e;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;font-weight:600}
 .trade-table td{padding:6px 8px;border-bottom:1px solid #21262d}
@@ -194,6 +199,11 @@ a{color:#58a6ff}
     <div class="toggle-wrap disabled" id="qh-toggle" onclick="toggleQuietHours()">
       <span class="toggle-label disabled" id="qh-label">Quiet Hrs</span>
       <div class="toggle-track disabled" id="qh-track"><div class="toggle-knob"></div></div>
+    </div>
+    <div class="toggle-divider"></div>
+    <div class="toggle-wrap" id="btc-toggle" onclick="toggleBTC()">
+      <span class="toggle-label active" id="btc-label">BTC</span>
+      <div class="toggle-track active" id="btc-track"><div class="toggle-knob"></div></div>
     </div>
     <div class="toggle-divider"></div>
     <div class="toggle-wrap" id="eth-toggle" onclick="toggleETH()">
@@ -431,6 +441,7 @@ a{color:#58a6ff}
     <div class="chart-stat"><div class="cs-val" id="cs-best">--</div><div class="cs-label">Best Trade</div></div>
     <div class="chart-stat"><div class="cs-val" id="cs-worst">--</div><div class="cs-label">Worst Trade</div></div>
   </div>
+  <div id="strategy-stats"></div>
   <div class="chart-controls">
     <button class="chart-btn active" data-filter="all" onclick="filterChart('all')">All</button>
     <button class="chart-btn" data-filter="BTC" onclick="filterChart('BTC')">BTC</button>
@@ -445,6 +456,10 @@ a{color:#58a6ff}
     <button class="chart-btn active" data-strategy="all" onclick="filterStrategy('all')">All Strategies</button>
     <button class="chart-btn" data-strategy="directional" onclick="filterStrategy('directional')">Directional</button>
     <button class="chart-btn" data-strategy="settlement_ride" onclick="filterStrategy('settlement_ride')">Settlement Ride</button>
+    <button class="chart-btn" data-strategy="fomo" onclick="filterStrategy('fomo')">FOMO</button>
+    <button class="chart-btn" data-strategy="market_making" onclick="filterStrategy('market_making')">Market Making</button>
+    <button class="chart-btn" data-strategy="certainty_scalp" onclick="filterStrategy('certainty_scalp')">Certainty Scalp</button>
+    <button class="chart-btn" data-strategy="averaging" onclick="filterStrategy('averaging')">Averaging</button>
     <span style="flex:1"></span>
     <button class="chart-btn" onclick="refreshTrades()" style="border-color:#58a6ff;color:#58a6ff">Refresh</button>
   </div>
@@ -533,6 +548,9 @@ a{color:#58a6ff}
     if (s.trading_paused != null) {
       updateToggleButton(s.trading_paused);
       updateQHToggle(s.quiet_hours_override || false, s.trading_paused);
+    }
+    if (s.btc_disabled != null) {
+      updateBTCToggle(s.btc_disabled);
     }
     if (s.eth_disabled != null) {
       updateETHToggle(s.eth_disabled);
@@ -1020,6 +1038,28 @@ a{color:#58a6ff}
     }
   }
 
+  // BTC killswitch toggle
+  window.toggleBTC = function() {
+    fetch('/api/toggle-btc', {method: 'POST'})
+      .then(r => r.json())
+      .then(d => updateBTCToggle(d.btc_disabled))
+      .catch(err => console.error('btc toggle error', err));
+  };
+
+  function updateBTCToggle(disabled) {
+    const label = $('btc-label');
+    const track = $('btc-track');
+    if (disabled) {
+      label.textContent = 'BTC Off';
+      label.className = 'toggle-label paused';
+      track.className = 'toggle-track paused';
+    } else {
+      label.textContent = 'BTC';
+      label.className = 'toggle-label active';
+      track.className = 'toggle-track active';
+    }
+  }
+
   // ETH killswitch toggle
   window.toggleETH = function() {
     fetch('/api/toggle-eth', {method: 'POST'})
@@ -1110,6 +1150,23 @@ a{color:#58a6ff}
   let equityChart = null;
   let pnlChart = null;
 
+  const STRAT_COLORS = {
+    directional: '#58a6ff',
+    settlement_ride: '#d2a8ff',
+    fomo: '#d29922',
+    market_making: '#3fb950',
+    certainty_scalp: '#56d4dd',
+    averaging: '#f0883e',
+  };
+  const STRAT_LABELS = {
+    directional: 'Directional',
+    settlement_ride: 'Settlement Ride',
+    fomo: 'FOMO',
+    market_making: 'Market Making',
+    certainty_scalp: 'Certainty Scalp',
+    averaging: 'Averaging',
+  };
+
   window.filterChart = function(filter) {
     chartFilter = filter;
     document.querySelectorAll('.chart-btn[data-filter]').forEach(b => {
@@ -1162,6 +1219,7 @@ a{color:#58a6ff}
   function renderCharts() {
     const trades = getFilteredTrades();
     renderStats(trades);
+    renderStrategyStats(trades);
     renderEquityChart(trades);
     renderPnlChart(trades);
     renderTradeTable(trades);
@@ -1207,69 +1265,155 @@ a{color:#58a6ff}
     } else { worst.textContent = '--'; worst.style.color = '#8b949e'; }
   }
 
+  function renderStrategyStats(trades) {
+    const container = $('strategy-stats');
+    const byStrat = {};
+    for (const t of trades) {
+      const tag = t.strategy_tag || 'directional';
+      if (!byStrat[tag]) byStrat[tag] = [];
+      byStrat[tag].push(t);
+    }
+    const entries = Object.entries(byStrat).sort((a, b) => {
+      const pa = a[1].reduce((s, t) => s + (t.pnl_dollars || 0), 0);
+      const pb = b[1].reduce((s, t) => s + (t.pnl_dollars || 0), 0);
+      return pb - pa;
+    });
+    if (entries.length === 0) { container.innerHTML = ''; return; }
+    container.innerHTML = entries.map(([tag, arr]) => {
+      const pnl = arr.reduce((s, t) => s + (t.pnl_dollars || 0), 0);
+      const wins = arr.filter(t => (t.pnl_dollars || 0) > 0).length;
+      const wr = arr.length > 0 ? (wins / arr.length * 100).toFixed(0) : 0;
+      const color = STRAT_COLORS[tag] || '#8b949e';
+      const label = STRAT_LABELS[tag] || tag.replace('_', ' ');
+      const sign = pnl >= 0 ? '+' : '';
+      const pnlColor = pnl >= 0 ? '#3fb950' : '#f85149';
+      return '<div class="strat-stat" style="border-top-color:' + color + '">' +
+        '<div class="ss-name" style="color:' + color + '">' + label + '</div>' +
+        '<div class="ss-pnl" style="color:' + pnlColor + '">' + sign + '$' + pnl.toFixed(2) + '</div>' +
+        '<div class="ss-detail">' + arr.length + ' trades &middot; ' + wr + '% win</div>' +
+        '</div>';
+    }).join('');
+  }
+
   function renderEquityChart(trades) {
     const ctx = $('equity-chart').getContext('2d');
     if (equityChart) equityChart.destroy();
 
-    let cumPnl = 0;
-    const dataPoints = [{x: trades.length > 0 ? new Date(trades[0].exit_time || trades[0].entry_time).getTime() - 60000 : Date.now(), y: 0}];
+    // Group trades by strategy
+    const byStrat = {};
     for (const t of trades) {
-      cumPnl += (t.pnl_dollars || 0);
-      dataPoints.push({
-        x: new Date(t.exit_time || t.entry_time).getTime(),
-        y: Math.round(cumPnl * 100) / 100,
+      const tag = t.strategy_tag || 'directional';
+      if (!byStrat[tag]) byStrat[tag] = [];
+      byStrat[tag].push(t);
+    }
+    const stratKeys = Object.keys(byStrat);
+    const multiStrat = stratKeys.length > 1;
+
+    const datasets = [];
+
+    // Per-strategy cumulative P&L lines
+    for (const tag of stratKeys) {
+      const stTrades = byStrat[tag];
+      const color = STRAT_COLORS[tag] || '#8b949e';
+      const label = STRAT_LABELS[tag] || tag.replace('_', ' ');
+      let cum = 0;
+      const points = [{x: stTrades.length > 0 ? new Date(stTrades[0].exit_time || stTrades[0].entry_time).getTime() - 60000 : Date.now(), y: 0}];
+      for (const t of stTrades) {
+        cum += (t.pnl_dollars || 0);
+        points.push({x: new Date(t.exit_time || t.entry_time).getTime(), y: Math.round(cum * 100) / 100});
+      }
+      const hidden = strategyFilter !== 'all' && strategyFilter !== tag;
+      datasets.push({
+        label: label,
+        data: points,
+        borderColor: color,
+        backgroundColor: 'transparent',
+        fill: false,
+        tension: 0.1,
+        borderWidth: 2,
+        pointRadius: 0,
+        hidden: hidden,
+        _stratTag: tag,
       });
     }
 
-    // Trade markers
-    const markers = trades.map(t => ({
-      x: new Date(t.exit_time || t.entry_time).getTime(),
-      y: 0, // will be set below
-      pnl: t.pnl_dollars || 0,
-      action: t.action,
-      ticker: t.market_ticker,
-      side: t.side,
-      count: t.count,
-    }));
-    // Set y to cumulative PnL at that point
-    let cum2 = 0;
-    for (let i = 0; i < trades.length; i++) {
-      cum2 += (trades[i].pnl_dollars || 0);
-      markers[i].y = Math.round(cum2 * 100) / 100;
+    // Dashed white "Total" line when multiple strategies
+    if (multiStrat) {
+      let cumTotal = 0;
+      const totalPts = [{x: trades.length > 0 ? new Date(trades[0].exit_time || trades[0].entry_time).getTime() - 60000 : Date.now(), y: 0}];
+      for (const t of trades) {
+        cumTotal += (t.pnl_dollars || 0);
+        totalPts.push({x: new Date(t.exit_time || t.entry_time).getTime(), y: Math.round(cumTotal * 100) / 100});
+      }
+      datasets.push({
+        label: 'Total',
+        data: totalPts,
+        borderColor: '#f0f6fc',
+        backgroundColor: 'transparent',
+        fill: false,
+        tension: 0.1,
+        borderWidth: 2,
+        borderDash: [6, 3],
+        pointRadius: 0,
+        hidden: strategyFilter !== 'all',
+      });
     }
+
+    // Scatter markers per strategy
+    const markerDatasets = [];
+    for (const tag of stratKeys) {
+      const stTrades = byStrat[tag];
+      const color = STRAT_COLORS[tag] || '#8b949e';
+      const label = STRAT_LABELS[tag] || tag.replace('_', ' ');
+      let cum = 0;
+      const markers = [];
+      for (const t of stTrades) {
+        cum += (t.pnl_dollars || 0);
+        markers.push({
+          x: new Date(t.exit_time || t.entry_time).getTime(),
+          y: Math.round(cum * 100) / 100,
+          pnl: t.pnl_dollars || 0,
+          action: t.action,
+          ticker: t.market_ticker,
+          side: t.side,
+          count: t.count,
+          strategy: label,
+        });
+      }
+      const hidden = strategyFilter !== 'all' && strategyFilter !== tag;
+      markerDatasets.push({
+        label: 'Trades',
+        data: markers,
+        type: 'scatter',
+        pointRadius: 6,
+        pointHoverRadius: 9,
+        pointBackgroundColor: markers.map(m => color),
+        pointBorderColor: markers.map(m => m.pnl >= 0 ? '#238636' : '#da3633'),
+        pointBorderWidth: 2,
+        hidden: hidden,
+        _stratTag: tag,
+      });
+    }
+    datasets.push(...markerDatasets);
 
     equityChart = new Chart(ctx, {
       type: 'line',
-      data: {
-        datasets: [
-          {
-            label: 'Cumulative P&L',
-            data: dataPoints,
-            borderColor: cumPnl >= 0 ? '#3fb950' : '#f85149',
-            backgroundColor: (cumPnl >= 0 ? 'rgba(63,185,80,' : 'rgba(248,81,73,') + '0.1)',
-            fill: true,
-            tension: 0.1,
-            borderWidth: 2,
-            pointRadius: 0,
-          },
-          {
-            label: 'Trades',
-            data: markers,
-            type: 'scatter',
-            pointRadius: 6,
-            pointHoverRadius: 9,
-            pointBackgroundColor: markers.map(m => m.pnl >= 0 ? '#3fb950' : '#f85149'),
-            pointBorderColor: markers.map(m => m.pnl >= 0 ? '#238636' : '#da3633'),
-            pointBorderWidth: 2,
-          },
-        ],
-      },
+      data: { datasets: datasets },
       options: {
         responsive: true,
         maintainAspectRatio: false,
         interaction: { mode: 'nearest', intersect: true },
         plugins: {
-          legend: { display: false },
+          legend: {
+            display: true,
+            labels: {
+              color: '#c9d1d9',
+              font: { size: 11 },
+              filter: function(item) { return item.text !== 'Trades'; },
+              usePointStyle: true,
+              pointStyle: 'line',
+            },
+          },
           tooltip: {
             callbacks: {
               title: function(items) { if (!items.length) return ''; return new Date(items[0].parsed.x).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',timeZone:'America/New_York'}) + ' EST'; },
@@ -1278,13 +1422,13 @@ a{color:#58a6ff}
                 if (raw.ticker) {
                   const sign = raw.pnl >= 0 ? '+' : '';
                   return [
-                    raw.ticker,
+                    (raw.strategy ? '[' + raw.strategy + '] ' : '') + raw.ticker,
                     raw.action.replace('_', ' ') + ' ' + raw.side.toUpperCase() + ' x' + raw.count,
                     'P&L: ' + sign + '$' + raw.pnl.toFixed(2),
                     'Cumulative: $' + raw.y.toFixed(2),
                   ];
                 }
-                return 'P&L: $' + raw.y.toFixed(2);
+                return ctx.dataset.label + ': $' + raw.y.toFixed(2);
               },
             },
             backgroundColor: '#161b22',

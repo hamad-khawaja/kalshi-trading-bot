@@ -47,7 +47,7 @@ class HeuristicModel(ProbabilityModel):
     # Noisy signals (flow, taker, settlement) reduced from 24% to 11%.
     MOMENTUM_WEIGHT = 0.38  # Core signal: BTC direction → resolution 96.6%
     TECHNICAL_WEIGHT = 0.18  # BB, MACD, ROC, vol-mom composite
-    ORDERFLOW_WEIGHT = 0.01  # Kalshi retail book = noise (reduced for futures signals)
+    ORDERFLOW_WEIGHT = 0.02  # Kalshi orderbook (enhanced with top-level concentration)
     MEAN_REVERSION_WEIGHT = 0.10  # Keep (useful when not fighting trends)
     TIME_DECAY_WEIGHT = 0.10
     CROSS_EXCHANGE_WEIGHT = 0.07  # Somewhat useful lead signal
@@ -58,10 +58,11 @@ class HeuristicModel(ProbabilityModel):
     BTC_BETA_WEIGHT = 0.06  # BTC-led directional signal for non-BTC assets
     HOUR_SIGNAL_WEIGHT = 0.01  # Hour-of-day awareness (reduced for futures signals)
     FUNDING_RATE_WEIGHT = 0.02  # Binance futures funding rate
+    PREDICTED_FUNDING_WEIGHT = 0.01  # Predicted next funding rate
     LIQUIDATION_WEIGHT = 0.01  # Binance futures liquidation cascades
     FUNDING_DIVERGENCE_WEIGHT = 0.02  # Cross-asset funding rate divergence
     LIQUIDATION_RATIO_WEIGHT = 0.01  # Cross-asset liquidation ratio divergence
-    MC_SIGNAL_WEIGHT = 0.04  # Monte Carlo confirmation signal
+    MC_SIGNAL_WEIGHT = 0.02  # Monte Carlo confirmation signal (reduced for new signals)
 
     # Maximum adjustment from 0.50 base
     MAX_ADJUSTMENT = 0.22  # Tightened: model overconfident at 0.30 (22.7% WR on 65% predictions)
@@ -135,7 +136,11 @@ class HeuristicModel(ProbabilityModel):
 
         # --- 3. Order flow signal ---
         # Positive imbalance = more YES bids = bullish pressure
-        flow_signal = features.order_flow_imbalance * 0.5  # Scale to [-0.5, 0.5]
+        # Blend simple imbalance with top-level concentration (wall detection)
+        flow_signal = (
+            features.order_flow_imbalance * 0.3
+            + features.orderbook_top_concentration * 0.2
+        )  # Combined [-0.5, 0.5]
 
         # --- 4. Mean reversion component ---
         # RSI-based: overbought/oversold with graduated response
@@ -212,6 +217,9 @@ class HeuristicModel(ProbabilityModel):
         # Negative = high positive funding (crowded longs, bearish)
         funding_signal = features.funding_rate_signal
 
+        # --- 13b. Predicted funding rate signal ---
+        predicted_funding_signal = features.predicted_funding_signal
+
         # --- 14. Liquidation imbalance signal ---
         # Already computed by FeatureEngine: [-1, 1]
         # Positive = more longs liquidated (bearish pressure)
@@ -264,6 +272,7 @@ class HeuristicModel(ProbabilityModel):
         bb_w = self.BTC_BETA_WEIGHT * m.get("btc_beta", 1.0)
         hr_w = self.HOUR_SIGNAL_WEIGHT * m.get("hour_signal", 1.0)
         fr_w = self.FUNDING_RATE_WEIGHT * m.get("funding_rate", 1.0)
+        pf_w = self.PREDICTED_FUNDING_WEIGHT * m.get("predicted_funding", 1.0)
         lq_w = self.LIQUIDATION_WEIGHT * m.get("liquidation", 1.0)
         fd_w = self.FUNDING_DIVERGENCE_WEIGHT * m.get("funding_divergence", 1.0)
         lr_w = self.LIQUIDATION_RATIO_WEIGHT * m.get("liquidation_ratio", 1.0)
@@ -284,12 +293,13 @@ class HeuristicModel(ProbabilityModel):
             + self.BTC_BETA_WEIGHT
             + self.HOUR_SIGNAL_WEIGHT
             + self.FUNDING_RATE_WEIGHT
+            + self.PREDICTED_FUNDING_WEIGHT
             + self.LIQUIDATION_WEIGHT
             + self.FUNDING_DIVERGENCE_WEIGHT
             + self.LIQUIDATION_RATIO_WEIGHT
             + self.MC_SIGNAL_WEIGHT
         )
-        adjusted_total = mom_w + tech_w + flow_w + mr_w + td_w + cx_w + tk_w + sb_w + ca_w + cl_w + bb_w + hr_w + fr_w + lq_w + fd_w + lr_w + mc_w
+        adjusted_total = mom_w + tech_w + flow_w + mr_w + td_w + cx_w + tk_w + sb_w + ca_w + cl_w + bb_w + hr_w + fr_w + pf_w + lq_w + fd_w + lr_w + mc_w
         if adjusted_total > 0:
             scale = original_total / adjusted_total
             mom_w *= scale
@@ -305,6 +315,7 @@ class HeuristicModel(ProbabilityModel):
             bb_w *= scale
             hr_w *= scale
             fr_w *= scale
+            pf_w *= scale
             lq_w *= scale
             fd_w *= scale
             lr_w *= scale
@@ -324,6 +335,7 @@ class HeuristicModel(ProbabilityModel):
             + bb_w * btc_beta_signal
             + hr_w * hour_signal
             + fr_w * funding_signal
+            + pf_w * predicted_funding_signal
             + lq_w * liquidation_signal
             + fd_w * funding_divergence_signal
             + lr_w * liquidation_ratio_signal
@@ -337,8 +349,8 @@ class HeuristicModel(ProbabilityModel):
             mom_signal, tech_signal, flow_signal, mr_signal,
             cross_exchange_signal, taker_signal, settlement_signal,
             cross_asset_signal, chainlink_signal, btc_beta_signal,
-            hour_signal, funding_signal, liquidation_signal,
-            funding_divergence_signal, liquidation_ratio_signal,
+            hour_signal, funding_signal, predicted_funding_signal,
+            liquidation_signal, funding_divergence_signal, liquidation_ratio_signal,
             time_decay_signal, mc_signal,
         ]
         active_signals = [s for s in all_signals if abs(s) > 0.05]

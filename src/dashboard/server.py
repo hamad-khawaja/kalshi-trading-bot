@@ -75,6 +75,9 @@ class DashboardState:
         # ETH killswitch (disable all ETH trading from dashboard)
         self.eth_disabled: bool = False
 
+        # BTC killswitch (disable all BTC trading from dashboard)
+        self.btc_disabled: bool = False
+
         # Per-strategy toggles (runtime control from dashboard)
         self.strategy_toggles: dict[str, bool] = {
             "directional": True,
@@ -166,6 +169,7 @@ class DashboardState:
             "trading_paused": self.trading_paused,
             "quiet_hours_override": self.quiet_hours_override,
             "eth_disabled": self.eth_disabled,
+            "btc_disabled": self.btc_disabled,
             "strategy_toggles": self.strategy_toggles,
         }
         return json.dumps(payload, default=str)
@@ -193,6 +197,7 @@ class DashboardServer:
         self._app.router.add_post("/api/toggle-trading", self._handle_toggle_trading)
         self._app.router.add_post("/api/toggle-quiet-hours", self._handle_toggle_quiet_hours)
         self._app.router.add_post("/api/toggle-eth", self._handle_toggle_eth)
+        self._app.router.add_post("/api/toggle-btc", self._handle_toggle_btc)
         self._app.router.add_post("/api/toggle-strategy", self._handle_toggle_strategy)
         self._app.router.add_get("/api/trades", self._handle_trades)
 
@@ -292,6 +297,15 @@ class DashboardServer:
         logger.info("eth_trading_toggled", eth_status=status)
         return web.Response(
             text=json.dumps({"eth_disabled": self._state.eth_disabled}),
+            content_type="application/json",
+        )
+
+    async def _handle_toggle_btc(self, _request: web.Request) -> web.Response:
+        self._state.btc_disabled = not self._state.btc_disabled
+        status = "disabled" if self._state.btc_disabled else "enabled"
+        logger.info("btc_trading_toggled", btc_status=status)
+        return web.Response(
+            text=json.dumps({"btc_disabled": self._state.btc_disabled}),
             content_type="application/json",
         )
 
