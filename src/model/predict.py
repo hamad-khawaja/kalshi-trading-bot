@@ -137,9 +137,10 @@ class HeuristicModel(ProbabilityModel):
         # Positive imbalance = more YES bids = bullish pressure
         # Blend simple imbalance with top-level concentration (wall detection)
         flow_signal = (
-            features.order_flow_imbalance * 0.3
-            + features.orderbook_top_concentration * 0.2
-        )  # Combined [-0.5, 0.5]
+            features.order_flow_imbalance * 0.15
+            + features.orderbook_top_concentration * 0.15
+            + features.orderbook_support_resistance * 0.70
+        )  # Combined [-1, 1]
 
         # --- 4. Mean reversion component ---
         # RSI-based: overbought/oversold with graduated response
@@ -519,6 +520,16 @@ class HeuristicModel(ProbabilityModel):
                 conf += 0.05  # Depth agrees with signal
             else:
                 conf -= 0.05  # Depth opposes signal
+
+        # Orderbook wall confirmation: strong wall agreeing with signal boosts confidence
+        wall_strength = features.orderbook_wall_strength
+        if wall_strength > 0.5:
+            sr_dir = features.orderbook_support_resistance
+            signal_dir = features.order_flow_imbalance
+            if sr_dir * signal_dir > 0:
+                conf += 0.04  # Wall agrees with signal direction
+            else:
+                conf -= 0.03  # Wall opposes signal direction
 
         return max(0.0, min(1.0, conf))
 

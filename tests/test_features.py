@@ -18,6 +18,7 @@ from src.features.indicators import (
     momentum_divergence,
     order_flow_imbalance,
     orderbook_depth_imbalance,
+    orderbook_support_resistance,
     rate_of_change_acceleration,
     rsi,
     spread_ratio,
@@ -361,6 +362,77 @@ class TestOrderbookDepthImbalance:
         assert -1.0 <= result <= 1.0
 
 
+class TestOrderbookSupportResistance:
+    def test_balanced_book(self):
+        """Equal walls on both sides → ~0 signal."""
+        yes = [
+            OrderbookLevel(price_dollars=Decimal("0.45"), quantity=100),
+            OrderbookLevel(price_dollars=Decimal("0.40"), quantity=50),
+        ]
+        no = [
+            OrderbookLevel(price_dollars=Decimal("0.45"), quantity=100),
+            OrderbookLevel(price_dollars=Decimal("0.40"), quantity=50),
+        ]
+        sr, dist, strength = orderbook_support_resistance(yes, no, 0.50)
+        assert abs(sr) < 0.3  # Roughly balanced
+
+    def test_strong_yes_wall_support(self):
+        """Large YES wall near price → positive (bullish support)."""
+        yes = [
+            OrderbookLevel(price_dollars=Decimal("0.48"), quantity=500),
+            OrderbookLevel(price_dollars=Decimal("0.40"), quantity=50),
+        ]
+        no = [
+            OrderbookLevel(price_dollars=Decimal("0.45"), quantity=50),
+        ]
+        sr, dist, strength = orderbook_support_resistance(yes, no, 0.50)
+        assert sr > 0  # Support dominates
+
+    def test_strong_no_wall_resistance(self):
+        """Large NO wall near price → negative (bearish resistance)."""
+        yes = [
+            OrderbookLevel(price_dollars=Decimal("0.45"), quantity=50),
+        ]
+        no = [
+            OrderbookLevel(price_dollars=Decimal("0.48"), quantity=500),
+            OrderbookLevel(price_dollars=Decimal("0.40"), quantity=50),
+        ]
+        sr, dist, strength = orderbook_support_resistance(yes, no, 0.50)
+        assert sr < 0  # Resistance dominates
+
+    def test_empty_book(self):
+        """Empty orderbook → all zeros."""
+        sr, dist, strength = orderbook_support_resistance([], [], 0.50)
+        assert sr == 0.0
+        assert dist == 0.0
+        assert strength == 0.0
+
+    def test_distant_wall_minimal_impact(self):
+        """Wall far from price (>20c) should have near-zero score."""
+        yes = [
+            OrderbookLevel(price_dollars=Decimal("0.10"), quantity=500),
+        ]
+        no = []
+        sr, dist, strength = orderbook_support_resistance(yes, no, 0.50)
+        # Wall at 0.10, price at 0.50 → distance 0.40 > 0.20 → decayed to 0
+        assert sr == 0.0
+
+    def test_signal_range(self):
+        """Signal should always be in [-1, 1]."""
+        yes = [OrderbookLevel(price_dollars=Decimal("0.50"), quantity=1000)]
+        no = [OrderbookLevel(price_dollars=Decimal("0.50"), quantity=1)]
+        sr, dist, strength = orderbook_support_resistance(yes, no, 0.50)
+        assert -1.0 <= sr <= 1.0
+        assert -1.0 <= dist <= 1.0
+        assert 0.0 <= strength <= 1.0
+
+    def test_wall_strength_single_level(self):
+        """Single level on one side → wall_strength = 1.0."""
+        yes = [OrderbookLevel(price_dollars=Decimal("0.48"), quantity=100)]
+        sr, dist, strength = orderbook_support_resistance(yes, [], 0.50)
+        assert strength == 1.0
+
+
 class TestFeatureEngine:
     def test_compute_returns_all_fields(self, sample_snapshot: MarketSnapshot):
         from src.config import FeatureConfig
@@ -407,4 +479,4 @@ class TestFeatureEngine:
         arr = sample_feature_vector.to_array()
         names = sample_feature_vector.feature_names()
         assert len(arr) == len(names)
-        assert len(arr) == 33
+        assert len(arr) == 34

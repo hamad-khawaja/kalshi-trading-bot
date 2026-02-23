@@ -276,6 +276,9 @@ class FeatureVector(BaseModel):
     volume_weighted_momentum: float = 0.0
     orderbook_depth_imbalance: float = 0.0
     orderbook_top_concentration: float = 0.0  # [-1, 1]: top-level volume concentration imbalance
+    orderbook_support_resistance: float = 0.0  # [-1,1]: nearby support(+) / resistance(-)
+    orderbook_wall_distance: float = 0.0  # [-1, 1]: positive = closer to resistance
+    orderbook_wall_strength: float = 0.0  # [0, 1]: max wall concentration on either side
     cross_exchange_spread: float = 0.0
     cross_exchange_lead: float = 0.0
     taker_buy_sell_ratio: float = 0.0
@@ -316,6 +319,7 @@ class FeatureVector(BaseModel):
             self.roc_acceleration,
             self.volume_weighted_momentum,
             self.orderbook_depth_imbalance,
+            self.orderbook_support_resistance,
             self.cross_exchange_spread,
             self.cross_exchange_lead,
             self.taker_buy_sell_ratio,
@@ -355,6 +359,7 @@ class FeatureVector(BaseModel):
             "roc_acceleration",
             "volume_weighted_momentum",
             "orderbook_depth_imbalance",
+            "orderbook_support_resistance",
             "cross_exchange_spread",
             "cross_exchange_lead",
             "taker_buy_sell_ratio",
