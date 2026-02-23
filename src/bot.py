@@ -27,6 +27,7 @@ from src.data.market_scanner import MarketScanner
 from src.execution.order_manager import OrderManager
 from src.execution.position_tracker import PositionTracker
 from src.features.feature_engine import FeatureEngine
+from src.model.monte_carlo import MonteCarloSimulator
 from src.model.predict import HeuristicModel, ProbabilityModel
 from src.risk.position_sizer import PositionSizer
 from src.risk.risk_manager import RiskManager
@@ -146,8 +147,9 @@ class TradingBot:
             "fomo": settings.strategy.fomo_enabled,
             "certainty_scalp": settings.strategy.certainty_scalp_enabled,
             "settlement_ride": settings.strategy.settlement_ride_enabled,
-            "monte_carlo": settings.strategy.mc_enabled,
             "market_making": settings.strategy.use_market_maker,
+            "trend_guard": settings.strategy.trend_guard_enabled,
+            "mm_vol_filter": settings.strategy.mm_vol_filter_enabled,
         }
         self._dashboard_server = DashboardServer(
             self._dashboard_state,
@@ -176,6 +178,14 @@ class TradingBot:
             self._time_profiler = TimeProfiler(
                 lookback_days=settings.strategy.time_profile_lookback_days
             )
+
+        # Monte Carlo simulator (for model confirmation signal)
+        self._mc_simulator = MonteCarloSimulator(
+            n_samples=settings.strategy.mc_samples,
+            drift_mode=settings.strategy.mc_drift_mode,
+            vol_multiplier=settings.strategy.mc_vol_multiplier,
+            min_bootstrap_returns=settings.strategy.mc_bootstrap_min_returns,
+        )
 
         # Strategy (needs vol_tracker, so must come after risk)
         self._signal_combiner = SignalCombiner(
@@ -339,8 +349,9 @@ class TradingBot:
         self._settings.strategy.fomo_enabled = st.get("fomo", False)
         self._settings.strategy.certainty_scalp_enabled = st.get("certainty_scalp", True)
         self._settings.strategy.settlement_ride_enabled = st.get("settlement_ride", True)
-        self._settings.strategy.mc_enabled = st.get("monte_carlo", False)
         self._settings.strategy.use_market_maker = st.get("market_making", True)
+        self._settings.strategy.trend_guard_enabled = st.get("trend_guard", True)
+        self._settings.strategy.mm_vol_filter_enabled = st.get("mm_vol_filter", True)
 
         await asyncio.gather(*(self._process_market(m) for m in markets_to_process))
         await self._db.flush()
@@ -419,6 +430,17 @@ class TradingBot:
         }
         ds.features = local_features
 
+        # Monte Carlo as model confirmation signal (#17)
+        if (
+            self._settings.strategy.mc_enabled
+            and snapshot.strike_price is not None
+            and snapshot.time_to_expiry_seconds >= self._settings.strategy.mc_min_ttx
+            and snapshot.time_to_expiry_seconds <= self._settings.strategy.mc_max_ttx
+        ):
+            mc_prob, mc_conf = self._mc_simulator.estimate_probability(snapshot, features)
+            features.mc_probability = mc_prob
+            features.mc_confidence = mc_conf
+
         # Update volatility tracker
         self._vol_tracker.update(features.realized_vol_5min)
 
@@ -455,6 +477,7 @@ class TradingBot:
                 "funding_rate": prediction.features_used.get("funding_signal", 0),
                 "liquidation": prediction.features_used.get("liquidation_signal", 0),
                 "time_decay": prediction.features_used.get("time_decay_signal", 0),
+                "mc": prediction.features_used.get("mc_signal", 0),
             },
         }
         ds.prediction = local_prediction
@@ -553,6 +576,15 @@ class TradingBot:
 
             if not signals:
                 reason = edge_analysis.get("decision", "No signal generated") if edge_analysis else "No signal generated"
+                block_reasons = self._signal_combiner.last_block_reasons
+                if block_reasons:
+                    reason = " | ".join(block_reasons)
+                    logger.info(
+                        "cycle_no_trade",
+                        ticker=ticker,
+                        blocks=block_reasons,
+                        phase=snapshot.window_phase,
+                    )
                 ds.add_decision(self._cycle_count, "reject", reason)
                 return
 
@@ -744,6 +776,19 @@ class TradingBot:
                         market_volume=local_market.get("volume"),
                         cycle=self._cycle_count,
                     )
+                    # Log MM fill event for immediate market-making fills
+                    if signal_item.signal_type == "market_making":
+                        logger.info(
+                            "mm_fill",
+                            ticker=ticker,
+                            side=signal_item.side,
+                            price=signal_item.suggested_price_dollars,
+                            count=order_state.filled_count,
+                            raw_edge=signal_item.raw_edge,
+                            net_edge=signal_item.net_edge,
+                            model_prob=signal_item.model_probability,
+                            implied_prob=signal_item.implied_probability,
+                        )
                     # Track buy fee in position for accurate PnL
                     buy_fee = EdgeDetector.compute_fee_dollars(
                         order_state.filled_count,
@@ -1038,6 +1083,8 @@ class TradingBot:
                         snapshots,
                         pre_expiry_seconds=self._settings.strategy.pre_expiry_exit_seconds,
                         min_pnl_per_contract=self._settings.strategy.pre_expiry_exit_min_pnl_cents,
+                        hold_to_settle_seconds=self._settings.strategy.hold_to_settle_seconds,
+                        hold_to_settle_min_profit_cents=self._settings.strategy.hold_to_settle_min_profit_cents,
                     )
                     for pe_ticker, sell_price in pe_signals:
                         pos = self._position_tracker.get_position(pe_ticker)
@@ -1058,13 +1105,14 @@ class TradingBot:
                             suggested_count=pos.count,
                             timestamp=datetime.now(timezone.utc),
                             signal_type="directional",
+                            post_only=True,
                         )
                         order_id = await self._order_manager.submit(sell_signal, pos.count)
                         if order_id:
                             entry_cost = pos.avg_entry_price * pos.count
                             exit_revenue = Decimal(sell_price) * pos.count
                             sell_fee = EdgeDetector.compute_fee_dollars(
-                                pos.count, float(sell_price), is_maker=False
+                                pos.count, float(sell_price), is_maker=True
                             )
                             pnl = exit_revenue - entry_cost - sell_fee - pos.fees_paid
                             self._total_fees += sell_fee
@@ -1304,13 +1352,14 @@ class TradingBot:
                             suggested_count=pos.count,
                             timestamp=datetime.now(timezone.utc),
                             signal_type="directional",
+                            post_only=True,
                         )
                         order_id = await self._order_manager.submit(sell_signal, pos.count)
                         if order_id:
                             entry_cost = pos.avg_entry_price * pos.count
                             exit_revenue = Decimal(sell_price) * pos.count
                             sell_fee = EdgeDetector.compute_fee_dollars(
-                                pos.count, float(sell_price), is_maker=False
+                                pos.count, float(sell_price), is_maker=True
                             )
                             pnl = exit_revenue - entry_cost - sell_fee - pos.fees_paid
                             self._total_fees += sell_fee
@@ -1377,6 +1426,19 @@ class TradingBot:
                         side=filled_state.signal.side,
                         filled=filled_state.filled_count,
                     )
+                    # Log MM fill event for market-making orders
+                    if filled_state.signal.signal_type == "market_making":
+                        logger.info(
+                            "mm_fill",
+                            ticker=filled_state.signal.market_ticker,
+                            side=filled_state.signal.side,
+                            price=filled_state.signal.suggested_price_dollars,
+                            count=filled_state.filled_count,
+                            raw_edge=filled_state.signal.raw_edge,
+                            net_edge=filled_state.signal.net_edge,
+                            model_prob=filled_state.signal.model_probability,
+                            implied_prob=filled_state.signal.implied_probability,
+                        )
                     # Force-refresh balance after resting fill
                     await self._get_balance(force=True)
                     self._update_dashboard_positions()
@@ -1391,6 +1453,19 @@ class TradingBot:
                 # Track cumulative time with open positions
                 if self._position_tracker._positions:
                     self._dashboard_state.active_trading_seconds += 10
+
+                # Quote refresh: cancel and re-quote when fair value moves >$0.03
+                for qticker, pred in self._last_predictions.items():
+                    mm = self._signal_combiner._market_maker
+                    fair_value = Decimal(str(round(pred.probability_yes, 2)))
+                    if mm.should_requote(qticker, fair_value):
+                        await self._order_manager.cancel_market_orders(qticker)
+                        mm.clear_quote_state(qticker)
+                        logger.info(
+                            "mm_requote_triggered",
+                            ticker=qticker,
+                            fair_value=float(fair_value),
+                        )
 
                 # Cancel stale resting orders (older than 90s)
                 await self._order_manager.cancel_stale_orders(max_age_seconds=90)

@@ -2,6 +2,9 @@
 *.pem
 config/paper_key.pem
 
+# Generated analysis output
+results/
+
 # CSV data files
 *.csv
 

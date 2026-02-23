@@ -117,6 +117,8 @@ class StrategyConfig(BaseModel):
     min_entry_price: float = 0.30
     # YES-side edge penalty: require more edge for YES (NO side is more profitable empirically)
     yes_side_edge_multiplier: float = 1.4
+    # NO-side edge penalty: require more edge for NO (16.7% WR in backtest, model fights market)
+    no_side_edge_multiplier: float = 1.5
     # Per-asset edge multipliers: require more edge for noisier assets
     # Keys are asset symbols (e.g. "ETH"), values are multipliers applied to edge thresholds
     asset_edge_multipliers: dict[str, float] = {}
@@ -181,20 +183,25 @@ class StrategyConfig(BaseModel):
     certainty_scalp_min_edge: float = 0.02           # Low bar (fees tiny at extremes)
     certainty_scalp_kelly_fraction: float = 0.30     # Aggressive sizing
     certainty_scalp_min_spot_distance_pct: float = 0.002  # 0.2% spot past strike
-    # Monte Carlo simulation strategy (parallel, independent)
+    # Monte Carlo model confirmation signal (#17 in HeuristicModel)
     mc_enabled: bool = False
     mc_samples: int = 10000
     mc_drift_mode: str = "momentum"   # "momentum" | "zero"
     mc_vol_multiplier: float = 1.0    # Scale realized vol
-    mc_min_edge: float = 0.04
-    mc_min_confidence: float = 0.65
-    mc_min_implied_distance: float = 0.10
-    mc_kelly_fraction: float = 0.15
     mc_min_ttx: float = 120.0         # At least 2 min to expiry
     mc_max_ttx: float = 720.0         # Only last 12 min
+    mc_bootstrap_min_returns: int = 30  # Min returns for bootstrap (else GBM fallback)
+    # Trend guard: block trades against majority momentum direction
+    trend_guard_enabled: bool = True
+    # MM vol filter: skip market-making in extreme volatility regime
+    mm_vol_filter_enabled: bool = True
     # Volatility regime filter: block entries when realized vol is too high (coin-flip territory)
     vol_regime_filter_enabled: bool = True
     vol_regime_max_realized_vol: float = 0.008
+    # Hold-to-settlement: skip TP/pre-expiry exit for profitable positions near expiry
+    # Settling naturally avoids exit fees entirely ($0 vs maker/taker sell fee)
+    hold_to_settle_seconds: float = 180.0  # Within this many seconds of expiry
+    hold_to_settle_min_profit_cents: float = 0.15  # Min profit/contract to qualify
 
 
 class RiskConfig(BaseModel):

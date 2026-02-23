@@ -287,6 +287,8 @@ class PositionTracker:
         snapshots: dict[str, MarketSnapshot],
         pre_expiry_seconds: float = 90.0,
         min_pnl_per_contract: float = -0.03,
+        hold_to_settle_seconds: float = 0.0,
+        hold_to_settle_min_profit_cents: float = 0.15,
     ) -> list[tuple[str, str]]:
         """Check for positions that should be sold before settlement.
 
@@ -320,6 +322,22 @@ class PositionTracker:
             # Only pre-expiry exit if PnL per contract is acceptable
             # Losers ride to settlement — selling at 0.02-0.10 is worse than the binary gamble
             pnl_per_contract = float(current_bid) - float(position.avg_entry_price)
+
+            # Hold-to-settle: profitable positions near expiry settle fee-free
+            if (
+                hold_to_settle_seconds > 0
+                and tte <= hold_to_settle_seconds
+                and pnl_per_contract >= hold_to_settle_min_profit_cents
+            ):
+                logger.info(
+                    "hold_to_settle_skip_pre_expiry",
+                    ticker=ticker,
+                    side=position.side,
+                    profit_per_contract=round(pnl_per_contract, 4),
+                    time_to_expiry=round(tte, 1),
+                )
+                continue
+
             if pnl_per_contract < min_pnl_per_contract:
                 logger.info(
                     "pre_expiry_exit_skipped_losing",
@@ -474,6 +492,22 @@ class PositionTracker:
 
             # Compute dynamic profit threshold with time decay
             time_to_expiry = snapshot.time_to_expiry_seconds
+
+            # Hold-to-settle: profitable positions near expiry settle fee-free
+            if (
+                strategy_config.hold_to_settle_seconds > 0
+                and time_to_expiry < strategy_config.hold_to_settle_seconds
+                and float(profit_per_contract) >= strategy_config.hold_to_settle_min_profit_cents
+            ):
+                logger.info(
+                    "hold_to_settle_skip_tp",
+                    ticker=ticker,
+                    side=position.side,
+                    profit_per_contract=round(float(profit_per_contract), 4),
+                    time_to_expiry=round(time_to_expiry, 1),
+                )
+                continue
+
             decay_start = strategy_config.take_profit_time_decay_start_seconds
             min_profit = strategy_config.take_profit_min_profit_cents
             floor_cents = strategy_config.take_profit_time_decay_floor_cents
@@ -489,9 +523,9 @@ class PositionTracker:
                 t = (time_to_expiry - 30) / (decay_start - 30)
                 threshold = floor_cents + t * (min_profit - floor_cents)
 
-            # Compute sell fee per contract (taker for guaranteed execution)
+            # Compute sell fee per contract (maker — TP exits use post_only orders)
             fee_per_contract = EdgeDetector.compute_fee_dollars(
-                1, float(current_bid), is_maker=False
+                1, float(current_bid), is_maker=True
             )
 
             # Check: profit - fee >= threshold
