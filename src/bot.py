@@ -71,6 +71,10 @@ class TradingBot:
         # ticker → (exit_time, strategy_tag)
         self._take_profit_markets: dict[str, tuple[datetime, str]] = {}
 
+        # Stop-loss cooldown: block directional re-entry after SL on same market
+        # ticker → set (one shot per market — if thesis was wrong, don't retry)
+        self._stop_loss_markets: set[str] = set()
+
         # Fee tracking for dashboard
         self._total_fees: Decimal = Decimal("0")
 
@@ -354,8 +358,8 @@ class TradingBot:
         self._settings.strategy.use_market_maker = st.get("market_making", True)
         self._settings.strategy.trend_continuation_enabled = st.get("trend_continuation", True)
         self._settings.strategy.phase_filter_enabled = st.get("phase_filter", True)
-        self._settings.strategy.trend_guard_enabled = st.get("trend_guard", True)
-        self._settings.strategy.mm_vol_filter_enabled = st.get("mm_vol_filter", True)
+        self._settings.strategy.trend_guard_enabled = st.get("trend_guard", False)
+        self._settings.strategy.mm_vol_filter_enabled = st.get("mm_vol_filter", False)
 
         await asyncio.gather(*(self._process_market(m) for m in markets_to_process))
         await self._db.flush()
@@ -542,6 +546,19 @@ class TradingBot:
             else:
                 # Cooldown expired, remove from tracking
                 del self._take_profit_markets[ticker]
+
+        # Stop-loss cooldown: block directional re-entry after SL (one shot per market)
+        if ticker in self._stop_loss_markets and signals:
+            exempt = ("market_making", "certainty_scalp")
+            buy_signals = [s for s in signals if s.action == "buy" and s.signal_type not in exempt]
+            if buy_signals:
+                logger.info(
+                    "stop_loss_cooldown_blocked",
+                    ticker=ticker,
+                    blocked_count=len(buy_signals),
+                    blocked_types=[s.signal_type for s in buy_signals],
+                )
+                signals = [s for s in signals if s.action != "buy" or s.signal_type in exempt]
 
         # Thesis-break cooldown: only block re-entry from the same strategy that got stopped out
         if ticker in self._thesis_break_markets and signals:
@@ -769,6 +786,9 @@ class TradingBot:
                         signal_type=signal_item.signal_type,
                         market_volume=local_market.get("volume"),
                         cycle=self._cycle_count,
+                        btc_price=float(local_snapshot.btc_price),
+                        eth_price=float(local_snapshot.eth_price) if local_snapshot.eth_price else None,
+                        strike=float(local_snapshot.strike_price) if local_snapshot.strike_price else None,
                     )
                     # Log MM fill event for immediate market-making fills
                     if signal_item.signal_type == "market_making":
@@ -1110,6 +1130,7 @@ class TradingBot:
                             )
                             pnl = exit_revenue - entry_cost - sell_fee - pos.fees_paid
                             self._total_fees += sell_fee
+                            pe_snap = snapshots.get(pe_ticker)
                             logger.info(
                                 "pre_expiry_exit_executed",
                                 ticker=pe_ticker,
@@ -1118,6 +1139,9 @@ class TradingBot:
                                 entry_price=float(pos.avg_entry_price),
                                 exit_price=sell_price,
                                 pnl=float(pnl),
+                                btc_price=float(pe_snap.btc_price) if pe_snap else None,
+                                eth_price=float(pe_snap.eth_price) if pe_snap and pe_snap.eth_price else None,
+                                strike=float(pe_snap.strike_price) if pe_snap and pe_snap.strike_price else None,
                             )
                             self._risk_manager.record_trade(pnl)
                             ds.add_trade_result(
@@ -1185,6 +1209,7 @@ class TradingBot:
                             )
                             pnl = exit_revenue - entry_cost - sell_fee - pos.fees_paid
                             self._total_fees += sell_fee
+                            tp_snap = snapshots.get(tp_ticker)
                             logger.info(
                                 "take_profit_executed",
                                 ticker=tp_ticker,
@@ -1194,6 +1219,9 @@ class TradingBot:
                                 exit_price=sell_price,
                                 pnl=float(pnl),
                                 fee=float(sell_fee),
+                                btc_price=float(tp_snap.btc_price) if tp_snap else None,
+                                eth_price=float(tp_snap.eth_price) if tp_snap and tp_snap.eth_price else None,
+                                strike=float(tp_snap.strike_price) if tp_snap and tp_snap.strike_price else None,
                             )
                             self._risk_manager.record_trade(pnl)
                             ds.add_trade_result(
@@ -1267,6 +1295,7 @@ class TradingBot:
                             )
                             pnl = exit_revenue - entry_cost - sell_fee - pos.fees_paid
                             self._total_fees += sell_fee
+                            sl_snap = snapshots.get(sl_ticker)
                             logger.info(
                                 "stop_loss_executed",
                                 ticker=sl_ticker,
@@ -1276,6 +1305,9 @@ class TradingBot:
                                 exit_price=sell_price,
                                 pnl=float(pnl),
                                 fee=float(sell_fee),
+                                btc_price=float(sl_snap.btc_price) if sl_snap else None,
+                                eth_price=float(sl_snap.eth_price) if sl_snap and sl_snap.eth_price else None,
+                                strike=float(sl_snap.strike_price) if sl_snap and sl_snap.strike_price else None,
                             )
                             self._risk_manager.record_trade(pnl)
                             ds.add_trade_result(
@@ -1305,6 +1337,7 @@ class TradingBot:
                                 await self._db.insert_trade(completed)
                             except Exception:
                                 logger.warning("trade_logging_failed", ticker=sl_ticker)
+                            self._stop_loss_markets.add(sl_ticker)
                             self._position_tracker.remove_expired_positions([sl_ticker])
                             self._update_dashboard_positions()
 

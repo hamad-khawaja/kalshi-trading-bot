@@ -115,6 +115,8 @@ class StrategyConfig(BaseModel):
     thesis_break_min_hold_seconds: float = 60.0  # minimum hold before thesis break can fire
     # Entry price filter: block cheap contracts with poor hit rates
     min_entry_price: float = 0.30
+    # Per-asset min entry price override (e.g. ETH needs higher floor)
+    asset_min_entry_price: dict[str, float] = {}
     # YES-side edge penalty: require more edge for YES (NO side is more profitable empirically)
     yes_side_edge_multiplier: float = 1.4
     # NO-side edge penalty: require more edge for NO (16.7% WR in backtest, model fights market)
@@ -186,17 +188,18 @@ class StrategyConfig(BaseModel):
     trend_continuation_momentum_threshold: float = 0.001  # Skip if momentum fights streak
     # Certainty scalp: bet large on near-certain outcomes in last 3 min
     certainty_scalp_enabled: bool = True
-    certainty_scalp_max_ttx: float = 180.0          # Only when TTX <= 3 min
+    certainty_scalp_max_ttx: float = 240.0          # 4 min window (widened for vol-based path)
     certainty_scalp_min_ttx: float = 60.0            # At least 60s to get filled
     certainty_scalp_min_implied_prob: float = 0.85   # Market must show 85%+ one direction
-    certainty_scalp_min_model_prob: float = 0.85     # Model must agree at 85%+
+    certainty_scalp_min_model_prob: float = 0.80     # Model must agree at 80%+ (legacy path)
     certainty_scalp_min_edge: float = 0.02           # Low bar (fees tiny at extremes)
     certainty_scalp_kelly_fraction: float = 0.30     # Aggressive sizing
     certainty_scalp_min_spot_distance_pct: float = 0.002  # 0.2% spot past strike
+    certainty_scalp_min_fair_value_prob: float = 0.95  # Vol-based: require 95%+ mathematical prob
     # Trend guard: block trades against majority momentum direction
-    trend_guard_enabled: bool = True
+    trend_guard_enabled: bool = False
     # MM vol filter: skip market-making in extreme volatility regime
-    mm_vol_filter_enabled: bool = True
+    mm_vol_filter_enabled: bool = False
     # Volatility regime filter: block entries when realized vol is too high (coin-flip territory)
     vol_regime_filter_enabled: bool = True
     vol_regime_max_realized_vol: float = 0.008

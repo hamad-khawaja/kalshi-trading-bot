@@ -1735,7 +1735,7 @@ class TestConfigDefaults:
         assert c.min_entry_price == 0.30
         assert c.max_directional_price == 0.60
         assert c.min_quality_score == 0.80
-        assert c.certainty_scalp_max_ttx == 180.0
+        assert c.certainty_scalp_max_ttx == 240.0
         assert c.certainty_scalp_min_ttx == 60.0
         assert c.certainty_scalp_min_implied_prob == 0.85
         assert c.certainty_scalp_kelly_fraction == 0.30

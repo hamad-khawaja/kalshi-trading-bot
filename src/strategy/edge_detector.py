@@ -157,13 +157,19 @@ class EdgeDetector:
         zone = self.classify_zone(trade_price)
 
         # Min entry price filter: block cheap contracts with poor hit rates
-        if trade_price < self._config.min_entry_price:
+        # Per-asset override (e.g. ETH needs higher floor)
+        min_price = self._config.min_entry_price
+        for asset, price in self._config.asset_min_entry_price.items():
+            if asset.upper() in snapshot.market_ticker.upper():
+                min_price = price
+                break
+        if trade_price < min_price:
             logger.info(
                 "min_price_blocked",
                 ticker=snapshot.market_ticker,
                 side=side,
                 entry_price=round(trade_price, 4),
-                min_price=self._config.min_entry_price,
+                min_price=min_price,
             )
             self.last_analysis = {
                 "side": side,
@@ -177,7 +183,7 @@ class EdgeDetector:
                 "confidence_ok": False,
                 "passed": False,
                 "using_fair_value": using_fair_value,
-                "decision": f"NO TRADE: entry price {trade_price:.2f} < min {self._config.min_entry_price:.2f}",
+                "decision": f"NO TRADE: entry price {trade_price:.2f} < min {min_price:.2f}",
             }
             return None
 
@@ -506,19 +512,25 @@ class EdgeDetector:
         # Final min entry price check on actual order price
         # (the earlier check uses implied/fair-value price which can diverge
         # from the real order price on thin books)
-        if float(suggested_price) < self._config.min_entry_price:
+        # Re-resolve per-asset min price (same logic as earlier check)
+        min_price_final = self._config.min_entry_price
+        for asset, price in self._config.asset_min_entry_price.items():
+            if asset.upper() in snapshot.market_ticker.upper():
+                min_price_final = price
+                break
+        if float(suggested_price) < min_price_final:
             logger.info(
                 "min_price_blocked",
                 ticker=snapshot.market_ticker,
                 side=side,
                 entry_price=float(suggested_price),
-                min_price=self._config.min_entry_price,
+                min_price=min_price_final,
                 reason="order_price",
             )
             self.last_analysis["passed"] = False
             self.last_analysis["decision"] = (
                 f"NO TRADE: order price {suggested_price} "
-                f"< min {self._config.min_entry_price:.2f}"
+                f"< min {min_price_final:.2f}"
             )
             return None
 

@@ -73,7 +73,8 @@ strategy:
   # Pre-expiry exit: only exit if profitable or near-breakeven (don't sell losers at rock bottom)
   pre_expiry_exit_min_pnl_cents: -0.03  # Only pre-expiry exit if PnL >= -$0.03/contract
   # Entry filters
-  min_entry_price: 0.30             # Block entries below $0.30 (robustness baseline)
+  min_entry_price: 0.40             # Block entries below $0.40 (3% WR below this, 100% above)
+  asset_min_entry_price: {}           # Global floor covers both BTC and ETH now
   yes_side_edge_multiplier: 1.4     # Require 40% more edge for YES entries (robustness baseline)
   no_side_edge_multiplier: 1.5      # NO side 16.7% WR — model fights market, require 50% more edge
   asset_edge_multipliers:
@@ -87,12 +88,12 @@ strategy:
   zone_edge_multipliers: [0.6, 0.8, 1.0]  # Zones 1, 2, 3 asymmetric edge
   # Phase timing: gate trades by window phase
   phase_filter_enabled: true
-  phase_observation_end: 300.0        # 5 min (hybrid: between 3 min and 7 min)
-  phase_confirmation_end: 480.0       # 8 min (hybrid: restored from 9 min)
-  phase_active_end: 720.0             # 12 min
-  phase_late_end: 840.0               # 14 min
-  phase_late_edge_multiplier: 1.3
-  phase_late_confidence_boost: 0.05
+  phase_observation_end: 120.0        # 2 min — minimal: just enough for features to warm up
+  phase_confirmation_end: 120.0       # Same as observation — no separate confirmation phase
+  phase_active_end: 840.0             # 14 min — full trading window
+  phase_late_end: 840.0               # No separate late phase
+  phase_late_edge_multiplier: 1.0     # No late tightening (active runs to 14 min)
+  phase_late_confidence_boost: 0.0
   # Overreaction / bounce-back detection
   overreaction_enabled: true
   overreaction_extreme_threshold: 0.20
@@ -130,13 +131,14 @@ strategy:
   asset_settlement_ride_disabled: [ETH]
   # Certainty scalp: bet large on near-certain outcomes in last 3 min
   certainty_scalp_enabled: true
-  certainty_scalp_max_ttx: 180.0            # Only when TTX <= 3 min
+  certainty_scalp_max_ttx: 240.0            # 4 min window (widened for vol-based path)
   certainty_scalp_min_ttx: 60.0             # At least 60s to get filled
   certainty_scalp_min_implied_prob: 0.85    # Market 85%+ one direction
-  certainty_scalp_min_model_prob: 0.80      # Model agrees at 80%+ (spot distance check provides extra safety)
+  certainty_scalp_min_model_prob: 0.80      # Model agrees at 80%+ (legacy path fallback)
   certainty_scalp_min_edge: 0.02            # Low bar (fees tiny at extremes)
   certainty_scalp_kelly_fraction: 0.30      # Aggressive sizing
   certainty_scalp_min_spot_distance_pct: 0.002  # 0.2% spot past strike
+  certainty_scalp_min_fair_value_prob: 0.95  # Vol-based: require 95%+ Black-Scholes prob
   # Trend continuation: enter early when recent settlements show persistent trend
   trend_continuation_enabled: true
   trend_continuation_min_streak: 3           # Hybrid: require stronger streak evidence (was 2)
