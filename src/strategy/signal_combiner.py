@@ -486,6 +486,20 @@ class SignalCombiner:
         if distance_from_half < min_implied_distance:
             return None
 
+        # Model-market direction agreement: block when model disagrees with market lean
+        model_bullish = prediction.probability_yes > 0.50
+        market_bullish = implied > 0.50
+        if model_bullish != market_bullish:
+            logger.info(
+                "settlement_ride_direction_mismatch",
+                ticker=snapshot.market_ticker,
+                model_prob=round(prediction.probability_yes, 4),
+                implied=round(implied, 4),
+                model_side="yes" if model_bullish else "no",
+                market_side="yes" if market_bullish else "no",
+            )
+            return None
+
         # Re-use edge detector for directional signal (ignores phase gating / streak)
         directional = self._edge_detector.detect(prediction, snapshot)
         if directional is None:
