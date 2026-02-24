@@ -142,7 +142,7 @@ strategy:
   certainty_scalp_min_fair_value_prob: 0.95  # Vol-based: require 95%+ Black-Scholes prob
   # Trend continuation: enter early when recent settlements show persistent trend
   trend_continuation_enabled: true
-  trend_continuation_min_streak: 3           # Hybrid: require stronger streak evidence (was 2)
+  trend_continuation_min_streak: 2           # Fire sooner (was 3) — technical confirmation guards 3+ streaks
   trend_continuation_max_phase: 2
   trend_continuation_min_implied_prob: 0.35
   trend_continuation_max_implied_prob: 0.65
@@ -150,6 +150,9 @@ strategy:
   trend_continuation_min_edge: 0.04
   trend_continuation_kelly_fraction: 0.50    # Hybrid: smaller positions (was 1.50)
   trend_continuation_momentum_threshold: 0.002  # Hybrid: stronger momentum confirmation (was 0.001)
+  trend_continuation_extended_streak_threshold: 3  # Streak 3+ requires technical confirmation
+  trend_continuation_min_confirming_signals: 3     # 3/4 technicals must confirm for extended streak
+  trend_continuation_rsi_extreme_threshold: 70.0   # RSI overbought/oversold boundary
 
 risk:
   max_position_per_market: 250   # 10x for paper testing (was 25)

@@ -188,6 +188,9 @@ class StrategyConfig(BaseModel):
     trend_continuation_kelly_fraction: float = 0.15
     trend_continuation_momentum_threshold: float = 0.001  # Skip if momentum fights streak
     trend_continuation_min_entry_price: float = 0.30  # Relaxed vs global 0.40 (enters near 50/50)
+    trend_continuation_extended_streak_threshold: int = 3  # Streak length requiring extra checks
+    trend_continuation_min_confirming_signals: int = 3  # 3/4 technicals must confirm for 3+ streak
+    trend_continuation_rsi_extreme_threshold: float = 70.0  # RSI overbought/oversold boundary
     # Certainty scalp: bet large on near-certain outcomes in last 3 min
     certainty_scalp_enabled: bool = True
     certainty_scalp_max_ttx: float = 240.0          # 4 min window (widened for vol-based path)
