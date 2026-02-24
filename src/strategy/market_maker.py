@@ -43,6 +43,8 @@ class MarketMaker:
 
         # Quote refresh state: ticker → (fair_value, timestamp)
         self._last_quotes: dict[str, tuple[Decimal, datetime]] = {}
+        # Throttle skip logging: ticker → last_reason logged
+        self._last_skip_reason: dict[str, str] = {}
 
     def _vol_spread_offset(self) -> Decimal:
         """Return spread offset based on current volatility regime.
@@ -79,6 +81,12 @@ class MarketMaker:
     def clear_quote_state(self, ticker: str) -> None:
         """Clear tracked quote state for a ticker (after cancellation)."""
         self._last_quotes.pop(ticker, None)
+
+    def _log_skip(self, ticker: str, reason: str, **kwargs: object) -> None:
+        """Log MM skip reason once per ticker per reason change."""
+        if self._last_skip_reason.get(ticker) != reason:
+            self._last_skip_reason[ticker] = reason
+            logger.info("mm_skipped", ticker=ticker, reason=reason, **kwargs)
 
     def generate_quotes(
         self,
@@ -119,31 +127,47 @@ class MarketMaker:
                     effective_min_spread = asset_spread
                     break
         if spread is None or float(spread) < effective_min_spread:
+            self._log_skip(
+                snapshot.market_ticker,
+                "spread_too_narrow",
+                spread=float(spread) if spread else None,
+                min_spread=effective_min_spread,
+            )
             return []
 
         # Don't market-make into dead/illiquid markets
         if float(spread) > self._max_spread:
-            logger.debug(
-                "mm_skipped_spread_too_wide",
-                ticker=snapshot.market_ticker,
-                spread=float(spread),
+            self._log_skip(
+                snapshot.market_ticker,
+                "spread_too_wide",
+                spread=round(float(spread), 4),
                 max_spread=self._max_spread,
             )
             return []
 
         # Don't market-make with low confidence
         if prediction.confidence < 0.3:
+            self._log_skip(
+                snapshot.market_ticker,
+                "low_confidence",
+                confidence=round(prediction.confidence, 3),
+            )
             return []
 
         # Don't market-make too close to expiry
         if snapshot.time_to_expiry_seconds < 120:
+            self._log_skip(
+                snapshot.market_ticker,
+                "near_expiry",
+                time_to_expiry=round(snapshot.time_to_expiry_seconds),
+            )
             return []
 
         # Don't market-make when inventory is already large
         if abs(current_position) >= self._max_inventory:
-            logger.debug(
-                "mm_skipped_inventory_full",
-                ticker=snapshot.market_ticker,
+            self._log_skip(
+                snapshot.market_ticker,
+                "inventory_full",
                 position=current_position,
                 cap=self._max_inventory,
             )
@@ -260,5 +284,7 @@ class MarketMaker:
             )
             # Track quote state for requote detection
             self._last_quotes[snapshot.market_ticker] = (fair_value, now)
+            # Clear skip reason so next skip gets logged
+            self._last_skip_reason.pop(snapshot.market_ticker, None)
 
         return signals

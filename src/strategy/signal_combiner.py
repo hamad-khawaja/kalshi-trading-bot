@@ -64,6 +64,8 @@ class SignalCombiner:
         # Simulated time for backtest quiet hours
         self._simulated_time: datetime | None = None
         self.quiet_hours_override: bool = False
+        # Throttle certainty scalp skip logging: ticker → last_reason
+        self._last_cert_skip: dict[str, str] = {}
 
     def set_simulated_time(self, dt: datetime | None) -> None:
         """Set simulated time for backtest. Pass None to use real time."""
@@ -555,6 +557,7 @@ class SignalCombiner:
         if not cfg.certainty_scalp_enabled:
             return None
 
+        ticker = snapshot.market_ticker
         ttx = snapshot.time_to_expiry_seconds
         if ttx > cfg.certainty_scalp_max_ttx or ttx <= cfg.certainty_scalp_min_ttx:
             return None
@@ -609,6 +612,15 @@ class SignalCombiner:
                 trigger = "legacy"
 
         if side is None:
+            reason = "no_trigger"
+            if self._last_cert_skip.get(ticker) != reason:
+                self._last_cert_skip[ticker] = reason
+                logger.info(
+                    "cert_scalp_skipped", ticker=ticker, reason=reason,
+                    implied=round(implied, 4), model_prob=round(model_prob, 4),
+                    fair_value_prob=round(fair_value_prob, 4) if fair_value_prob else None,
+                    ttx=round(ttx, 1),
+                )
             return None
 
         # Spot price confirmation: verify spot is well past strike
@@ -619,8 +631,24 @@ class SignalCombiner:
                 distance_pct = (spot - strike) / strike
                 min_dist = cfg.certainty_scalp_min_spot_distance_pct
                 if side == "yes" and distance_pct < min_dist:
+                    reason = "spot_too_close_yes"
+                    if self._last_cert_skip.get(ticker) != reason:
+                        self._last_cert_skip[ticker] = reason
+                        logger.info(
+                            "cert_scalp_skipped", ticker=ticker, reason=reason,
+                            side=side, distance_pct=round(distance_pct, 5),
+                            min_dist=min_dist,
+                        )
                     return None
                 if side == "no" and distance_pct > -min_dist:
+                    reason = "spot_too_close_no"
+                    if self._last_cert_skip.get(ticker) != reason:
+                        self._last_cert_skip[ticker] = reason
+                        logger.info(
+                            "cert_scalp_skipped", ticker=ticker, reason=reason,
+                            side=side, distance_pct=round(distance_pct, 5),
+                            min_dist=min_dist,
+                        )
                     return None
 
         # Compute edge from vol-based fair value or fall back to edge detector
@@ -641,6 +669,14 @@ class SignalCombiner:
             net_edge = raw_edge - fee_drag
 
             if net_edge < cfg.certainty_scalp_min_edge:
+                reason = "edge_too_low_vol"
+                if self._last_cert_skip.get(ticker) != reason:
+                    self._last_cert_skip[ticker] = reason
+                    logger.info(
+                        "cert_scalp_skipped", ticker=ticker, reason=reason,
+                        side=side, net_edge=round(net_edge, 4),
+                        min_edge=cfg.certainty_scalp_min_edge,
+                    )
                 return None
 
             # Price: use best available level
@@ -655,9 +691,10 @@ class SignalCombiner:
                     return None
                 price = str(min(float(best_no_ask), max(0.01, trade_price)))
 
+            self._last_cert_skip.pop(ticker, None)
             logger.info(
                 "certainty_scalp_signal",
-                ticker=snapshot.market_ticker,
+                ticker=ticker,
                 side=side,
                 trigger=trigger,
                 net_edge=round(net_edge, 4),

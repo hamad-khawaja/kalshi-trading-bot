@@ -86,6 +86,7 @@ class StrategyConfig(BaseModel):
     fomo_min_confidence: float = 0.70
     fomo_min_score: float = 0.50
     fomo_max_bet_dollars: float = 2.00  # Max dollar exposure per FOMO trade
+    fomo_min_entry_price: float = 0.10  # FOMO-specific floor (lower than global)
     # Stop-loss parameters
     stop_loss_enabled: bool = True
     stop_loss_pct: float = 0.35  # Exit when loss > 35% of entry price
