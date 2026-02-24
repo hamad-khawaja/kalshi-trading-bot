@@ -190,6 +190,24 @@ class TrendContinuationDetector:
             }
             return None
 
+        # Min entry price gate
+        min_price = cfg.trend_continuation_min_entry_price
+        if trade_price < min_price - 0.01:
+            self.last_analysis = {
+                "decision": (
+                    f"NO TREND: entry price {trade_price:.4f} "
+                    f"< min {min_price}"
+                ),
+            }
+            logger.info(
+                "trend_min_price_blocked",
+                ticker=ticker,
+                side=side,
+                entry_price=round(trade_price, 4),
+                min_price=min_price,
+            )
+            return None
+
         # Determine entry price from orderbook
         if side == "yes":
             best_bid = ob.best_yes_bid
@@ -226,8 +244,8 @@ class TrendContinuationDetector:
 
         suggested_price = f"{min(0.99, max(0.01, price)):.2f}"
 
-        # Mark this market as entered so we don't accumulate
-        self._entered_markets.add(ticker)
+        # NOTE: do NOT mark _entered_markets here — the signal may fail
+        # sizing/risk/execution. bot.py calls mark_entered() after fill.
 
         self.last_analysis = {
             "decision": (
@@ -273,6 +291,10 @@ class TrendContinuationDetector:
             signal_type="trend_continuation",
             entry_zone=EdgeDetector.classify_zone(trade_price),
         )
+
+    def mark_entered(self, ticker: str) -> None:
+        """Mark a market as entered after a confirmed fill."""
+        self._entered_markets.add(ticker)
 
     @staticmethod
     def _extract_asset_symbol(market_ticker: str) -> str:

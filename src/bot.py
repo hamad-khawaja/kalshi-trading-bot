@@ -795,6 +795,9 @@ class TradingBot:
                         spot_price=float(local_snapshot.spot_price),
                         strike=float(local_snapshot.strike_price) if local_snapshot.strike_price else None,
                     )
+                    # Mark trend continuation market as entered after fill
+                    if signal_item.signal_type == "trend_continuation":
+                        self._signal_combiner._trend_detector.mark_entered(ticker)
                     # Log MM fill event for immediate market-making fills
                     if signal_item.signal_type == "market_making":
                         logger.info(
