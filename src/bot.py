@@ -821,6 +821,8 @@ class TradingBot:
                     pos_after_fill = self._position_tracker.get_position(ticker)
                     if pos_after_fill:
                         pos_after_fill.fees_paid += buy_fee
+                        if local_snapshot.strike_price is not None:
+                            pos_after_fill.strike_price = local_snapshot.strike_price
                     # Log trade to database
                     try:
                         from src.data.models import CompletedTrade
@@ -1051,11 +1053,14 @@ class TradingBot:
                         else:
                             # Paper mode: simulate binary settlement
                             # Primary: spot vs strike (actual settlement logic)
+                            # Use cached strike from position (survives market expiry)
                             # Fallback: implied prob > 0.50 → YES wins
                             snap = snapshots.get(exit_ticker)
                             yes_wins: bool | None = None
-                            if snap and snap.spot_price is not None and snap.strike_price is not None:
-                                yes_wins = float(snap.spot_price) >= float(snap.strike_price)
+                            strike = pos.strike_price
+                            spot = snap.spot_price if snap else None
+                            if spot is not None and strike is not None:
+                                yes_wins = float(spot) >= float(strike)
                             elif snap and snap.implied_yes_prob is not None:
                                 yes_wins = float(snap.implied_yes_prob) > 0.50
                             if yes_wins is not None:
@@ -1064,10 +1069,10 @@ class TradingBot:
                                 pnl = payout - cost - pos.fees_paid
                             else:
                                 pnl = -cost - pos.fees_paid  # Paper mode fallback
-                            settle_method = "spot_vs_strike" if (
-                                snap and snap.spot_price is not None
-                                and snap.strike_price is not None
-                            ) else "implied_prob"
+                            settle_method = (
+                                "spot_vs_strike" if spot is not None and strike is not None
+                                else "implied_prob"
+                            )
                             logger.info(
                                 "position_settled_paper",
                                 ticker=exit_ticker,
@@ -1075,8 +1080,8 @@ class TradingBot:
                                 count=pos.count,
                                 entry_price=float(pos.avg_entry_price),
                                 implied_prob=float(snap.implied_yes_prob) if snap and snap.implied_yes_prob is not None else None,
-                                spot_price=float(snap.spot_price) if snap and snap.spot_price is not None else None,
-                                strike_price=float(snap.strike_price) if snap and snap.strike_price is not None else None,
+                                spot_price=float(spot) if spot is not None else None,
+                                strike_price=float(strike) if strike is not None else None,
                                 settle_method=settle_method,
                                 won=pnl > 0,
                                 pnl=float(pnl),

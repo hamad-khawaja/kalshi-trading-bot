@@ -40,6 +40,7 @@ class PositionState:
         self.order_ids: list[str] = []
         self.high_water_bid: Decimal | None = None  # Best bid seen since entry
         self.strategy_tag: str = ""  # "settlement_ride" = hold to settlement, skip all exits
+        self.strike_price: Decimal | None = None  # Cached for paper settlement
 
     @property
     def exposure_dollars(self) -> Decimal:
