@@ -488,10 +488,17 @@ class SignalCombiner:
         if distance_from_half < min_implied_distance:
             return None
 
-        # Model-market direction agreement: block when model disagrees with market lean
+        # Model-market direction agreement: block when model ACTIVELY disagrees
+        # with market lean. When model is neutral (within 2% of 0.50), trust the
+        # market direction — settlement ride only fires when implied is far from
+        # 0.50, so market consensus is strong. Without this tolerance, settlement
+        # ride can never fire because directional consumes all non-neutral model
+        # predictions first (catch-22).
+        model_neutral_tolerance = 0.02
+        model_neutral = abs(prediction.probability_yes - 0.50) <= model_neutral_tolerance
         model_bullish = prediction.probability_yes > 0.50
         market_bullish = implied > 0.50
-        if model_bullish != market_bullish:
+        if not model_neutral and model_bullish != market_bullish:
             logger.info(
                 "settlement_ride_direction_mismatch",
                 ticker=snapshot.market_ticker,
