@@ -16,7 +16,7 @@ Price feeds (Coinbase, Kraken, Bybit, Chainlink) -> `DataHub` builds a `MarketSn
 - **Derivatives**: funding rates, predicted funding, liquidation stats
 - **Derived**: statistical fair value (Black-Scholes), window phase (1-5), time elapsed
 
-If `btc_price` is None, snapshot returns None and no signal is possible.
+If `spot_price` is None, snapshot returns None and no signal is possible.
 
 ---
 

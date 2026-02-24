@@ -264,9 +264,9 @@ class DataHub:
             return None
 
         # Underlying price data
-        btc_price = feed.latest_price
-        if btc_price is None:
-            logger.warning("snapshot_no_btc_price", symbol=symbol)
+        spot_price = feed.latest_price
+        if spot_price is None:
+            logger.warning("snapshot_no_spot_price", symbol=symbol)
             return None
 
         # Recent price history — single deque scan, then cheap list filters
@@ -317,7 +317,7 @@ class DataHub:
         if strike_price and time_to_expiry > 0 and len(prices_5min) >= 20:
             price_arr = np.array([float(p) for p in prices_5min], dtype=np.float64)
             stat_fair_value = compute_fair_value_from_prices(
-                btc_price=float(btc_price),
+                spot_price=float(spot_price),
                 strike_price=float(strike_price),
                 price_history=price_arr,
                 time_to_expiry_seconds=time_to_expiry,
@@ -326,14 +326,14 @@ class DataHub:
 
         # Cross-exchange data (secondary feed for this asset)
         secondary_feed = self._secondary_feeds.get(symbol)
-        binance_btc_price = None
+        secondary_spot_price = None
         cross_exchange_spread = None
         cross_exchange_lead = None
         if secondary_feed and secondary_feed.latest_price is not None:
-            binance_btc_price = secondary_feed.latest_price
+            secondary_spot_price = secondary_feed.latest_price
             # Spread: (secondary - primary) / primary as percentage
-            cb_price = float(btc_price)
-            bn_price = float(binance_btc_price)
+            cb_price = float(spot_price)
+            bn_price = float(secondary_spot_price)
             if cb_price > 0:
                 cross_exchange_spread = (bn_price - cb_price) / cb_price
             # Lead signal: compare short-term momentum across exchanges
@@ -358,7 +358,7 @@ class DataHub:
             buy, sell = secondary_feed.get_taker_volume_since(300)  # 5 min window
             if buy > 0 or sell > 0:
                 # Convert from base asset to USD
-                price_usd = float(btc_price)
+                price_usd = float(spot_price)
                 taker_buy = buy * price_usd
                 taker_sell = sell * price_usd
 
@@ -371,7 +371,7 @@ class DataHub:
             chainlink_oracle_price = chainlink_feed.latest_price
             oracle_f = float(chainlink_oracle_price)
             if oracle_f > 0:
-                chainlink_divergence = (float(btc_price) - oracle_f) / oracle_f
+                chainlink_divergence = (float(spot_price) - oracle_f) / oracle_f
             chainlink_round_updated = chainlink_feed.round_just_updated
 
         # Binance Futures: funding rate + liquidation stats
@@ -439,17 +439,17 @@ class DataHub:
         return MarketSnapshot(
             timestamp=now,
             market_ticker=market_ticker,
-            btc_price=btc_price,
-            btc_prices_1min=prices_1min,
-            btc_prices_5min=prices_5min,
-            btc_prices_30min=prices_30min,
-            btc_volumes_1min=volumes_1min,
+            spot_price=spot_price,
+            spot_prices_1min=prices_1min,
+            spot_prices_5min=prices_5min,
+            spot_prices_30min=prices_30min,
+            spot_volumes_1min=volumes_1min,
             orderbook=orderbook,
             implied_yes_prob=orderbook.implied_yes_prob,
             spread=orderbook.spread,
             strike_price=strike_price,
             statistical_fair_value=stat_fair_value,
-            binance_btc_price=binance_btc_price,
+            secondary_spot_price=secondary_spot_price,
             cross_exchange_spread=cross_exchange_spread,
             cross_exchange_lead=cross_exchange_lead,
             taker_buy_volume=taker_buy,

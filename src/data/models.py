@@ -177,17 +177,17 @@ class MarketSnapshot(BaseModel):
 
     timestamp: datetime
     market_ticker: str
-    btc_price: Decimal
-    btc_prices_1min: list[Decimal] = Field(default_factory=list)
-    btc_prices_5min: list[Decimal] = Field(default_factory=list)
-    btc_prices_30min: list[Decimal] = Field(default_factory=list)
-    btc_volumes_1min: list[Decimal] = Field(default_factory=list)
+    spot_price: Decimal
+    spot_prices_1min: list[Decimal] = Field(default_factory=list)
+    spot_prices_5min: list[Decimal] = Field(default_factory=list)
+    spot_prices_30min: list[Decimal] = Field(default_factory=list)
+    spot_volumes_1min: list[Decimal] = Field(default_factory=list)
     orderbook: Orderbook
     implied_yes_prob: Decimal | None = None
     spread: Decimal | None = None
     strike_price: Decimal | None = None
     statistical_fair_value: float | None = None
-    binance_btc_price: Decimal | None = None
+    secondary_spot_price: Decimal | None = None
     cross_exchange_spread: float | None = None
     cross_exchange_lead: float | None = None
     taker_buy_volume: float | None = None

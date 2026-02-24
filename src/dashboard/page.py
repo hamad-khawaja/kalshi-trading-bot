@@ -618,7 +618,7 @@ a{color:#58a6ff}
     else { window._closeTime = null; }
 
     // Price with live ticker (per-asset tracking)
-    const newPrice = snap.btc_price || null;
+    const newPrice = snap.spot_price || null;
     if (!priceState[activeAsset]) priceState[activeAsset] = {prev: null, first: null};
     const ps = priceState[activeAsset];
     if (newPrice) {
@@ -651,7 +651,7 @@ a{color:#58a6ff}
     // Three labeled prices
     const fmtUsd = v => '$' + Number(v).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2});
     $('price-coinbase').textContent = newPrice ? fmtUsd(newPrice) : '--';
-    $('price-binance').textContent = snap.binance_btc_price ? fmtUsd(snap.binance_btc_price) : '--';
+    $('price-binance').textContent = snap.secondary_spot_price ? fmtUsd(snap.secondary_spot_price) : '--';
     $('price-kalshi').textContent = snap.strike_price ? fmtUsd(snap.strike_price) : '--';
     // Chainlink oracle
     const clEl = $('price-chainlink');
@@ -816,7 +816,7 @@ a{color:#58a6ff}
           const tagLabel = st ? st.replace('_', ' ') : '';
           const tagHtml = tagLabel ? '<span class="trade-tag ' + tagCls + '">' + tagLabel + '</span>' : '';
           const ep = t.entry_price ? '$' + t.entry_price.toFixed(2) : '';
-          const bp = t.btc_price ? 'BTC $' + t.btc_price.toLocaleString() : '';
+          const bp = t.spot_price ? 'BTC $' + t.spot_price.toLocaleString() : '';
           const sk = t.strike ? 'K $' + t.strike.toLocaleString() : '';
           const priceInfo = [ep, sk, bp].filter(Boolean).join(' | ');
           return '<div class="trade-hist-row">' +

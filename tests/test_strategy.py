@@ -93,7 +93,7 @@ class TestEdgeDetector:
         snapshot = MarketSnapshot(
             timestamp=now,
             market_ticker="test",
-            btc_price=Decimal("97500"),
+            spot_price=Decimal("97500"),
             orderbook=Orderbook(ticker="test", timestamp=now),
             time_to_expiry_seconds=600,
         )
@@ -204,7 +204,7 @@ class TestMarketMaker:
         snapshot = MarketSnapshot(
             timestamp=now,
             market_ticker="test",
-            btc_price=Decimal("97500"),
+            spot_price=Decimal("97500"),
             orderbook=Orderbook(
                 ticker="test",
                 yes_levels=[OrderbookLevel(price_dollars=Decimal("0.52"), quantity=100)],
@@ -225,7 +225,7 @@ class TestMarketMaker:
         snapshot = MarketSnapshot(
             timestamp=now,
             market_ticker="test",
-            btc_price=Decimal("97500"),
+            spot_price=Decimal("97500"),
             orderbook=Orderbook(
                 ticker="test",
                 yes_levels=[OrderbookLevel(price_dollars=Decimal("0.45"), quantity=100)],
@@ -246,7 +246,7 @@ class TestMarketMaker:
         snapshot = MarketSnapshot(
             timestamp=now,
             market_ticker="test",
-            btc_price=Decimal("97500"),
+            spot_price=Decimal("97500"),
             orderbook=Orderbook(
                 ticker="test",
                 yes_levels=[OrderbookLevel(price_dollars=Decimal("0.45"), quantity=100)],
@@ -341,7 +341,7 @@ class TestSignalCombiner:
         snapshot = MarketSnapshot(
             timestamp=now,
             market_ticker="test",
-            btc_price=Decimal("97500"),
+            spot_price=Decimal("97500"),
             orderbook=Orderbook(
                 ticker="test",
                 yes_levels=[OrderbookLevel(price_dollars=Decimal("0.45"), quantity=100)],

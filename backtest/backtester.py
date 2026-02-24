@@ -394,7 +394,7 @@ class Backtester:
 
                 # --- Compute fair value for synthetic orderbook ---
                 fair_value = compute_fair_value_from_prices(
-                    btc_price=btc_at_eval,
+                    spot_price=btc_at_eval,
                     strike_price=window.strike,
                     price_history=np.array(hist_closes),
                     time_to_expiry_seconds=time_remaining,
@@ -649,7 +649,7 @@ class Backtester:
             hist_prices = closes[hist_start : check_idx + 1]
 
             check_fv = compute_fair_value_from_prices(
-                btc_price=check_btc,
+                spot_price=check_btc,
                 strike_price=window.strike,
                 price_history=np.array(hist_prices),
                 time_to_expiry_seconds=check_time_remaining,
@@ -786,7 +786,7 @@ class Backtester:
         volumes: np.ndarray,
     ) -> MarketSnapshot:
         """Build a MarketSnapshot from window + eval point data."""
-        btc_price = Decimal(str(btc_at_eval))
+        spot_price = Decimal(str(btc_at_eval))
 
         # Build price lists from candle history
         prices_1min = [Decimal(str(c)) for c in closes[-60:]]
@@ -796,16 +796,16 @@ class Backtester:
         return MarketSnapshot(
             timestamp=eval_time,
             market_ticker=orderbook.ticker,
-            btc_price=btc_price,
-            btc_prices_1min=prices_1min,
-            btc_prices_5min=prices_5min,
-            btc_volumes_1min=volumes_1min,
+            spot_price=spot_price,
+            spot_prices_1min=prices_1min,
+            spot_prices_5min=prices_5min,
+            spot_volumes_1min=volumes_1min,
             orderbook=orderbook,
             implied_yes_prob=orderbook.implied_yes_prob,
             spread=orderbook.spread,
             strike_price=Decimal(str(strike)),
             statistical_fair_value=fair_value,
-            binance_btc_price=btc_price,
+            secondary_spot_price=spot_price,
             time_to_expiry_seconds=time_remaining,
             time_elapsed_seconds=time_elapsed,
             window_phase=window_phase,

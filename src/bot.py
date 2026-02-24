@@ -397,12 +397,14 @@ class TradingBot:
 
         ob = snapshot.orderbook
         local_snapshot = {
-            "btc_price": float(snapshot.btc_price),
+            "spot_price": float(snapshot.spot_price),
             "implied_prob": float(snapshot.implied_yes_prob) if snapshot.implied_yes_prob else None,
             "time_to_expiry": snapshot.time_to_expiry_seconds,
             "strike_price": float(snapshot.strike_price) if snapshot.strike_price else None,
             "statistical_fair_value": snapshot.statistical_fair_value,
-            "binance_btc_price": float(snapshot.binance_btc_price) if snapshot.binance_btc_price else None,
+            "secondary_spot_price": (
+                float(snapshot.secondary_spot_price) if snapshot.secondary_spot_price else None
+            ),
             "cross_exchange_spread": snapshot.cross_exchange_spread,
             "cross_exchange_lead": snapshot.cross_exchange_lead,
             "taker_buy_volume": snapshot.taker_buy_volume,
@@ -786,8 +788,7 @@ class TradingBot:
                         signal_type=signal_item.signal_type,
                         market_volume=local_market.get("volume"),
                         cycle=self._cycle_count,
-                        btc_price=float(local_snapshot.btc_price),
-                        eth_price=float(local_snapshot.eth_price) if local_snapshot.eth_price else None,
+                        spot_price=float(local_snapshot.spot_price),
                         strike=float(local_snapshot.strike_price) if local_snapshot.strike_price else None,
                     )
                     # Log MM fill event for immediate market-making fills
@@ -1141,8 +1142,7 @@ class TradingBot:
                                 entry_price=float(pos.avg_entry_price),
                                 exit_price=sell_price,
                                 pnl=float(pnl),
-                                btc_price=float(pe_snap.btc_price) if pe_snap else None,
-                                eth_price=float(pe_snap.eth_price) if pe_snap and pe_snap.eth_price else None,
+                                spot_price=float(pe_snap.spot_price) if pe_snap else None,
                                 strike=float(pe_snap.strike_price) if pe_snap and pe_snap.strike_price else None,
                             )
                             self._risk_manager.record_trade(pnl)
@@ -1152,7 +1152,7 @@ class TradingBot:
                                 size_dollars=float(entry_cost),
                                 signal_type=pos.strategy_tag,
                                 entry_price=float(pos.avg_entry_price),
-                                btc_price=float(pe_snap.btc_price) if pe_snap else None,
+                                spot_price=float(pe_snap.spot_price) if pe_snap else None,
                                 strike=float(pe_snap.strike_price) if pe_snap and pe_snap.strike_price else None,
                             )
                             # Log pre-expiry exit to database
@@ -1224,8 +1224,7 @@ class TradingBot:
                                 exit_price=sell_price,
                                 pnl=float(pnl),
                                 fee=float(sell_fee),
-                                btc_price=float(tp_snap.btc_price) if tp_snap else None,
-                                eth_price=float(tp_snap.eth_price) if tp_snap and tp_snap.eth_price else None,
+                                spot_price=float(tp_snap.spot_price) if tp_snap else None,
                                 strike=float(tp_snap.strike_price) if tp_snap and tp_snap.strike_price else None,
                             )
                             self._risk_manager.record_trade(pnl)
@@ -1235,7 +1234,7 @@ class TradingBot:
                                 size_dollars=float(entry_cost),
                                 signal_type=pos.strategy_tag,
                                 entry_price=float(pos.avg_entry_price),
-                                btc_price=float(tp_snap.btc_price) if tp_snap else None,
+                                spot_price=float(tp_snap.spot_price) if tp_snap else None,
                                 strike=float(tp_snap.strike_price) if tp_snap and tp_snap.strike_price else None,
                             )
                             # Log take-profit to database
@@ -1313,8 +1312,7 @@ class TradingBot:
                                 exit_price=sell_price,
                                 pnl=float(pnl),
                                 fee=float(sell_fee),
-                                btc_price=float(sl_snap.btc_price) if sl_snap else None,
-                                eth_price=float(sl_snap.eth_price) if sl_snap and sl_snap.eth_price else None,
+                                spot_price=float(sl_snap.spot_price) if sl_snap else None,
                                 strike=float(sl_snap.strike_price) if sl_snap and sl_snap.strike_price else None,
                             )
                             self._risk_manager.record_trade(pnl)
@@ -1324,7 +1322,7 @@ class TradingBot:
                                 size_dollars=float(entry_cost),
                                 signal_type=pos.strategy_tag,
                                 entry_price=float(pos.avg_entry_price),
-                                btc_price=float(sl_snap.btc_price) if sl_snap else None,
+                                spot_price=float(sl_snap.spot_price) if sl_snap else None,
                                 strike=float(sl_snap.strike_price) if sl_snap and sl_snap.strike_price else None,
                             )
                             # Log stop-loss to database
@@ -1418,7 +1416,7 @@ class TradingBot:
                                 size_dollars=float(entry_cost),
                                 signal_type=pos.strategy_tag,
                                 entry_price=float(pos.avg_entry_price),
-                                btc_price=float(tb_snap.btc_price) if tb_snap else None,
+                                spot_price=float(tb_snap.spot_price) if tb_snap else None,
                                 strike=float(tb_snap.strike_price) if tb_snap and tb_snap.strike_price else None,
                             )
                             # Log thesis-break exit to database

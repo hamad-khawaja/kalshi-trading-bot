@@ -58,7 +58,7 @@ ELSE:
 
 ### Gate 4: Spot Price Confirmation
 ```
-IF strike_price AND btc_price available:
+IF strike_price AND spot_price available:
     distance_pct = (spot - strike) / strike
 
     IF side == "yes" AND distance_pct < 0.002 (0.2%):

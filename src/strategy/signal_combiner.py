@@ -576,14 +576,14 @@ class SignalCombiner:
         if (
             vol_regime_ok
             and snapshot.strike_price is not None
-            and snapshot.btc_price is not None
-            and snapshot.btc_prices_5min
+            and snapshot.spot_price is not None
+            and snapshot.spot_prices_5min
         ):
             price_arr = np.array(
-                [float(p) for p in snapshot.btc_prices_5min], dtype=np.float64
+                [float(p) for p in snapshot.spot_prices_5min], dtype=np.float64
             )
             fair_value_prob = compute_fair_value_from_prices(
-                btc_price=float(snapshot.btc_price),
+                spot_price=float(snapshot.spot_price),
                 strike_price=float(snapshot.strike_price),
                 price_history=price_arr,
                 time_to_expiry_seconds=ttx,
@@ -612,9 +612,9 @@ class SignalCombiner:
             return None
 
         # Spot price confirmation: verify spot is well past strike
-        if snapshot.strike_price is not None and snapshot.btc_price is not None:
+        if snapshot.strike_price is not None and snapshot.spot_price is not None:
             strike = float(snapshot.strike_price)
-            spot = float(snapshot.btc_price)
+            spot = float(snapshot.spot_price)
             if strike > 0:
                 distance_pct = (spot - strike) / strike
                 min_dist = cfg.certainty_scalp_min_spot_distance_pct

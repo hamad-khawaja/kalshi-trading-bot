@@ -98,7 +98,7 @@ class EdgeDetector:
                     ticker=snapshot.market_ticker,
                     fair_value=round(implied, 4),
                     strike=str(snapshot.strike_price),
-                    btc_price=float(snapshot.btc_price),
+                    spot_price=float(snapshot.spot_price),
                     spread=float(spread) if spread else None,
                 )
             else:
@@ -163,7 +163,7 @@ class EdgeDetector:
             if asset.upper() in snapshot.market_ticker.upper():
                 min_price = price
                 break
-        if trade_price < min_price:
+        if trade_price < min_price - 0.01:
             logger.info(
                 "min_price_blocked",
                 ticker=snapshot.market_ticker,
@@ -188,9 +188,9 @@ class EdgeDetector:
             return None
 
         # Volatility regime filter: block when 5min realized vol is too high
-        if self._config.vol_regime_filter_enabled and snapshot.btc_prices_5min:
+        if self._config.vol_regime_filter_enabled and snapshot.spot_prices_5min:
             price_arr = np.array(
-                [float(p) for p in snapshot.btc_prices_5min], dtype=np.float64
+                [float(p) for p in snapshot.spot_prices_5min], dtype=np.float64
             )
             realized_vol = volatility_realized(price_arr)
             if realized_vol > self._config.vol_regime_max_realized_vol:

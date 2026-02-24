@@ -463,7 +463,7 @@ class TestFeatureEngine:
         snapshot = MarketSnapshot(
             timestamp=now,
             market_ticker="test",
-            btc_price=Decimal("97500"),
+            spot_price=Decimal("97500"),
             orderbook=Orderbook(ticker="test", timestamp=now),
             time_to_expiry_seconds=600,
         )
