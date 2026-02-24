@@ -186,13 +186,14 @@ class StrategyConfig(BaseModel):
     trend_continuation_momentum_threshold: float = 0.001  # Skip if momentum fights streak
     # Certainty scalp: bet large on near-certain outcomes in last 3 min
     certainty_scalp_enabled: bool = True
-    certainty_scalp_max_ttx: float = 180.0          # Only when TTX <= 3 min
+    certainty_scalp_max_ttx: float = 240.0          # 4 min window (widened for vol-based path)
     certainty_scalp_min_ttx: float = 60.0            # At least 60s to get filled
     certainty_scalp_min_implied_prob: float = 0.85   # Market must show 85%+ one direction
-    certainty_scalp_min_model_prob: float = 0.85     # Model must agree at 85%+
+    certainty_scalp_min_model_prob: float = 0.80     # Model must agree at 80%+ (legacy path)
     certainty_scalp_min_edge: float = 0.02           # Low bar (fees tiny at extremes)
     certainty_scalp_kelly_fraction: float = 0.30     # Aggressive sizing
     certainty_scalp_min_spot_distance_pct: float = 0.002  # 0.2% spot past strike
+    certainty_scalp_min_fair_value_prob: float = 0.95  # Vol-based: require 95%+ mathematical prob
     # Trend guard: block trades against majority momentum direction
     trend_guard_enabled: bool = True
     # MM vol filter: skip market-making in extreme volatility regime

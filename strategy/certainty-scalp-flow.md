@@ -1,6 +1,6 @@
 # Certainty Scalp Strategy Flow
 
-Bets large on near-certain outcomes in the last 3 minutes before settlement.
+Exploits vol-mispricing on near-certain outcomes in the last 4 minutes before settlement.
 
 **Priority**: 4th (after directional, trend continuation, FOMO)
 **Only fires when**: no higher-priority signal exists
@@ -9,7 +9,7 @@ Bets large on near-certain outcomes in the last 3 minutes before settlement.
 
 ## Core Thesis
 
-When both the model and market agree an outcome is near-certain (85%+) with only 1-3 minutes left, buy the likely winner at a high price (e.g. $0.90) for small per-contract profit but very high win rate. Holds to settlement (free exit, no sell fees). Fees are minimal at extreme prices since fee is proportional to p*(1-p).
+When BTC is sitting safely above/below strike with low volatility and 1-4 minutes left, the market often overprices the probability of a reversal. A $0.92 YES contract might have a mathematical (Black-Scholes) probability of 97-99%, creating a mispriced volatility edge. Buy the near-certain side, hold to settlement (free exit), profit from the vol gap. Fees are minimal at extreme prices since fee is proportional to p*(1-p).
 
 ---
 
@@ -22,24 +22,38 @@ IF NOT certainty_scalp_enabled: RETURN None
 
 ### Gate 2: Time Window
 ```
-IF tte > certainty_scalp_max_ttx (180s / 3 min): RETURN None
+IF tte > certainty_scalp_max_ttx (240s / 4 min): RETURN None
 IF tte <= certainty_scalp_min_ttx (60s / 1 min): RETURN None
 
-Only fires in the 60-180 second window before settlement.
+Only fires in the 60-240 second window before settlement.
 ```
 
-### Gate 3: Market + Model Agreement on Near-Certainty
-```
-implied = orderbook implied YES probability
-model_prob = prediction.probability_yes
-min_prob = 0.85
+### Gate 3: Determine Side (Two Paths)
 
+#### Path 1: Vol-Based (Preferred)
+```
+Requires: low/normal vol regime AND strike AND spot price AND 5min price history
+
+fair_value_prob = Black-Scholes P(BTC > strike) from:
+    - current spot price
+    - strike price
+    - realized vol (from 5-min price history)
+    - time to expiry
+
+IF fair_value_prob >= 0.95 AND implied >= 0.85:
+    side = "yes", trigger = "vol_based"
+ELIF fair_value_prob <= 0.05 AND implied <= 0.15:
+    side = "no", trigger = "vol_based"
+```
+
+#### Path 2: Legacy Model-Based (Fallback)
+```
 IF implied >= 0.85 AND model_prob >= 0.80:
-    side = "yes"  -- both agree YES is near-certain
+    side = "yes", trigger = "legacy"
 ELIF implied <= 0.15 AND model_prob <= 0.20:
-    side = "no"   -- both agree NO is near-certain
+    side = "no", trigger = "legacy"
 ELSE:
-    RETURN None   -- no consensus on near-certain outcome
+    RETURN None
 ```
 
 ### Gate 4: Spot Price Confirmation
@@ -53,12 +67,28 @@ IF strike_price AND btc_price available:
         RETURN None  -- spot not convincingly below strike
 ```
 
-### Gate 5: Edge Detector Confirmation
+### Gate 5: Edge Calculation
+
+#### Vol-Based Path
+```
+IF side == "yes":
+    raw_edge = fair_value_prob - implied
+ELSE:
+    raw_edge = (1 - fair_value_prob) - (1 - implied)
+
+fee_drag = taker_fee(trade_price)
+net_edge = raw_edge - fee_drag
+
+IF net_edge < 0.02: RETURN None
+Price from best available ask level.
+```
+
+#### Legacy Path
 ```
 Run full EdgeDetector.detect() for price/fee calculation
-IF returns None: RETURN None  (failed edge detector gates)
-IF directional.side != side: RETURN None  (edge detector disagrees on direction)
-IF directional.net_edge < certainty_scalp_min_edge (0.02): RETURN None
+IF returns None: RETURN None
+IF directional.side != side: RETURN None
+IF directional.net_edge < 0.02: RETURN None
 ```
 
 ### Output
@@ -79,24 +109,25 @@ certainty_scalp_enabled?
     |-- N: stop
     |-- Y
         |
-60s < tte <= 180s?
+60s < tte <= 240s?
     |-- N: stop (outside time window)
     |-- Y
         |
-implied >= 85% AND model >= 80%?  (or inverse for NO)
+vol regime low/normal AND price history available?
+    |-- Y: compute fair_value_prob (Black-Scholes)
+    |       |
+    |   fair_value >= 95% AND implied >= 85%?
+    |       |-- Y: side determined (vol_based trigger)
+    |       |-- N: fall through to legacy
+    |
+    |-- N: skip to legacy
+        |
+implied >= 85% AND model >= 80%? (or inverse for NO)
     |-- N: stop (not near-certain)
-    |-- Y (side determined)
+    |-- Y: side determined (legacy trigger)
         |
 spot price well past strike? (>= 0.2%)
     |-- N: stop (not convincing)
-    |-- Y
-        |
-edge detector passes all gates?
-    |-- N: stop
-    |-- Y
-        |
-edge detector agrees on same side?
-    |-- N: stop
     |-- Y
         |
 net_edge >= 0.02?
@@ -113,10 +144,11 @@ CERTAINTY SCALP SIGNAL EMITTED (taker order)
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `certainty_scalp_enabled` | true | Master toggle |
-| `certainty_scalp_max_ttx` | 180.0 | Only when TTX <= 3 min |
+| `certainty_scalp_max_ttx` | 240.0 | Only when TTX <= 4 min |
 | `certainty_scalp_min_ttx` | 60.0 | At least 60s to get filled |
 | `certainty_scalp_min_implied_prob` | 0.85 | Market must be 85%+ one direction |
-| `certainty_scalp_min_model_prob` | 0.80 | Model must agree at 80%+ |
+| `certainty_scalp_min_model_prob` | 0.80 | Model must agree at 80%+ (legacy path) |
+| `certainty_scalp_min_fair_value_prob` | 0.95 | Vol-based: require 95%+ Black-Scholes prob |
 | `certainty_scalp_min_edge` | 0.02 | Low bar (fees tiny at extremes) |
 | `certainty_scalp_kelly_fraction` | 0.30 | Aggressive sizing |
 | `certainty_scalp_min_spot_distance_pct` | 0.002 | 0.2% spot past strike |
@@ -125,10 +157,12 @@ CERTAINTY SCALP SIGNAL EMITTED (taker order)
 
 ## Key Characteristics
 
+- **Two trigger paths**: vol-based (preferred, mathematically grounded) and legacy (model-based fallback)
+- **Vol-based path**: uses Black-Scholes fair value from realized vol — the edge is market overpricing reversal risk
+- **Only in low/normal vol**: vol-based path requires calm markets (the math assumes log-normal moves)
 - **Taker orders** (`post_only=False`): needs guaranteed fill in final minutes
 - **Aggressive sizing**: kelly_fraction = 0.30 (vs 0.15 for directional)
-- **Low edge bar**: 0.02 (vs 0.03 for directional) -- fees are tiny at extreme prices
-- **Triple confirmation**: market (85%), model (80%), and spot price all must agree
+- **Low edge bar**: 0.02 (vs 0.03 for directional) — fees are tiny at extreme prices
 - **Hold to settlement**: no sell needed, free exit at expiry
 
 ---
@@ -138,9 +172,11 @@ CERTAINTY SCALP SIGNAL EMITTED (taker order)
 | # | Gate | Reason |
 |---|------|--------|
 | 1 | Disabled | Config toggle off |
-| 2 | Outside time window | Only 60-180s before settlement |
-| 3 | Not near-certain | Market or model not extreme enough |
-| 4 | Spot not past strike | Price hasn't cleared strike convincingly |
-| 5 | Edge detector fails | Any of the 16+ edge detector gates |
-| 6 | Side disagreement | Edge detector picked opposite direction |
-| 7 | Edge too small | Net edge < 0.02 |
+| 2 | Outside time window | Only 60-240s before settlement |
+| 3 | High/extreme vol | Vol-based path requires low/normal vol regime |
+| 4 | Not near-certain | Neither vol-based (95%) nor model-based (80%) confirms |
+| 5 | Spot not past strike | Price hasn't cleared strike convincingly |
+| 6 | Edge too small | Net edge < 0.02 |
+| 7 | No ask level | Can't price the order |
+| 8 | Edge detector fails | Legacy path: any of the 16+ edge detector gates |
+| 9 | Side disagreement | Legacy path: edge detector picked opposite direction |

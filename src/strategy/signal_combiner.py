@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
+import numpy as np
 import structlog
 
 from src.config import StrategyConfig
@@ -12,6 +13,7 @@ from src.data.models import FeatureVector, MarketSnapshot, PredictionResult, Tra
 from src.data.time_profile import TimeProfiler
 from src.risk.volatility import VolatilityTracker
 from src.strategy.edge_detector import EdgeDetector
+from src.strategy.fair_value import compute_fair_value_from_prices
 from src.strategy.fomo_detector import FomoDetector
 from src.strategy.market_maker import MarketMaker
 from src.strategy.trend_continuation_detector import TrendContinuationDetector
@@ -43,6 +45,7 @@ class SignalCombiner:
         settlement_history: dict | None = None,
     ):
         self._config = config
+        self._vol_tracker = vol_tracker
         self._time_profiler = time_profiler
         self._edge_detector = EdgeDetector(
             config, vol_tracker=vol_tracker, time_profiler=time_profiler
@@ -523,11 +526,16 @@ class SignalCombiner:
         prediction: PredictionResult,
         snapshot: MarketSnapshot,
     ) -> TradeSignal | None:
-        """Evaluate certainty-scalp entry: near-certain outcome, last 3 min.
+        """Evaluate certainty-scalp entry: vol-mispricing in last 4 min.
 
-        Buys the likely winner at a high price (e.g. $0.90) for small per-contract
-        profit but very high win rate. Holds to settlement (free exit).
-        Fees are minimal at extreme prices since fee ∝ p*(1-p).
+        Uses Black-Scholes fair value (from realized vol) as primary signal.
+        When the mathematical probability is much higher than what the market
+        implies, buys the near-certain side. Holds to settlement (free exit).
+        Fees are minimal at extreme prices since fee proportional to p*(1-p).
+
+        Two paths to trigger:
+        1. Vol-based: fair_value >= 0.95 AND implied >= 0.85 AND low/normal vol
+        2. Legacy:    model >= 0.80 AND implied >= 0.85 (original certainty scalp)
         """
         cfg = self._config
         if not cfg.certainty_scalp_enabled:
@@ -537,18 +545,56 @@ class SignalCombiner:
         if ttx > cfg.certainty_scalp_max_ttx or ttx <= cfg.certainty_scalp_min_ttx:
             return None
 
-        # Check implied probability is extreme
         implied = float(snapshot.implied_yes_prob) if snapshot.implied_yes_prob is not None else 0.5
         model_prob = prediction.probability_yes
         min_prob = cfg.certainty_scalp_min_implied_prob
+        side: str | None = None
+        trigger = "legacy"
 
-        if implied >= min_prob and model_prob >= cfg.certainty_scalp_min_model_prob:
-            # Both agree: YES is near-certain
-            side = "yes"
-        elif implied <= (1.0 - min_prob) and model_prob <= (1.0 - cfg.certainty_scalp_min_model_prob):
-            # Both agree: NO is near-certain
-            side = "no"
-        else:
+        # Path 1: Vol-based fair value confirmation (preferred)
+        # Requires: strike, spot price, price history, and low/normal vol regime
+        vol_regime_ok = (
+            self._vol_tracker is None
+            or self._vol_tracker.current_regime in ("low", "normal")
+        )
+        fair_value_prob: float | None = None
+
+        if (
+            vol_regime_ok
+            and snapshot.strike_price is not None
+            and snapshot.btc_price is not None
+            and snapshot.btc_prices_5min
+        ):
+            price_arr = np.array(
+                [float(p) for p in snapshot.btc_prices_5min], dtype=np.float64
+            )
+            fair_value_prob = compute_fair_value_from_prices(
+                btc_price=float(snapshot.btc_price),
+                strike_price=float(snapshot.strike_price),
+                price_history=price_arr,
+                time_to_expiry_seconds=ttx,
+            )
+
+            if fair_value_prob is not None:
+                # Vol-based: fair value says near-certain AND market is extreme
+                min_fv = cfg.certainty_scalp_min_fair_value_prob
+                if fair_value_prob >= min_fv and implied >= min_prob:
+                    side = "yes"
+                    trigger = "vol_based"
+                elif fair_value_prob <= (1.0 - min_fv) and implied <= (1.0 - min_prob):
+                    side = "no"
+                    trigger = "vol_based"
+
+        # Path 2: Legacy model-based confirmation (fallback)
+        if side is None:
+            if implied >= min_prob and model_prob >= cfg.certainty_scalp_min_model_prob:
+                side = "yes"
+                trigger = "legacy"
+            elif implied <= (1.0 - min_prob) and model_prob <= (1.0 - cfg.certainty_scalp_min_model_prob):
+                side = "no"
+                trigger = "legacy"
+
+        if side is None:
             return None
 
         # Spot price confirmation: verify spot is well past strike
@@ -558,18 +604,76 @@ class SignalCombiner:
             if strike > 0:
                 distance_pct = (spot - strike) / strike
                 min_dist = cfg.certainty_scalp_min_spot_distance_pct
-                # YES needs spot above strike, NO needs spot below strike
                 if side == "yes" and distance_pct < min_dist:
                     return None
                 if side == "no" and distance_pct > -min_dist:
                     return None
 
-        # Use edge detector for price/fee calculation
+        # Compute edge from vol-based fair value or fall back to edge detector
+        if trigger == "vol_based" and fair_value_prob is not None:
+            # Edge = fair_value_prob - implied (how much market underprices certainty)
+            if side == "yes":
+                trade_price = implied
+                raw_edge = fair_value_prob - implied
+            else:
+                trade_price = 1.0 - implied
+                raw_edge = (1.0 - fair_value_prob) - (1.0 - implied)
+
+            fee_drag = float(
+                EdgeDetector.compute_fee_dollars(
+                    count=1, price_dollars=trade_price, is_maker=False
+                )
+            )
+            net_edge = raw_edge - fee_drag
+
+            if net_edge < cfg.certainty_scalp_min_edge:
+                return None
+
+            # Price: use best available level
+            if side == "yes":
+                best_ask = snapshot.orderbook.best_yes_ask
+                if best_ask is None:
+                    return None
+                price = str(min(float(best_ask), max(0.01, trade_price)))
+            else:
+                best_no_ask = snapshot.orderbook.best_no_ask
+                if best_no_ask is None:
+                    return None
+                price = str(min(float(best_no_ask), max(0.01, trade_price)))
+
+            logger.info(
+                "certainty_scalp_signal",
+                ticker=snapshot.market_ticker,
+                side=side,
+                trigger=trigger,
+                net_edge=round(net_edge, 4),
+                fair_value_prob=round(fair_value_prob, 4),
+                implied_prob=round(implied, 4),
+                vol_regime=self._vol_tracker.current_regime if self._vol_tracker else "unknown",
+                time_to_expiry=round(ttx, 1),
+            )
+            return TradeSignal(
+                market_ticker=snapshot.market_ticker,
+                side=side,
+                action="buy",
+                raw_edge=round(raw_edge, 4),
+                net_edge=round(net_edge, 4),
+                model_probability=fair_value_prob,
+                implied_probability=implied,
+                confidence=prediction.confidence,
+                suggested_price_dollars=price,
+                suggested_count=1,  # Sized by position sizer
+                timestamp=snapshot.timestamp,
+                signal_type="certainty_scalp",
+                entry_zone=EdgeDetector.classify_zone(trade_price),
+                post_only=False,  # Taker — need guaranteed fill in final minutes
+            )
+
+        # Legacy path: use edge detector for price/fee calculation
         directional = self._edge_detector.detect(prediction, snapshot)
         if directional is None:
             return None
 
-        # Only take signal if edge detector agrees on the same side
         if directional.side != side:
             return None
 
@@ -580,6 +684,7 @@ class SignalCombiner:
             "certainty_scalp_signal",
             ticker=snapshot.market_ticker,
             side=side,
+            trigger=trigger,
             net_edge=directional.net_edge,
             implied_prob=round(implied, 4),
             model_prob=round(model_prob, 4),
