@@ -806,7 +806,8 @@ a{color:#58a6ff}
         el.innerHTML = '<span class="sub">No trades yet</span>';
       } else {
         el.innerHTML = trades.slice().reverse().map(t => {
-          const isWin = t.pnl >= 0;
+          const pnl = t.pnl != null ? t.pnl : 0;
+          const isWin = pnl >= 0;
           const arrow = isWin ? '\\u25B2' : '\\u25BC';
           const cls = isWin ? 'win' : 'loss';
           const sign = isWin ? '+' : '';
@@ -825,7 +826,7 @@ a{color:#58a6ff}
             '<span class="trade-action">' + action + '</span>' +
             '<span style="color:#8b949e">' + t.side.toUpperCase() + '</span>' +
             '<span style="color:#8b949e">$' + (t.size || 0).toFixed(2) + '</span>' +
-            '<span class="trade-pnl ' + cls + '">' + sign + '$' + t.pnl.toFixed(2) + '</span>' +
+            '<span class="trade-pnl ' + cls + '">' + sign + '$' + pnl.toFixed(2) + '</span>' +
             '<span class="trade-meta">' + t.time + '</span>' +
             (priceInfo ? '<div style="font-size:10px;color:#6e7681;margin-left:18px">' + priceInfo + '</div>' : '') +
             '</div>';
