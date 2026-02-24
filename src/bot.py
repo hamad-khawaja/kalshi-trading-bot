@@ -786,6 +786,8 @@ class TradingBot:
                         signal_type=signal_item.signal_type,
                         market_volume=local_market.get("volume"),
                         cycle=self._cycle_count,
+                        btc_price=float(local_snapshot.btc_price),
+                        eth_price=float(local_snapshot.eth_price) if local_snapshot.eth_price else None,
                     )
                     # Log MM fill event for immediate market-making fills
                     if signal_item.signal_type == "market_making":
@@ -1127,6 +1129,7 @@ class TradingBot:
                             )
                             pnl = exit_revenue - entry_cost - sell_fee - pos.fees_paid
                             self._total_fees += sell_fee
+                            pe_snap = snapshots.get(pe_ticker)
                             logger.info(
                                 "pre_expiry_exit_executed",
                                 ticker=pe_ticker,
@@ -1135,6 +1138,8 @@ class TradingBot:
                                 entry_price=float(pos.avg_entry_price),
                                 exit_price=sell_price,
                                 pnl=float(pnl),
+                                btc_price=float(pe_snap.btc_price) if pe_snap else None,
+                                eth_price=float(pe_snap.eth_price) if pe_snap and pe_snap.eth_price else None,
                             )
                             self._risk_manager.record_trade(pnl)
                             ds.add_trade_result(
@@ -1202,6 +1207,7 @@ class TradingBot:
                             )
                             pnl = exit_revenue - entry_cost - sell_fee - pos.fees_paid
                             self._total_fees += sell_fee
+                            tp_snap = snapshots.get(tp_ticker)
                             logger.info(
                                 "take_profit_executed",
                                 ticker=tp_ticker,
@@ -1211,6 +1217,8 @@ class TradingBot:
                                 exit_price=sell_price,
                                 pnl=float(pnl),
                                 fee=float(sell_fee),
+                                btc_price=float(tp_snap.btc_price) if tp_snap else None,
+                                eth_price=float(tp_snap.eth_price) if tp_snap and tp_snap.eth_price else None,
                             )
                             self._risk_manager.record_trade(pnl)
                             ds.add_trade_result(
@@ -1284,6 +1292,7 @@ class TradingBot:
                             )
                             pnl = exit_revenue - entry_cost - sell_fee - pos.fees_paid
                             self._total_fees += sell_fee
+                            sl_snap = snapshots.get(sl_ticker)
                             logger.info(
                                 "stop_loss_executed",
                                 ticker=sl_ticker,
@@ -1293,6 +1302,8 @@ class TradingBot:
                                 exit_price=sell_price,
                                 pnl=float(pnl),
                                 fee=float(sell_fee),
+                                btc_price=float(sl_snap.btc_price) if sl_snap else None,
+                                eth_price=float(sl_snap.eth_price) if sl_snap and sl_snap.eth_price else None,
                             )
                             self._risk_manager.record_trade(pnl)
                             ds.add_trade_result(
