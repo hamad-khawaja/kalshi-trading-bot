@@ -73,7 +73,7 @@ class VolatilityTracker:
             "low": 0.8,     # 20% less edge required
             "normal": 1.0,  # Standard threshold
             "high": 1.5,    # 50% more edge required
-            "extreme": 1.5, # 50% more edge required
+            "extreme": 2.0, # Hybrid: 100% more edge (between 1.5 and 2.5)
         }
 
         return base_threshold * multipliers[regime]
@@ -86,7 +86,7 @@ class VolatilityTracker:
             "low": 1.0,
             "normal": 1.0,
             "high": 0.5,
-            "extreme": 0.50,
+            "extreme": 0.35,  # Hybrid: between 0.25 and 0.50
         }
 
         return base_kelly * multipliers[regime]

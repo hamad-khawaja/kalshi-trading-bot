@@ -56,15 +56,15 @@ class HeuristicModel(ProbabilityModel):
     CROSS_ASSET_DIVERGENCE_WEIGHT = 0.03  # Reduced to make room for btc_beta
     CHAINLINK_ORACLE_WEIGHT = 0.02  # Reduced to make room for btc_beta
     BTC_BETA_WEIGHT = 0.06  # BTC-led directional signal for non-BTC assets
-    HOUR_SIGNAL_WEIGHT = 0.01  # Hour-of-day awareness (reduced for futures signals)
-    FUNDING_RATE_WEIGHT = 0.02  # Binance futures funding rate
-    PREDICTED_FUNDING_WEIGHT = 0.01  # Predicted next funding rate
-    LIQUIDATION_WEIGHT = 0.01  # Binance futures liquidation cascades
-    FUNDING_DIVERGENCE_WEIGHT = 0.02  # Cross-asset funding rate divergence
-    LIQUIDATION_RATIO_WEIGHT = 0.01  # Cross-asset liquidation ratio divergence
+    HOUR_SIGNAL_WEIGHT = 0.005  # Hybrid: halved (untested signal)
+    FUNDING_RATE_WEIGHT = 0.01  # Hybrid: halved (untested signal)
+    PREDICTED_FUNDING_WEIGHT = 0.005  # Hybrid: halved (untested signal)
+    LIQUIDATION_WEIGHT = 0.005  # Hybrid: halved (untested signal)
+    FUNDING_DIVERGENCE_WEIGHT = 0.01  # Hybrid: halved (untested signal)
+    LIQUIDATION_RATIO_WEIGHT = 0.005  # Hybrid: halved (untested signal)
 
     # Maximum adjustment from 0.50 base
-    MAX_ADJUSTMENT = 0.22  # Tightened: model overconfident at 0.30 (22.7% WR on 65% predictions)
+    MAX_ADJUSTMENT = 0.26  # Hybrid: split between 0.22 (too tight) and 0.30 (overconfident)
 
     # Maximum adjustment when strong multi-timeframe momentum is detected.
     # Reflects empirical finding: BTC direction -> resolution 96.6% of time
@@ -80,9 +80,9 @@ class HeuristicModel(ProbabilityModel):
     # EMA snap threshold: skip EMA entirely when prediction changes by more than this
     EMA_SNAP_THRESHOLD = 0.08
 
-    # Market anchor: blend toward implied probability when model agrees with market direction
-    MARKET_ANCHOR_WEIGHT = 0.45
-    MARKET_ANCHOR_DISAGREE_WEIGHT = 0.70  # Market is right ~83% when model disagrees (backtest)
+    # Market anchor: blend toward implied probability
+    MARKET_ANCHOR_WEIGHT = 0.35  # Hybrid: model keeps more voice than 0.45
+    MARKET_ANCHOR_DISAGREE_WEIGHT = 0.40  # Hybrid: model keeps 60% of opinion when disagreeing (was 0.70)
 
     def __init__(self, weight_multipliers: dict[str, float] | None = None) -> None:
         self._prev_probabilities: dict[str, float] = {}
@@ -135,11 +135,11 @@ class HeuristicModel(ProbabilityModel):
 
         # --- 3. Order flow signal ---
         # Positive imbalance = more YES bids = bullish pressure
-        # Blend simple imbalance with top-level concentration (wall detection)
+        # Hybrid: imbalance-primary blend with support/resistance secondary
         flow_signal = (
-            features.order_flow_imbalance * 0.15
-            + features.orderbook_top_concentration * 0.15
-            + features.orderbook_support_resistance * 0.70
+            features.order_flow_imbalance * 0.40
+            + features.orderbook_top_concentration * 0.10
+            + features.orderbook_support_resistance * 0.50
         )  # Combined [-1, 1]
 
         # --- 4. Mean reversion component ---

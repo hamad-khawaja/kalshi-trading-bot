@@ -33,7 +33,7 @@ strategy:
   edge_expiry_decay_enabled: true
   edge_expiry_decay_max: 1.8    # At 1 min left, require 1.8x normal edge
   directional_max_spread: 0.15  # Skip wide-spread illiquid books
-  mm_max_inventory: 20          # Don't accumulate huge MM positions
+  mm_max_inventory: 10          # Hybrid: halved to reduce wrong-side accumulation
   confidence_weight: 0.7
   use_market_maker: true
   mm_min_spread: 0.05           # Minimum spread ($) for market-making
@@ -87,8 +87,8 @@ strategy:
   zone_edge_multipliers: [0.6, 0.8, 1.0]  # Zones 1, 2, 3 asymmetric edge
   # Phase timing: gate trades by window phase
   phase_filter_enabled: true
-  phase_observation_end: 420.0        # 7 min (0-5 min entries lose $52.92; profit starts at 8+ min)
-  phase_confirmation_end: 540.0       # 9 min (6 min active phase: 9-15 min)
+  phase_observation_end: 300.0        # 5 min (hybrid: between 3 min and 7 min)
+  phase_confirmation_end: 480.0       # 8 min (hybrid: restored from 9 min)
   phase_active_end: 720.0             # 12 min
   phase_late_end: 840.0               # 14 min
   phase_late_edge_multiplier: 1.3
@@ -139,14 +139,14 @@ strategy:
   certainty_scalp_min_spot_distance_pct: 0.002  # 0.2% spot past strike
   # Trend continuation: enter early when recent settlements show persistent trend
   trend_continuation_enabled: true
-  trend_continuation_min_streak: 2
+  trend_continuation_min_streak: 3           # Hybrid: require stronger streak evidence (was 2)
   trend_continuation_max_phase: 2
   trend_continuation_min_implied_prob: 0.35
   trend_continuation_max_implied_prob: 0.65
-  trend_continuation_streak_prob: 0.65
+  trend_continuation_streak_prob: 0.60       # Hybrid: less aggressive edge assumption (was 0.65)
   trend_continuation_min_edge: 0.04
-  trend_continuation_kelly_fraction: 1.50    # 10x for paper testing (was 0.15)
-  trend_continuation_momentum_threshold: 0.001  # Skip if 60s momentum fights streak by > 0.1%
+  trend_continuation_kelly_fraction: 0.50    # Hybrid: smaller positions (was 1.50)
+  trend_continuation_momentum_threshold: 0.002  # Hybrid: stronger momentum confirmation (was 0.001)
 
 risk:
   max_position_per_market: 250   # 10x for paper testing (was 25)

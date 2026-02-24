@@ -172,7 +172,7 @@ class SignalCombiner:
             # (skip 15s — too noisy) with a magnitude threshold to ignore
             # near-zero values that are effectively noise.
             if features is not None and self._config.trend_guard_enabled:
-                trend_min_magnitude = 0.0001  # ~0.01% move
+                trend_min_magnitude = 0.0005  # Hybrid: ~0.05% move (was 0.0001, filters noise)
                 momentums = [
                     features.momentum_60s,
                     features.momentum_180s,
