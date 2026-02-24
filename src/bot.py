@@ -1049,16 +1049,25 @@ class TradingBot:
                                     )
                                 continue  # Don't block — check on next iteration
                         else:
-                            # Paper mode: simulate binary settlement using implied prob
-                            # If implied > 0.50, YES wins; otherwise NO wins
+                            # Paper mode: simulate binary settlement
+                            # Primary: spot vs strike (actual settlement logic)
+                            # Fallback: implied prob > 0.50 → YES wins
                             snap = snapshots.get(exit_ticker)
-                            if snap and snap.implied_yes_prob is not None:
+                            yes_wins: bool | None = None
+                            if snap and snap.spot_price is not None and snap.strike_price is not None:
+                                yes_wins = float(snap.spot_price) >= float(snap.strike_price)
+                            elif snap and snap.implied_yes_prob is not None:
                                 yes_wins = float(snap.implied_yes_prob) > 0.50
+                            if yes_wins is not None:
                                 won = (yes_wins and pos.side == "yes") or (not yes_wins and pos.side == "no")
                                 payout = Decimal(str(pos.count)) if won else Decimal("0")
                                 pnl = payout - cost - pos.fees_paid
                             else:
                                 pnl = -cost - pos.fees_paid  # Paper mode fallback
+                            settle_method = "spot_vs_strike" if (
+                                snap and snap.spot_price is not None
+                                and snap.strike_price is not None
+                            ) else "implied_prob"
                             logger.info(
                                 "position_settled_paper",
                                 ticker=exit_ticker,
@@ -1066,6 +1075,9 @@ class TradingBot:
                                 count=pos.count,
                                 entry_price=float(pos.avg_entry_price),
                                 implied_prob=float(snap.implied_yes_prob) if snap and snap.implied_yes_prob is not None else None,
+                                spot_price=float(snap.spot_price) if snap and snap.spot_price is not None else None,
+                                strike_price=float(snap.strike_price) if snap and snap.strike_price is not None else None,
+                                settle_method=settle_method,
                                 won=pnl > 0,
                                 pnl=float(pnl),
                                 market_volume=exit_volume,
