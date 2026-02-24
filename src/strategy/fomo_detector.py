@@ -91,17 +91,22 @@ class FomoDetector:
             trade_price = implied
 
         # Min entry price check (prevents cheap-contract losses)
-        if trade_price < self._config.min_entry_price:
+        min_price = self._config.min_entry_price
+        for asset, price in self._config.asset_min_entry_price.items():
+            if asset.upper() in snapshot.market_ticker.upper():
+                min_price = price
+                break
+        if trade_price < min_price:
             logger.info(
                 "min_price_blocked_fomo",
                 ticker=snapshot.market_ticker,
                 trade_price=round(trade_price, 4),
-                min_entry_price=self._config.min_entry_price,
+                min_entry_price=min_price,
             )
             self.last_analysis = {
                 "decision": (
                     f"NO FOMO: trade_price {trade_price:.4f} "
-                    f"< min_entry_price {self._config.min_entry_price:.4f}"
+                    f"< min_entry_price {min_price:.4f}"
                 ),
             }
             return None

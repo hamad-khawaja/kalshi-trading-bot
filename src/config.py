@@ -115,6 +115,8 @@ class StrategyConfig(BaseModel):
     thesis_break_min_hold_seconds: float = 60.0  # minimum hold before thesis break can fire
     # Entry price filter: block cheap contracts with poor hit rates
     min_entry_price: float = 0.30
+    # Per-asset min entry price override (e.g. ETH needs higher floor)
+    asset_min_entry_price: dict[str, float] = {}
     # YES-side edge penalty: require more edge for YES (NO side is more profitable empirically)
     yes_side_edge_multiplier: float = 1.4
     # NO-side edge penalty: require more edge for NO (16.7% WR in backtest, model fights market)
