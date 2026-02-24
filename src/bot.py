@@ -354,8 +354,8 @@ class TradingBot:
         self._settings.strategy.use_market_maker = st.get("market_making", True)
         self._settings.strategy.trend_continuation_enabled = st.get("trend_continuation", True)
         self._settings.strategy.phase_filter_enabled = st.get("phase_filter", True)
-        self._settings.strategy.trend_guard_enabled = st.get("trend_guard", True)
-        self._settings.strategy.mm_vol_filter_enabled = st.get("mm_vol_filter", True)
+        self._settings.strategy.trend_guard_enabled = st.get("trend_guard", False)
+        self._settings.strategy.mm_vol_filter_enabled = st.get("mm_vol_filter", False)
 
         await asyncio.gather(*(self._process_market(m) for m in markets_to_process))
         await self._db.flush()

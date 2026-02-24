@@ -195,9 +195,9 @@ class StrategyConfig(BaseModel):
     certainty_scalp_min_spot_distance_pct: float = 0.002  # 0.2% spot past strike
     certainty_scalp_min_fair_value_prob: float = 0.95  # Vol-based: require 95%+ mathematical prob
     # Trend guard: block trades against majority momentum direction
-    trend_guard_enabled: bool = True
+    trend_guard_enabled: bool = False
     # MM vol filter: skip market-making in extreme volatility regime
-    mm_vol_filter_enabled: bool = True
+    mm_vol_filter_enabled: bool = False
     # Volatility regime filter: block entries when realized vol is too high (coin-flip territory)
     vol_regime_filter_enabled: bool = True
     vol_regime_max_realized_vol: float = 0.008
