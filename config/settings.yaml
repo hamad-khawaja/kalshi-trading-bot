@@ -135,11 +135,11 @@ strategy:
   certainty_scalp_max_ttx: 240.0            # 4 min window (widened for vol-based path)
   certainty_scalp_min_ttx: 60.0             # At least 60s to get filled
   certainty_scalp_min_implied_prob: 0.85    # Market 85%+ one direction
-  certainty_scalp_min_model_prob: 0.80      # Model agrees at 80%+ (legacy path fallback)
+  certainty_scalp_min_model_prob: 0.70      # Lowered from 0.80: model never reached 0.80 even when market was 0.95+
   certainty_scalp_min_edge: 0.02            # Low bar (fees tiny at extremes)
   certainty_scalp_kelly_fraction: 0.30      # Aggressive sizing
   certainty_scalp_min_spot_distance_pct: 0.002  # 0.2% spot past strike
-  certainty_scalp_min_fair_value_prob: 0.95  # Vol-based: require 95%+ Black-Scholes prob
+  certainty_scalp_min_fair_value_prob: 0.90  # Lowered from 0.95: fair_value was 0.89-0.94 in clear cases, never crossing 0.95
   # Trend continuation: enter early when recent settlements show persistent trend
   trend_continuation_enabled: true
   trend_continuation_min_streak: 2           # Fire sooner (was 3) — technical confirmation guards 3+ streaks

@@ -196,11 +196,11 @@ class StrategyConfig(BaseModel):
     certainty_scalp_max_ttx: float = 240.0          # 4 min window (widened for vol-based path)
     certainty_scalp_min_ttx: float = 60.0            # At least 60s to get filled
     certainty_scalp_min_implied_prob: float = 0.85   # Market must show 85%+ one direction
-    certainty_scalp_min_model_prob: float = 0.80     # Model must agree at 80%+ (legacy path)
+    certainty_scalp_min_model_prob: float = 0.70     # Model must agree at 70%+ (legacy path)
     certainty_scalp_min_edge: float = 0.02           # Low bar (fees tiny at extremes)
     certainty_scalp_kelly_fraction: float = 0.30     # Aggressive sizing
     certainty_scalp_min_spot_distance_pct: float = 0.002  # 0.2% spot past strike
-    certainty_scalp_min_fair_value_prob: float = 0.95  # Vol-based: require 95%+ mathematical prob
+    certainty_scalp_min_fair_value_prob: float = 0.90  # Vol-based: require 90%+ mathematical prob
     # Trend guard: block trades against majority momentum direction
     trend_guard_enabled: bool = False
     # MM vol filter: skip market-making in extreme volatility regime
