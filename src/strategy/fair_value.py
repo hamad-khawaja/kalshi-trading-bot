@@ -31,7 +31,7 @@ def _normal_cdf(x: float) -> float:
 
 
 def compute_fair_value(
-    btc_price: float,
+    spot_price: float,
     strike_price: float,
     realized_vol: float,
     time_to_expiry_seconds: float,
@@ -43,7 +43,7 @@ def compute_fair_value(
     This is essentially a digital option price under geometric Brownian motion.
 
     Args:
-        btc_price: Current BTC spot price.
+        spot_price: Current spot price.
         strike_price: Market strike price (the threshold).
         realized_vol: Std dev of per-tick log returns (from volatility_realized).
         time_to_expiry_seconds: Seconds until market settles.
@@ -53,7 +53,7 @@ def compute_fair_value(
     Returns:
         Fair value probability P(BTC > strike), or None if inputs are invalid.
     """
-    if btc_price <= 0 or strike_price <= 0 or time_to_expiry_seconds <= 0:
+    if spot_price <= 0 or strike_price <= 0 or time_to_expiry_seconds <= 0:
         return None
     if realized_vol <= 0 or n_price_ticks < 10:
         return None
@@ -73,7 +73,7 @@ def compute_fair_value(
 
     # d = ln(S/K) / σ_T
     # P(S_T > K) = Φ(d)  under log-normal assumption (zero drift for short horizons)
-    d = math.log(btc_price / strike_price) / sigma_t
+    d = math.log(spot_price / strike_price) / sigma_t
 
     fair_value = _normal_cdf(d)
 
@@ -82,7 +82,7 @@ def compute_fair_value(
 
 
 def compute_fair_value_from_prices(
-    btc_price: float,
+    spot_price: float,
     strike_price: float,
     price_history: np.ndarray,
     time_to_expiry_seconds: float,
@@ -91,7 +91,7 @@ def compute_fair_value_from_prices(
     """Convenience wrapper that computes vol from raw price history.
 
     Args:
-        btc_price: Current BTC spot price.
+        spot_price: Current spot price.
         strike_price: Market strike price.
         price_history: Array of recent BTC prices (e.g. 5-min history).
         time_to_expiry_seconds: Seconds until settlement.
@@ -110,7 +110,7 @@ def compute_fair_value_from_prices(
     realized_vol = float(np.std(log_returns))
 
     return compute_fair_value(
-        btc_price=btc_price,
+        spot_price=spot_price,
         strike_price=strike_price,
         realized_vol=realized_vol,
         time_to_expiry_seconds=time_to_expiry_seconds,

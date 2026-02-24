@@ -57,14 +57,14 @@ def sample_snapshot(now: datetime, sample_orderbook: Orderbook) -> MarketSnapsho
     return MarketSnapshot(
         timestamp=now,
         market_ticker="kxbtc15m-26feb121415",
-        btc_price=Decimal("97500.00"),
-        btc_prices_1min=[
+        spot_price=Decimal("97500.00"),
+        spot_prices_1min=[
             Decimal(f"{97500 + i * 0.5}") for i in range(60)
         ],
-        btc_prices_5min=[
+        spot_prices_5min=[
             Decimal(f"{97480 + i * 0.02}") for i in range(1800)
         ],
-        btc_volumes_1min=[
+        spot_volumes_1min=[
             Decimal("0.01") for _ in range(60)
         ],
         orderbook=sample_orderbook,

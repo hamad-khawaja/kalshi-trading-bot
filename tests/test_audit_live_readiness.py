@@ -60,7 +60,7 @@ def _make_orderbook(
 def _make_snapshot(
     yes_bid: float = 0.50,
     no_bid: float = 0.50,
-    btc_price: float = 97500.0,
+    spot_price: float = 97500.0,
     ttx: float = 600.0,
     ticker: str = "KXBTC15M-26FEB201400",
     strike: float | None = None,
@@ -72,7 +72,7 @@ def _make_snapshot(
     return MarketSnapshot(
         timestamp=NOW,
         market_ticker=ticker,
-        btc_price=Decimal(str(btc_price)),
+        spot_price=Decimal(str(spot_price)),
         orderbook=ob,
         implied_yes_prob=ob.implied_yes_prob,
         spread=ob.spread,
@@ -1641,7 +1641,7 @@ class TestFairValue:
     def test_spot_equals_strike(self):
         """When spot == strike and vol > 0, prob should be ~0.50."""
         prob = compute_fair_value(
-            btc_price=100.0, strike_price=100.0,
+            spot_price=100.0, strike_price=100.0,
             realized_vol=0.001, time_to_expiry_seconds=300.0,
             n_price_ticks=100, price_window_seconds=300.0,
         )
@@ -1651,7 +1651,7 @@ class TestFairValue:
     def test_spot_above_strike(self):
         """Spot well above strike → high probability."""
         prob = compute_fair_value(
-            btc_price=110.0, strike_price=100.0,
+            spot_price=110.0, strike_price=100.0,
             realized_vol=0.001, time_to_expiry_seconds=300.0,
             n_price_ticks=100, price_window_seconds=300.0,
         )
@@ -1661,7 +1661,7 @@ class TestFairValue:
     def test_spot_below_strike(self):
         """Spot well below strike → low probability."""
         prob = compute_fair_value(
-            btc_price=90.0, strike_price=100.0,
+            spot_price=90.0, strike_price=100.0,
             realized_vol=0.001, time_to_expiry_seconds=300.0,
             n_price_ticks=100, price_window_seconds=300.0,
         )
@@ -1671,7 +1671,7 @@ class TestFairValue:
     def test_output_clamped_min(self):
         """Output >= 0.02."""
         prob = compute_fair_value(
-            btc_price=50.0, strike_price=200.0,
+            spot_price=50.0, strike_price=200.0,
             realized_vol=0.001, time_to_expiry_seconds=60.0,
             n_price_ticks=100,
         )
@@ -1681,14 +1681,14 @@ class TestFairValue:
     def test_output_clamped_max(self):
         """Output <= 0.98."""
         prob = compute_fair_value(
-            btc_price=200.0, strike_price=50.0,
+            spot_price=200.0, strike_price=50.0,
             realized_vol=0.001, time_to_expiry_seconds=60.0,
             n_price_ticks=100,
         )
         assert prob is not None
         assert prob <= 0.98
 
-    def test_invalid_btc_price(self):
+    def test_invalid_spot_price(self):
         assert compute_fair_value(0, 100, 0.001, 300, 100) is None
         assert compute_fair_value(-1, 100, 0.001, 300, 100) is None
 
@@ -1732,7 +1732,7 @@ class TestConfigDefaults:
         assert c.pre_expiry_exit_seconds == 90.0
         assert c.pre_expiry_exit_min_pnl_cents == -0.03
         assert c.yes_side_edge_multiplier == 1.4
-        assert c.min_entry_price == 0.30
+        assert c.min_entry_price == 0.40
         assert c.max_directional_price == 0.60
         assert c.min_quality_score == 0.80
         assert c.certainty_scalp_max_ttx == 240.0

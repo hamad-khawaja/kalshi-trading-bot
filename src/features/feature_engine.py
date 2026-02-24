@@ -54,9 +54,9 @@ class FeatureEngine:
     def compute(self, snapshot: MarketSnapshot) -> FeatureVector:
         """Compute all features from a market snapshot."""
         # Convert price lists to numpy arrays
-        prices_5min = self._to_price_array(snapshot.btc_prices_5min)
-        prices_1min = self._to_price_array(snapshot.btc_prices_1min)
-        volumes_1min = self._to_volume_array(snapshot.btc_volumes_1min)
+        prices_5min = self._to_price_array(snapshot.spot_prices_5min)
+        prices_1min = self._to_price_array(snapshot.spot_prices_1min)
+        volumes_1min = self._to_volume_array(snapshot.spot_volumes_1min)
 
         # Use the longer history for most calculations
         prices = prices_5min if len(prices_5min) > len(prices_1min) else prices_1min
@@ -70,7 +70,7 @@ class FeatureEngine:
         mom_600s = self._compute_momentum(prices, self._momentum_windows[3])
 
         # 30min momentum: use dedicated 30min price array for better accuracy
-        prices_30min = self._to_price_array(snapshot.btc_prices_30min)
+        prices_30min = self._to_price_array(snapshot.spot_prices_30min)
         mom_1800s = self._compute_momentum(prices_30min, 1800)
 
         # Hour-of-day cyclical encoding
@@ -89,7 +89,7 @@ class FeatureEngine:
         # VWAP and deviation
         vwap_val = vwap(prices_1min, volumes_1min) if len(volumes_1min) > 0 else 0.0
         vwap_dev = (
-            vwap_deviation(float(snapshot.btc_price), vwap_val)
+            vwap_deviation(float(snapshot.spot_price), vwap_val)
             if vwap_val > 0
             else 0.0
         )

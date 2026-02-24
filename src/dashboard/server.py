@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 from collections import deque
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
@@ -98,25 +99,40 @@ class DashboardState:
         self, asset: str, action: str, side: str, pnl: float, ticker: str,
         size_dollars: float = 0.0,
         signal_type: str = "",
+        entry_price: float = 0.0,
+        spot_price: float | None = None,
+        strike: float | None = None,
     ) -> None:
         """Record a completed trade result for the trade history panel."""
-        if asset not in self.trade_history:
-            self.trade_history[asset] = deque(maxlen=10)
-        self.trade_history[asset].append(
-            {
-                "time": datetime.now(ZoneInfo("America/New_York")).strftime("%H:%M:%S"),
-                "action": action,
-                "side": side,
-                "pnl": round(pnl, 2),
-                "size": round(size_dollars, 2),
-                "ticker": ticker,
-                "signal_type": signal_type,
-            }
-        )
-        # Accumulate per-asset realized P&L
-        self.per_asset_pnl[asset] = round(
-            self.per_asset_pnl.get(asset, 0.0) + pnl, 2
-        )
+        try:
+            safe_pnl = round(pnl, 2) if pnl is not None and math.isfinite(pnl) else 0.0
+            safe_size = (
+                round(size_dollars, 2)
+                if size_dollars is not None and math.isfinite(size_dollars)
+                else 0.0
+            )
+            if asset not in self.trade_history:
+                self.trade_history[asset] = deque(maxlen=10)
+            self.trade_history[asset].append(
+                {
+                    "time": datetime.now(ZoneInfo("America/New_York")).strftime("%H:%M:%S"),
+                    "action": action,
+                    "side": side,
+                    "pnl": safe_pnl,
+                    "size": safe_size,
+                    "ticker": ticker,
+                    "signal_type": signal_type,
+                    "entry_price": round(entry_price, 4),
+                    "spot_price": round(spot_price, 2) if spot_price else None,
+                    "strike": round(strike, 2) if strike else None,
+                }
+            )
+            # Accumulate per-asset realized P&L
+            self.per_asset_pnl[asset] = round(
+                self.per_asset_pnl.get(asset, 0.0) + safe_pnl, 2
+            )
+        except Exception:
+            logger.warning("add_trade_result_failed", asset=asset, ticker=ticker)
 
     def add_decision(
         self, cycle: int, decision_type: str, summary: str
@@ -248,6 +264,8 @@ class DashboardServer:
                 await asyncio.sleep(1)
         except (asyncio.CancelledError, ConnectionResetError):
             pass
+        except Exception:
+            logger.warning("sse_stream_error", exc_info=True)
         return response
 
     async def _handle_api_state(self, _request: web.Request) -> web.Response:

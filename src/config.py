@@ -86,6 +86,7 @@ class StrategyConfig(BaseModel):
     fomo_min_confidence: float = 0.70
     fomo_min_score: float = 0.50
     fomo_max_bet_dollars: float = 2.00  # Max dollar exposure per FOMO trade
+    fomo_min_entry_price: float = 0.10  # FOMO-specific floor (lower than global)
     # Stop-loss parameters
     stop_loss_enabled: bool = True
     stop_loss_pct: float = 0.35  # Exit when loss > 35% of entry price
@@ -114,7 +115,7 @@ class StrategyConfig(BaseModel):
     thesis_break_threshold: float = 0.05  # model must cross 0.50 +/- this to trigger exit
     thesis_break_min_hold_seconds: float = 60.0  # minimum hold before thesis break can fire
     # Entry price filter: block cheap contracts with poor hit rates
-    min_entry_price: float = 0.30
+    min_entry_price: float = 0.40
     # Per-asset min entry price override (e.g. ETH needs higher floor)
     asset_min_entry_price: dict[str, float] = {}
     # YES-side edge penalty: require more edge for YES (NO side is more profitable empirically)
@@ -186,6 +187,7 @@ class StrategyConfig(BaseModel):
     trend_continuation_min_edge: float = 0.04
     trend_continuation_kelly_fraction: float = 0.15
     trend_continuation_momentum_threshold: float = 0.001  # Skip if momentum fights streak
+    trend_continuation_min_entry_price: float = 0.30  # Relaxed vs global 0.40 (enters near 50/50)
     # Certainty scalp: bet large on near-certain outcomes in last 3 min
     certainty_scalp_enabled: bool = True
     certainty_scalp_max_ttx: float = 240.0          # 4 min window (widened for vol-based path)

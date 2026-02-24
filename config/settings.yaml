@@ -53,6 +53,7 @@ strategy:
   fomo_momentum_consistency_required: true
   fomo_max_implied_prob: 0.85
   fomo_min_implied_prob: 0.15
+  fomo_min_entry_price: 0.10          # FOMO targets cheap contracts — lower than global $0.40
   # Trailing take-profit
   trailing_take_profit_enabled: true
   trailing_take_profit_activation_cents: 0.10  # Profit to activate trailing (was 0.08 — avg win still half avg loss, let winners run)

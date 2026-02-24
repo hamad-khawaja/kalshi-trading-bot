@@ -90,12 +90,8 @@ class FomoDetector:
             underpriced_side = "yes"
             trade_price = implied
 
-        # Min entry price check (prevents cheap-contract losses)
-        min_price = self._config.min_entry_price
-        for asset, price in self._config.asset_min_entry_price.items():
-            if asset.upper() in snapshot.market_ticker.upper():
-                min_price = price
-                break
+        # FOMO-specific min entry price (lower than global since FOMO targets cheap contracts)
+        min_price = self._config.fomo_min_entry_price
         if trade_price < min_price:
             logger.info(
                 "min_price_blocked_fomo",

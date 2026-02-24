@@ -396,31 +396,37 @@ class TradingBot:
             return
 
         ob = snapshot.orderbook
-        local_snapshot = {
-            "btc_price": float(snapshot.btc_price),
-            "implied_prob": float(snapshot.implied_yes_prob) if snapshot.implied_yes_prob else None,
-            "time_to_expiry": snapshot.time_to_expiry_seconds,
-            "strike_price": float(snapshot.strike_price) if snapshot.strike_price else None,
-            "statistical_fair_value": snapshot.statistical_fair_value,
-            "binance_btc_price": float(snapshot.binance_btc_price) if snapshot.binance_btc_price else None,
-            "cross_exchange_spread": snapshot.cross_exchange_spread,
-            "cross_exchange_lead": snapshot.cross_exchange_lead,
-            "taker_buy_volume": snapshot.taker_buy_volume,
-            "taker_sell_volume": snapshot.taker_sell_volume,
-            "chainlink_oracle_price": float(snapshot.chainlink_oracle_price) if snapshot.chainlink_oracle_price else None,
-            "chainlink_divergence": snapshot.chainlink_divergence,
-            "chainlink_round_updated": snapshot.chainlink_round_updated,
-            "time_elapsed": snapshot.time_elapsed_seconds,
-            "window_phase": snapshot.window_phase,
-            "orderbook": {
-                "best_yes_bid": str(ob.best_yes_bid) if ob.best_yes_bid else None,
-                "best_no_bid": str(ob.best_no_bid) if ob.best_no_bid else None,
-                "spread": str(ob.spread) if ob.spread else None,
-                "yes_depth": ob.yes_bid_depth,
-                "no_depth": ob.no_bid_depth,
-                "implied_prob": float(ob.implied_yes_prob) if ob.implied_yes_prob else None,
-            },
-        }
+        try:
+            local_snapshot = {
+                "spot_price": float(snapshot.spot_price),
+                "implied_prob": float(snapshot.implied_yes_prob) if snapshot.implied_yes_prob else None,
+                "time_to_expiry": snapshot.time_to_expiry_seconds,
+                "strike_price": float(snapshot.strike_price) if snapshot.strike_price else None,
+                "statistical_fair_value": snapshot.statistical_fair_value,
+                "secondary_spot_price": (
+                    float(snapshot.secondary_spot_price) if snapshot.secondary_spot_price else None
+                ),
+                "cross_exchange_spread": snapshot.cross_exchange_spread,
+                "cross_exchange_lead": snapshot.cross_exchange_lead,
+                "taker_buy_volume": snapshot.taker_buy_volume,
+                "taker_sell_volume": snapshot.taker_sell_volume,
+                "chainlink_oracle_price": float(snapshot.chainlink_oracle_price) if snapshot.chainlink_oracle_price else None,
+                "chainlink_divergence": snapshot.chainlink_divergence,
+                "chainlink_round_updated": snapshot.chainlink_round_updated,
+                "time_elapsed": snapshot.time_elapsed_seconds,
+                "window_phase": snapshot.window_phase,
+                "orderbook": {
+                    "best_yes_bid": str(ob.best_yes_bid) if ob.best_yes_bid else None,
+                    "best_no_bid": str(ob.best_no_bid) if ob.best_no_bid else None,
+                    "spread": str(ob.spread) if ob.spread else None,
+                    "yes_depth": ob.yes_bid_depth,
+                    "no_depth": ob.no_bid_depth,
+                    "implied_prob": float(ob.implied_yes_prob) if ob.implied_yes_prob else None,
+                },
+            }
+        except Exception:
+            logger.warning("snapshot_dict_failed", ticker=ticker)
+            local_snapshot = {}
         ds.snapshot = local_snapshot
 
         # Compute features
@@ -786,10 +792,12 @@ class TradingBot:
                         signal_type=signal_item.signal_type,
                         market_volume=local_market.get("volume"),
                         cycle=self._cycle_count,
-                        btc_price=float(local_snapshot.btc_price),
-                        eth_price=float(local_snapshot.eth_price) if local_snapshot.eth_price else None,
+                        spot_price=float(local_snapshot.spot_price),
                         strike=float(local_snapshot.strike_price) if local_snapshot.strike_price else None,
                     )
+                    # Mark trend continuation market as entered after fill
+                    if signal_item.signal_type == "trend_continuation":
+                        self._signal_combiner._trend_detector.mark_entered(ticker)
                     # Log MM fill event for immediate market-making fills
                     if signal_item.signal_type == "market_making":
                         logger.info(
@@ -1002,12 +1010,16 @@ class TradingBot:
                                     pnl=float(pnl),
                                 )
                                 self._risk_manager.record_trade(pnl)
-                                ds.add_trade_result(
-                                    self._data_hub._ticker_to_symbol(exit_ticker),
-                                    "settle", pos.side, float(pnl), exit_ticker,
-                                    size_dollars=float(cost),
-                                    signal_type=pos.strategy_tag,
-                                )
+                                try:
+                                    ds.add_trade_result(
+                                        self._data_hub._ticker_to_symbol(exit_ticker),
+                                        "settle", pos.side, float(pnl), exit_ticker,
+                                        size_dollars=float(cost),
+                                        signal_type=pos.strategy_tag,
+                                        entry_price=float(pos.avg_entry_price),
+                                    )
+                                except Exception:
+                                    logger.warning("dashboard_trade_log_failed", ticker=exit_ticker)
                                 # Log settlement to database
                                 try:
                                     from src.data.models import CompletedTrade
@@ -1037,16 +1049,25 @@ class TradingBot:
                                     )
                                 continue  # Don't block — check on next iteration
                         else:
-                            # Paper mode: simulate binary settlement using implied prob
-                            # If implied > 0.50, YES wins; otherwise NO wins
+                            # Paper mode: simulate binary settlement
+                            # Primary: spot vs strike (actual settlement logic)
+                            # Fallback: implied prob > 0.50 → YES wins
                             snap = snapshots.get(exit_ticker)
-                            if snap and snap.implied_yes_prob is not None:
+                            yes_wins: bool | None = None
+                            if snap and snap.spot_price is not None and snap.strike_price is not None:
+                                yes_wins = float(snap.spot_price) >= float(snap.strike_price)
+                            elif snap and snap.implied_yes_prob is not None:
                                 yes_wins = float(snap.implied_yes_prob) > 0.50
+                            if yes_wins is not None:
                                 won = (yes_wins and pos.side == "yes") or (not yes_wins and pos.side == "no")
                                 payout = Decimal(str(pos.count)) if won else Decimal("0")
                                 pnl = payout - cost - pos.fees_paid
                             else:
                                 pnl = -cost - pos.fees_paid  # Paper mode fallback
+                            settle_method = "spot_vs_strike" if (
+                                snap and snap.spot_price is not None
+                                and snap.strike_price is not None
+                            ) else "implied_prob"
                             logger.info(
                                 "position_settled_paper",
                                 ticker=exit_ticker,
@@ -1054,17 +1075,24 @@ class TradingBot:
                                 count=pos.count,
                                 entry_price=float(pos.avg_entry_price),
                                 implied_prob=float(snap.implied_yes_prob) if snap and snap.implied_yes_prob is not None else None,
+                                spot_price=float(snap.spot_price) if snap and snap.spot_price is not None else None,
+                                strike_price=float(snap.strike_price) if snap and snap.strike_price is not None else None,
+                                settle_method=settle_method,
                                 won=pnl > 0,
                                 pnl=float(pnl),
                                 market_volume=exit_volume,
                             )
                             self._risk_manager.record_trade(pnl)
-                            ds.add_trade_result(
-                                self._data_hub._ticker_to_symbol(exit_ticker),
-                                "settle", pos.side, float(pnl), exit_ticker,
-                                size_dollars=float(cost),
-                                signal_type=pos.strategy_tag,
-                            )
+                            try:
+                                ds.add_trade_result(
+                                    self._data_hub._ticker_to_symbol(exit_ticker),
+                                    "settle", pos.side, float(pnl), exit_ticker,
+                                    size_dollars=float(cost),
+                                    signal_type=pos.strategy_tag,
+                                    entry_price=float(pos.avg_entry_price),
+                                )
+                            except Exception:
+                                logger.warning("dashboard_trade_log_failed", ticker=exit_ticker)
                             # Log settlement to database
                             try:
                                 from src.data.models import CompletedTrade
@@ -1139,17 +1167,22 @@ class TradingBot:
                                 entry_price=float(pos.avg_entry_price),
                                 exit_price=sell_price,
                                 pnl=float(pnl),
-                                btc_price=float(pe_snap.btc_price) if pe_snap else None,
-                                eth_price=float(pe_snap.eth_price) if pe_snap and pe_snap.eth_price else None,
+                                spot_price=float(pe_snap.spot_price) if pe_snap else None,
                                 strike=float(pe_snap.strike_price) if pe_snap and pe_snap.strike_price else None,
                             )
                             self._risk_manager.record_trade(pnl)
-                            ds.add_trade_result(
-                                self._data_hub._ticker_to_symbol(pe_ticker),
-                                "pre_expiry", pos.side, float(pnl), pe_ticker,
-                                size_dollars=float(entry_cost),
-                                signal_type=pos.strategy_tag,
-                            )
+                            try:
+                                ds.add_trade_result(
+                                    self._data_hub._ticker_to_symbol(pe_ticker),
+                                    "pre_expiry", pos.side, float(pnl), pe_ticker,
+                                    size_dollars=float(entry_cost),
+                                    signal_type=pos.strategy_tag,
+                                    entry_price=float(pos.avg_entry_price),
+                                    spot_price=float(pe_snap.spot_price) if pe_snap else None,
+                                    strike=float(pe_snap.strike_price) if pe_snap and pe_snap.strike_price else None,
+                                )
+                            except Exception:
+                                logger.warning("dashboard_trade_log_failed", ticker=pe_ticker)
                             # Log pre-expiry exit to database
                             try:
                                 from src.data.models import CompletedTrade
@@ -1219,17 +1252,22 @@ class TradingBot:
                                 exit_price=sell_price,
                                 pnl=float(pnl),
                                 fee=float(sell_fee),
-                                btc_price=float(tp_snap.btc_price) if tp_snap else None,
-                                eth_price=float(tp_snap.eth_price) if tp_snap and tp_snap.eth_price else None,
+                                spot_price=float(tp_snap.spot_price) if tp_snap else None,
                                 strike=float(tp_snap.strike_price) if tp_snap and tp_snap.strike_price else None,
                             )
                             self._risk_manager.record_trade(pnl)
-                            ds.add_trade_result(
-                                self._data_hub._ticker_to_symbol(tp_ticker),
-                                "take_profit", pos.side, float(pnl), tp_ticker,
-                                size_dollars=float(entry_cost),
-                                signal_type=pos.strategy_tag,
-                            )
+                            try:
+                                ds.add_trade_result(
+                                    self._data_hub._ticker_to_symbol(tp_ticker),
+                                    "take_profit", pos.side, float(pnl), tp_ticker,
+                                    size_dollars=float(entry_cost),
+                                    signal_type=pos.strategy_tag,
+                                    entry_price=float(pos.avg_entry_price),
+                                    spot_price=float(tp_snap.spot_price) if tp_snap else None,
+                                    strike=float(tp_snap.strike_price) if tp_snap and tp_snap.strike_price else None,
+                                )
+                            except Exception:
+                                logger.warning("dashboard_trade_log_failed", ticker=tp_ticker)
                             # Log take-profit to database
                             try:
                                 from src.data.models import CompletedTrade
@@ -1305,17 +1343,22 @@ class TradingBot:
                                 exit_price=sell_price,
                                 pnl=float(pnl),
                                 fee=float(sell_fee),
-                                btc_price=float(sl_snap.btc_price) if sl_snap else None,
-                                eth_price=float(sl_snap.eth_price) if sl_snap and sl_snap.eth_price else None,
+                                spot_price=float(sl_snap.spot_price) if sl_snap else None,
                                 strike=float(sl_snap.strike_price) if sl_snap and sl_snap.strike_price else None,
                             )
                             self._risk_manager.record_trade(pnl)
-                            ds.add_trade_result(
-                                self._data_hub._ticker_to_symbol(sl_ticker),
-                                "stop_loss", pos.side, float(pnl), sl_ticker,
-                                size_dollars=float(entry_cost),
-                                signal_type=pos.strategy_tag,
-                            )
+                            try:
+                                ds.add_trade_result(
+                                    self._data_hub._ticker_to_symbol(sl_ticker),
+                                    "stop_loss", pos.side, float(pnl), sl_ticker,
+                                    size_dollars=float(entry_cost),
+                                    signal_type=pos.strategy_tag,
+                                    entry_price=float(pos.avg_entry_price),
+                                    spot_price=float(sl_snap.spot_price) if sl_snap else None,
+                                    strike=float(sl_snap.strike_price) if sl_snap and sl_snap.strike_price else None,
+                                )
+                            except Exception:
+                                logger.warning("dashboard_trade_log_failed", ticker=sl_ticker)
                             # Log stop-loss to database
                             try:
                                 from src.data.models import CompletedTrade
@@ -1400,12 +1443,19 @@ class TradingBot:
                                 pnl=float(pnl),
                             )
                             self._risk_manager.record_trade(pnl)
-                            ds.add_trade_result(
-                                self._data_hub._ticker_to_symbol(tb_ticker),
-                                "thesis_break", pos.side, float(pnl), tb_ticker,
-                                size_dollars=float(entry_cost),
-                                signal_type=pos.strategy_tag,
-                            )
+                            tb_snap = snapshots.get(tb_ticker)
+                            try:
+                                ds.add_trade_result(
+                                    self._data_hub._ticker_to_symbol(tb_ticker),
+                                    "thesis_break", pos.side, float(pnl), tb_ticker,
+                                    size_dollars=float(entry_cost),
+                                    signal_type=pos.strategy_tag,
+                                    entry_price=float(pos.avg_entry_price),
+                                    spot_price=float(tb_snap.spot_price) if tb_snap else None,
+                                    strike=float(tb_snap.strike_price) if tb_snap and tb_snap.strike_price else None,
+                                )
+                            except Exception:
+                                logger.warning("dashboard_trade_log_failed", ticker=tb_ticker)
                             # Log thesis-break exit to database
                             try:
                                 from src.data.models import CompletedTrade
@@ -1553,12 +1603,16 @@ class TradingBot:
                 expedited=True,
             )
             self._risk_manager.record_trade(pnl)
-            ds.add_trade_result(
-                self._data_hub._ticker_to_symbol(ticker),
-                "settle", pos.side, float(pnl), ticker,
-                size_dollars=float(cost),
-                signal_type=pos.strategy_tag,
-            )
+            try:
+                ds.add_trade_result(
+                    self._data_hub._ticker_to_symbol(ticker),
+                    "settle", pos.side, float(pnl), ticker,
+                    size_dollars=float(cost),
+                    signal_type=pos.strategy_tag,
+                    entry_price=float(pos.avg_entry_price),
+                )
+            except Exception:
+                logger.warning("dashboard_trade_log_failed", ticker=ticker)
             try:
                 from src.data.models import CompletedTrade
                 completed = CompletedTrade(

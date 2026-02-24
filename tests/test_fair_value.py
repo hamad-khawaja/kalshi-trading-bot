@@ -35,7 +35,7 @@ class TestComputeFairValue:
     def test_at_the_money(self):
         """When BTC is exactly at strike, fair value should be ~0.50."""
         fv = compute_fair_value(
-            btc_price=66000.0,
+            spot_price=66000.0,
             strike_price=66000.0,
             realized_vol=0.0001,
             time_to_expiry_seconds=600,
@@ -47,7 +47,7 @@ class TestComputeFairValue:
     def test_deep_in_the_money(self):
         """When BTC is well above strike, fair value should be high."""
         fv = compute_fair_value(
-            btc_price=67000.0,
+            spot_price=67000.0,
             strike_price=66000.0,
             realized_vol=0.0001,
             time_to_expiry_seconds=300,
@@ -59,7 +59,7 @@ class TestComputeFairValue:
     def test_deep_out_of_the_money(self):
         """When BTC is well below strike, fair value should be low."""
         fv = compute_fair_value(
-            btc_price=65000.0,
+            spot_price=65000.0,
             strike_price=66000.0,
             realized_vol=0.0001,
             time_to_expiry_seconds=300,
@@ -71,14 +71,14 @@ class TestComputeFairValue:
     def test_more_time_increases_uncertainty(self):
         """With more time, ATM option should stay near 0.50 but OTM gets closer to 0.50."""
         fv_short = compute_fair_value(
-            btc_price=65500.0,
+            spot_price=65500.0,
             strike_price=66000.0,
             realized_vol=0.0001,
             time_to_expiry_seconds=60,
             n_price_ticks=600,
         )
         fv_long = compute_fair_value(
-            btc_price=65500.0,
+            spot_price=65500.0,
             strike_price=66000.0,
             realized_vol=0.0001,
             time_to_expiry_seconds=900,
@@ -91,14 +91,14 @@ class TestComputeFairValue:
     def test_higher_vol_increases_uncertainty(self):
         """Higher vol should push OTM option closer to 0.50."""
         fv_low_vol = compute_fair_value(
-            btc_price=65500.0,
+            spot_price=65500.0,
             strike_price=66000.0,
             realized_vol=0.00005,
             time_to_expiry_seconds=300,
             n_price_ticks=3000,
         )
         fv_high_vol = compute_fair_value(
-            btc_price=65500.0,
+            spot_price=65500.0,
             strike_price=66000.0,
             realized_vol=0.0005,
             time_to_expiry_seconds=300,
@@ -112,7 +112,7 @@ class TestComputeFairValue:
         """Output should be clamped to [0.02, 0.98]."""
         # Very deep ITM
         fv = compute_fair_value(
-            btc_price=70000.0,
+            spot_price=70000.0,
             strike_price=60000.0,
             realized_vol=0.00001,
             time_to_expiry_seconds=60,
@@ -139,7 +139,7 @@ class TestComputeFairValueFromPrices:
         prices = prices + rng.normal(0, 5, len(prices))
 
         fv = compute_fair_value_from_prices(
-            btc_price=66200.0,
+            spot_price=66200.0,
             strike_price=66000.0,
             price_history=prices,
             time_to_expiry_seconds=600,
@@ -150,7 +150,7 @@ class TestComputeFairValueFromPrices:
     def test_insufficient_data(self):
         prices = np.array([66000.0] * 10)
         fv = compute_fair_value_from_prices(
-            btc_price=66000.0,
+            spot_price=66000.0,
             strike_price=66000.0,
             price_history=prices,
             time_to_expiry_seconds=300,
