@@ -95,16 +95,26 @@ class TrendContinuationDetector:
             }
             return None
 
-        # Check last N entries all have same result
-        recent = history[-min_streak:]
-        results = [entry.get("result") for entry in recent]
-        if not all(r == results[0] for r in results):
+        # Compute full streak length: walk from most recent, count consecutive same results
+        # History is ordered most-recent-first from the API
+        first_result = history[0].get("result")
+        streak_length = 0
+        for entry in history:
+            if entry.get("result") == first_result:
+                streak_length += 1
+            else:
+                break
+
+        if streak_length < min_streak:
             self.last_analysis = {
-                "decision": f"NO TREND: mixed results in last {min_streak}: {results}",
+                "decision": (
+                    f"NO TREND: streak {streak_length} "
+                    f"< min_streak {min_streak}"
+                ),
             }
             return None
 
-        streak_direction = results[0]  # "yes" or "no"
+        streak_direction = first_result  # "yes" or "no"
         if streak_direction not in ("yes", "no"):
             self.last_analysis = {
                 "decision": f"NO TREND: unknown result type '{streak_direction}'",
@@ -132,6 +142,37 @@ class TrendContinuationDetector:
                 ),
             }
             return None
+
+        # Technical confirmation gate for extended streaks (3+)
+        ext_thresh = cfg.trend_continuation_extended_streak_threshold
+        if streak_length >= ext_thresh:
+            passes, details = self._check_technical_confirmation(
+                features, streak_direction, cfg
+            )
+            if not passes:
+                self.last_analysis = {
+                    "decision": (
+                        f"NO TREND: technical confirmation failed "
+                        f"(streak={streak_length}, {details})"
+                    ),
+                    "streak_length": streak_length,
+                    "streak_direction": streak_direction,
+                }
+                logger.info(
+                    "trend_technical_confirmation_failed",
+                    ticker=ticker,
+                    streak_direction=streak_direction,
+                    streak_length=streak_length,
+                    **details,
+                )
+                return None
+            logger.info(
+                "trend_technical_confirmation_passed",
+                ticker=ticker,
+                streak_direction=streak_direction,
+                streak_length=streak_length,
+                **details,
+            )
 
         # Implied probability gate: must be in the valid range (not already extreme)
         ob = snapshot.orderbook
@@ -250,10 +291,10 @@ class TrendContinuationDetector:
         self.last_analysis = {
             "decision": (
                 f"TREND: buy {side.upper()} "
-                f"edge={net_edge:.4f} streak={min_streak}"
+                f"edge={net_edge:.4f} streak={streak_length}"
             ),
             "streak_direction": streak_direction,
-            "streak_length": min_streak,
+            "streak_length": streak_length,
             "raw_edge": round(raw_edge, 4),
             "net_edge": round(net_edge, 4),
             "fee_drag": round(fee_drag, 4),
@@ -269,7 +310,7 @@ class TrendContinuationDetector:
             ticker=ticker,
             side=side,
             streak_direction=streak_direction,
-            streak_length=min_streak,
+            streak_length=streak_length,
             net_edge=round(net_edge, 4),
             implied=round(implied, 4),
             phase=snapshot.window_phase,
@@ -291,6 +332,72 @@ class TrendContinuationDetector:
             signal_type="trend_continuation",
             entry_zone=EdgeDetector.classify_zone(trade_price),
         )
+
+    @staticmethod
+    def _check_technical_confirmation(
+        features: FeatureVector,
+        streak_direction: str,
+        cfg: StrategyConfig,
+    ) -> tuple[bool, dict]:
+        """Check 4 technical signals to confirm an extended streak (3+).
+
+        Returns (passes, details) where passes is True if enough signals confirm.
+        """
+        rsi_thresh = cfg.trend_continuation_rsi_extreme_threshold
+        confirmations = 0
+        signals: dict[str, bool] = {}
+
+        # 1. RSI: not overbought for YES streak, not oversold for NO streak
+        rsi = features.rsi_14
+        if streak_direction == "yes":
+            rsi_ok = rsi < rsi_thresh
+        else:
+            rsi_ok = rsi > (100.0 - rsi_thresh)
+        signals["rsi_ok"] = rsi_ok
+        if rsi_ok:
+            confirmations += 1
+
+        # 2. Orderbook depth imbalance: positive favours YES, negative favours NO
+        ob_imb = features.orderbook_depth_imbalance
+        if streak_direction == "yes":
+            ob_ok = ob_imb > 0.0
+        else:
+            ob_ok = ob_imb < 0.0
+        signals["ob_imbalance_ok"] = ob_ok
+        if ob_ok:
+            confirmations += 1
+
+        # 3. Volume-weighted momentum: positive favours YES, negative favours NO
+        vwm = features.volume_weighted_momentum
+        if streak_direction == "yes":
+            vwm_ok = vwm > 0.0
+        else:
+            vwm_ok = vwm < 0.0
+        signals["vw_momentum_ok"] = vwm_ok
+        if vwm_ok:
+            confirmations += 1
+
+        # 4. Taker buy/sell ratio: positive = net buying (YES), negative = net selling (NO)
+        taker = features.taker_buy_sell_ratio
+        if streak_direction == "yes":
+            taker_ok = taker > 0.0
+        else:
+            taker_ok = taker < 0.0
+        signals["taker_ok"] = taker_ok
+        if taker_ok:
+            confirmations += 1
+
+        details = {
+            "confirmations": confirmations,
+            "min_required": cfg.trend_continuation_min_confirming_signals,
+            "rsi": round(rsi, 2),
+            "ob_imbalance": round(ob_imb, 4),
+            "vw_momentum": round(vwm, 6),
+            "taker_ratio": round(taker, 4),
+            **signals,
+        }
+        passes = confirmations >= cfg.trend_continuation_min_confirming_signals
+        return passes, details
 
     def mark_entered(self, ticker: str) -> None:
         """Mark a market as entered after a confirmed fill."""
