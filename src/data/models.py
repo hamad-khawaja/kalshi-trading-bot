@@ -51,6 +51,13 @@ class Orderbook(BaseModel):
         return None
 
     @property
+    def best_no_ask(self) -> Decimal | None:
+        """Best ask for NO = 1 - best YES bid."""
+        if self.best_yes_bid is not None:
+            return Decimal("1") - self.best_yes_bid
+        return None
+
+    @property
     def implied_yes_prob(self) -> Decimal | None:
         """Midpoint of YES bid/ask as implied probability."""
         bid = self.best_yes_bid
