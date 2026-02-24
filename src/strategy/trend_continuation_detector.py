@@ -95,8 +95,9 @@ class TrendContinuationDetector:
             }
             return None
 
-        # Check last N entries all have same result
-        recent = history[-min_streak:]
+        # Check most recent N entries all have same result
+        # History is ordered most-recent-first from the API
+        recent = history[:min_streak]
         results = [entry.get("result") for entry in recent]
         if not all(r == results[0] for r in results):
             self.last_analysis = {
