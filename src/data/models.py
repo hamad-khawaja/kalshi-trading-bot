@@ -256,6 +256,7 @@ class CompletedTrade(BaseModel):
     implied_probability: float | None = None
     strategy_tag: str = "directional"
     market_volume: int | None = None
+    won: bool | None = None
 
 
 class FeatureVector(BaseModel):

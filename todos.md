@@ -32,7 +32,8 @@ Implemented: after a stop loss, block directional/settlement ride re-entry for t
 
 ### Model & Strategy
 
-- [ ] **Calibration tracking** — Log predicted probability vs actual settlement outcome; track calibration curve over hundreds of trades
+- [x] **Calibration tracking** — Log predicted probability vs actual settlement outcome; track calibration curve over hundreds of trades
+- [ ] **Auto-calibration** — Feedback loop that reads calibration data from DB and auto-adjusts heuristic model signal weights to reduce Brier score / ECE
 - [ ] **Regime detection** — Detect market microstructure changes (liquidity drying up, spread widening) beyond vol regimes
 - [ ] **Backtest framework** — Replay historical data through the strategy pipeline to validate changes before deploying
 
@@ -44,7 +45,7 @@ Implemented: after a stop loss, block directional/settlement ride re-entry for t
 
 ### Testing
 
-- [ ] **Integration tests against paper mode** — End-to-end flow test: connect → scan → signal → order → fill → exit
+- [x] **Integration tests against paper mode** — End-to-end flow test: connect → scan → signal → order → fill → exit
 - [ ] **Chaos testing** — Simulate feed disconnects, API timeouts, partial fills, and order rejections to verify graceful degradation
 
 ---

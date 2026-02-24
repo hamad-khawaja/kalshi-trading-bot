@@ -41,6 +41,8 @@ class PositionState:
         self.high_water_bid: Decimal | None = None  # Best bid seen since entry
         self.strategy_tag: str = ""  # "settlement_ride" = hold to settlement, skip all exits
         self.strike_price: Decimal | None = None  # Cached for paper settlement
+        self.model_probability: float | None = None  # Cached for calibration tracking
+        self.implied_probability: float | None = None  # Cached for calibration tracking
 
     @property
     def exposure_dollars(self) -> Decimal:
@@ -113,6 +115,8 @@ class PositionTracker:
                 entry_time=now,
             )
             new_pos.strategy_tag = signal.signal_type
+            new_pos.model_probability = signal.model_probability
+            new_pos.implied_probability = signal.implied_probability
             new_pos.order_ids.append(order_state.order_id)
             self._positions[ticker] = new_pos
         elif existing.side == signal.side:

@@ -840,6 +840,7 @@ class TradingBot:
                             entry_time=datetime.now(timezone.utc),
                             strategy_tag=signal_item.signal_type,
                             market_volume=local_market.get("volume"),
+                            won=None,
                         )
                         await self._db.insert_trade(completed)
                     except Exception:
@@ -1011,6 +1012,16 @@ class TradingBot:
                                     fees=float(pos.fees_paid),
                                     pnl=float(pnl),
                                 )
+                                logger.info(
+                                    "calibration_data_point",
+                                    ticker=exit_ticker,
+                                    side=pos.side,
+                                    model_probability=pos.model_probability,
+                                    implied_probability=pos.implied_probability,
+                                    won=won,
+                                    signal_type=pos.strategy_tag,
+                                    entry_price=float(pos.avg_entry_price),
+                                )
                                 self._risk_manager.record_trade(pnl)
                                 try:
                                     ds.add_trade_result(
@@ -1038,6 +1049,9 @@ class TradingBot:
                                         exit_time=datetime.now(timezone.utc),
                                         strategy_tag=pos.strategy_tag,
                                         market_volume=exit_volume,
+                                        model_probability=pos.model_probability,
+                                        implied_probability=pos.implied_probability,
+                                        won=won,
                                     )
                                     await self._db.insert_trade(completed)
                                 except Exception:
@@ -1087,6 +1101,16 @@ class TradingBot:
                                 pnl=float(pnl),
                                 market_volume=exit_volume,
                             )
+                            logger.info(
+                                "calibration_data_point",
+                                ticker=exit_ticker,
+                                side=pos.side,
+                                model_probability=pos.model_probability,
+                                implied_probability=pos.implied_probability,
+                                won=won if yes_wins is not None else None,
+                                signal_type=pos.strategy_tag,
+                                entry_price=float(pos.avg_entry_price),
+                            )
                             self._risk_manager.record_trade(pnl)
                             try:
                                 ds.add_trade_result(
@@ -1114,6 +1138,9 @@ class TradingBot:
                                     exit_time=datetime.now(timezone.utc),
                                     strategy_tag=pos.strategy_tag,
                                     market_volume=exit_volume,
+                                    model_probability=pos.model_probability,
+                                    implied_probability=pos.implied_probability,
+                                    won=won if yes_wins is not None else None,
                                 )
                                 await self._db.insert_trade(completed)
                             except Exception:
@@ -1205,6 +1232,8 @@ class TradingBot:
                                     exit_time=datetime.now(timezone.utc),
                                     strategy_tag=pos.strategy_tag,
                                     market_volume=pe_snap.volume if pe_snap else None,
+                                    model_probability=pos.model_probability,
+                                    implied_probability=pos.implied_probability,
                                 )
                                 await self._db.insert_trade(completed)
                             except Exception:
@@ -1290,6 +1319,8 @@ class TradingBot:
                                     exit_time=datetime.now(timezone.utc),
                                     strategy_tag=pos.strategy_tag,
                                     market_volume=tp_snap.volume if tp_snap else None,
+                                    model_probability=pos.model_probability,
+                                    implied_probability=pos.implied_probability,
                                 )
                                 await self._db.insert_trade(completed)
                             except Exception:
@@ -1381,6 +1412,8 @@ class TradingBot:
                                     exit_time=datetime.now(timezone.utc),
                                     strategy_tag=pos.strategy_tag,
                                     market_volume=sl_snap.volume if sl_snap else None,
+                                    model_probability=pos.model_probability,
+                                    implied_probability=pos.implied_probability,
                                 )
                                 await self._db.insert_trade(completed)
                             except Exception:
@@ -1478,6 +1511,8 @@ class TradingBot:
                                     exit_time=datetime.now(timezone.utc),
                                     strategy_tag=pos.strategy_tag,
                                     market_volume=tb_snap.volume if tb_snap else None,
+                                    model_probability=pos.model_probability,
+                                    implied_probability=pos.implied_probability,
                                 )
                                 await self._db.insert_trade(completed)
                             except Exception:
@@ -1607,6 +1642,16 @@ class TradingBot:
                 pnl=float(pnl),
                 expedited=True,
             )
+            logger.info(
+                "calibration_data_point",
+                ticker=ticker,
+                side=pos.side,
+                model_probability=pos.model_probability,
+                implied_probability=pos.implied_probability,
+                won=won,
+                signal_type=pos.strategy_tag,
+                entry_price=float(pos.avg_entry_price),
+            )
             self._risk_manager.record_trade(pnl)
             try:
                 ds.add_trade_result(
@@ -1633,6 +1678,9 @@ class TradingBot:
                     exit_time=datetime.now(timezone.utc),
                     strategy_tag=pos.strategy_tag,
                     market_volume=market_volume,
+                    model_probability=pos.model_probability,
+                    implied_probability=pos.implied_probability,
+                    won=won,
                 )
                 await self._db.insert_trade(completed)
             except Exception:
