@@ -73,9 +73,8 @@ strategy:
   # Pre-expiry exit: only exit if profitable or near-breakeven (don't sell losers at rock bottom)
   pre_expiry_exit_min_pnl_cents: -0.03  # Only pre-expiry exit if PnL >= -$0.03/contract
   # Entry filters
-  min_entry_price: 0.30             # Block entries below $0.30 (robustness baseline)
-  asset_min_entry_price:
-    ETH: 0.40                         # ETH: 1% WR below $0.20, 18% WR at $0.20-0.40 — raise floor
+  min_entry_price: 0.40             # Block entries below $0.40 (3% WR below this, 100% above)
+  asset_min_entry_price: {}           # Global floor covers both BTC and ETH now
   yes_side_edge_multiplier: 1.4     # Require 40% more edge for YES entries (robustness baseline)
   no_side_edge_multiplier: 1.5      # NO side 16.7% WR — model fights market, require 50% more edge
   asset_edge_multipliers:
