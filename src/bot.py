@@ -788,6 +788,7 @@ class TradingBot:
                         cycle=self._cycle_count,
                         btc_price=float(local_snapshot.btc_price),
                         eth_price=float(local_snapshot.eth_price) if local_snapshot.eth_price else None,
+                        strike=float(local_snapshot.strike_price) if local_snapshot.strike_price else None,
                     )
                     # Log MM fill event for immediate market-making fills
                     if signal_item.signal_type == "market_making":
@@ -1140,6 +1141,7 @@ class TradingBot:
                                 pnl=float(pnl),
                                 btc_price=float(pe_snap.btc_price) if pe_snap else None,
                                 eth_price=float(pe_snap.eth_price) if pe_snap and pe_snap.eth_price else None,
+                                strike=float(pe_snap.strike_price) if pe_snap and pe_snap.strike_price else None,
                             )
                             self._risk_manager.record_trade(pnl)
                             ds.add_trade_result(
@@ -1219,6 +1221,7 @@ class TradingBot:
                                 fee=float(sell_fee),
                                 btc_price=float(tp_snap.btc_price) if tp_snap else None,
                                 eth_price=float(tp_snap.eth_price) if tp_snap and tp_snap.eth_price else None,
+                                strike=float(tp_snap.strike_price) if tp_snap and tp_snap.strike_price else None,
                             )
                             self._risk_manager.record_trade(pnl)
                             ds.add_trade_result(
@@ -1304,6 +1307,7 @@ class TradingBot:
                                 fee=float(sell_fee),
                                 btc_price=float(sl_snap.btc_price) if sl_snap else None,
                                 eth_price=float(sl_snap.eth_price) if sl_snap and sl_snap.eth_price else None,
+                                strike=float(sl_snap.strike_price) if sl_snap and sl_snap.strike_price else None,
                             )
                             self._risk_manager.record_trade(pnl)
                             ds.add_trade_result(
