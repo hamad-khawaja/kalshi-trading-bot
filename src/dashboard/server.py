@@ -78,13 +78,18 @@ class DashboardState:
         # BTC killswitch (disable all BTC trading from dashboard)
         self.btc_disabled: bool = False
 
+        # Startup config snapshot (displayed in Settings tab)
+        self.startup_config: dict[str, Any] = {}
+
         # Per-strategy toggles (runtime control from dashboard)
         self.strategy_toggles: dict[str, bool] = {
             "directional": True,
             "fomo": True,
             "certainty_scalp": True,
             "settlement_ride": True,
+            "trend_continuation": True,
             "market_making": True,
+            "phase_filter": True,
             "trend_guard": True,
             "mm_vol_filter": True,
         }
@@ -171,6 +176,7 @@ class DashboardState:
             "eth_disabled": self.eth_disabled,
             "btc_disabled": self.btc_disabled,
             "strategy_toggles": self.strategy_toggles,
+            "startup_config": self.startup_config,
         }
         return json.dumps(payload, default=str)
 

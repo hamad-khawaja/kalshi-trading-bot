@@ -263,6 +263,7 @@ class KalshiRestClient:
                 "title": m.get("title", ""),
                 "yes_sub_title": m.get("yes_sub_title", ""),
                 "result": m.get("result", ""),
+                "open_time": m.get("open_time", ""),
                 "close_time": m.get("close_time", ""),
                 "volume": m.get("volume", 0),
             })

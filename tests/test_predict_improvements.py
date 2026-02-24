@@ -41,9 +41,8 @@ class TestSignalWeights:
             + HeuristicModel.LIQUIDATION_WEIGHT
             + HeuristicModel.FUNDING_DIVERGENCE_WEIGHT
             + HeuristicModel.LIQUIDATION_RATIO_WEIGHT
-            + HeuristicModel.MC_SIGNAL_WEIGHT
         )
-        assert total == pytest.approx(1.07, abs=0.001)
+        assert total == pytest.approx(1.01, abs=0.001)
 
     def test_proven_signals_dominate(self):
         """Proven signals (momentum + technical) should be >= 56%."""
@@ -452,14 +451,14 @@ class TestWiderProbabilityRange:
 
     # --- Constants ---
 
-    def test_max_adjustment_is_022(self):
-        assert HeuristicModel.MAX_ADJUSTMENT == 0.22
+    def test_max_adjustment_is_026(self):
+        assert HeuristicModel.MAX_ADJUSTMENT == 0.26
 
     def test_strong_momentum_max_adjustment_is_045(self):
         assert HeuristicModel.STRONG_MOMENTUM_MAX_ADJUSTMENT == 0.45
 
-    def test_market_anchor_weight_is_045(self):
-        assert HeuristicModel.MARKET_ANCHOR_WEIGHT == 0.45
+    def test_market_anchor_weight_is_035(self):
+        assert HeuristicModel.MARKET_ANCHOR_WEIGHT == 0.35
 
     # --- Graduated override interpolation ---
 

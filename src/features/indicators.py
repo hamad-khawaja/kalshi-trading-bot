@@ -338,3 +338,97 @@ def orderbook_top_concentration(
     no_conc = _concentration(no_levels)
 
     return float(yes_conc - no_conc)
+
+
+def orderbook_support_resistance(
+    yes_levels: list, no_levels: list, implied_yes_prob: float,
+) -> tuple[float, float, float]:
+    """Detect support/resistance walls and their proximity to current price.
+
+    Finds the largest order on each side and scores by strength and distance.
+
+    Returns (sr_signal, wall_distance, wall_strength):
+    - sr_signal [-1, 1]: positive = strong nearby support (bullish),
+      negative = nearby resistance (bearish)
+    - wall_distance [-1, 1]: positive = closer to resistance,
+      negative = closer to support
+    - wall_strength [0, 1]: max wall concentration on either side
+    """
+    if not yes_levels and not no_levels:
+        return (0.0, 0.0, 0.0)
+
+    decay_threshold = 0.20  # Walls beyond 20c decay to zero impact
+
+    # --- Support: largest YES bid wall below implied price ---
+    support_score = 0.0
+    support_distance = 0.0
+    if yes_levels:
+        total_yes = sum(
+            level.quantity if hasattr(level, "quantity") else 0
+            for level in yes_levels
+        )
+        if total_yes > 0:
+            best = max(yes_levels, key=lambda lv: lv.quantity if hasattr(lv, "quantity") else 0)
+            wall_price = float(best.price_dollars)
+            wall_qty = best.quantity if hasattr(best, "quantity") else 0
+            support_strength = wall_qty / total_yes
+            support_distance = abs(implied_yes_prob - wall_price)
+            support_score = support_strength * max(0.0, 1.0 - support_distance / decay_threshold)
+
+    # --- Resistance: largest NO bid wall → YES ceiling at 1 - no_wall_price ---
+    resistance_score = 0.0
+    resistance_distance = 0.0
+    if no_levels:
+        total_no = sum(
+            level.quantity if hasattr(level, "quantity") else 0
+            for level in no_levels
+        )
+        if total_no > 0:
+            best = max(no_levels, key=lambda lv: lv.quantity if hasattr(lv, "quantity") else 0)
+            wall_price_no = float(best.price_dollars)
+            resistance_price = 1.0 - wall_price_no  # Convert to YES ceiling
+            wall_qty = best.quantity if hasattr(best, "quantity") else 0
+            resistance_strength = wall_qty / total_no
+            resistance_distance = abs(resistance_price - implied_yes_prob)
+            resistance_score = resistance_strength * max(
+                0.0, 1.0 - resistance_distance / decay_threshold
+            )
+
+    sr_signal = float(np.clip(support_score - resistance_score, -1.0, 1.0))
+
+    # Wall distance: positive = closer to resistance, negative = closer to support
+    if support_distance + resistance_distance > 0:
+        wall_distance = float(np.clip(
+            (support_distance - resistance_distance)
+            / max(support_distance, resistance_distance),
+            -1.0, 1.0,
+        ))
+    else:
+        wall_distance = 0.0
+
+    # Wall strength: max concentration on either side
+    wall_strength = 0.0
+    if yes_levels:
+        total_yes = sum(
+            level.quantity if hasattr(level, "quantity") else 0
+            for level in yes_levels
+        )
+        if total_yes > 0:
+            max_yes = max(
+                (level.quantity if hasattr(level, "quantity") else 0)
+                for level in yes_levels
+            )
+            wall_strength = max(wall_strength, max_yes / total_yes)
+    if no_levels:
+        total_no = sum(
+            level.quantity if hasattr(level, "quantity") else 0
+            for level in no_levels
+        )
+        if total_no > 0:
+            max_no = max(
+                (level.quantity if hasattr(level, "quantity") else 0)
+                for level in no_levels
+            )
+            wall_strength = max(wall_strength, max_no / total_no)
+
+    return (sr_signal, wall_distance, wall_strength)

@@ -17,6 +17,7 @@ from src.features.indicators import (
     momentum,
     order_flow_imbalance,
     orderbook_depth_imbalance,
+    orderbook_support_resistance,
     orderbook_top_concentration,
     rate_of_change_acceleration,
     rsi,
@@ -112,6 +113,9 @@ class FeatureEngine:
             ob.yes_levels, ob.no_levels, max_depth=5
         )
         ob_top_conc = orderbook_top_concentration(ob.yes_levels, ob.no_levels)
+        sr_signal, wall_dist, wall_strength = orderbook_support_resistance(
+            ob.yes_levels, ob.no_levels, implied_prob,
+        )
 
         # Settlement bias from recent Kalshi outcomes
         asset_symbol = self._extract_asset_symbol(snapshot.market_ticker)
@@ -140,6 +144,9 @@ class FeatureEngine:
             volume_weighted_momentum=vol_mom,
             orderbook_depth_imbalance=ob_depth,
             orderbook_top_concentration=ob_top_conc,
+            orderbook_support_resistance=sr_signal,
+            orderbook_wall_distance=wall_dist,
+            orderbook_wall_strength=wall_strength,
             cross_exchange_spread=snapshot.cross_exchange_spread or 0.0,
             cross_exchange_lead=snapshot.cross_exchange_lead or 0.0,
             taker_buy_sell_ratio=self._compute_taker_ratio(snapshot),

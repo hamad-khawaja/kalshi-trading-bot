@@ -14,6 +14,7 @@ from src.risk.volatility import VolatilityTracker
 from src.strategy.edge_detector import EdgeDetector
 from src.strategy.fomo_detector import FomoDetector
 from src.strategy.market_maker import MarketMaker
+from src.strategy.trend_continuation_detector import TrendContinuationDetector
 
 logger = structlog.get_logger()
 
@@ -23,11 +24,12 @@ class SignalCombiner:
 
     Priority rules:
     1. Strong directional signal -> trade directionally (MM can run alongside)
-    2. FOMO signal -> buy underpriced side during retail panic
-    3. Certainty scalp -> near-certain outcome in last 3 min
-    4. Settlement ride -> late-window hold-to-settlement
-    5. Market making -> spread capture (standalone or alongside directional)
-    6. Time-to-expiry filter: no new trades within 60s of expiry
+    2. Trend continuation -> early-window entry during persistent settlement streaks
+    3. FOMO signal -> buy underpriced side during retail panic
+    4. Certainty scalp -> near-certain outcome in last 3 min
+    5. Settlement ride -> late-window hold-to-settlement
+    6. Market making -> spread capture (standalone or alongside directional)
+    7. Time-to-expiry filter: no new trades within 60s of expiry
     """
 
     MIN_TIME_TO_TRADE_SECONDS = 60.0  # No new positions < 60s to expiry
@@ -38,6 +40,7 @@ class SignalCombiner:
         config: StrategyConfig,
         vol_tracker: VolatilityTracker | None = None,
         time_profiler: TimeProfiler | None = None,
+        settlement_history: dict | None = None,
     ):
         self._config = config
         self._time_profiler = time_profiler
@@ -46,6 +49,9 @@ class SignalCombiner:
         )
         self._fomo_detector = FomoDetector(config)
         self._market_maker = MarketMaker(config, vol_tracker=vol_tracker)
+        self._trend_detector = TrendContinuationDetector(
+            config, settlement_history if settlement_history is not None else {}
+        )
         # Edge persistence: track consecutive cycles with same-side edge
         self._edge_streak: dict[str, tuple[str, int]] = {}  # ticker → (side, count)
         # Phase 1 overreaction state: ticker → {direction, extreme}
@@ -90,6 +96,12 @@ class SignalCombiner:
         # Time-to-expiry gate
         if snapshot.time_to_expiry_seconds < self.MIN_TIME_TO_TRADE_SECONDS:
             self.last_block_reasons.append("ttx_too_low")
+            logger.debug(
+                "ttx_gate_blocked",
+                ticker=snapshot.market_ticker,
+                ttx=round(snapshot.time_to_expiry_seconds, 1),
+                min_ttx=self.MIN_TIME_TO_TRADE_SECONDS,
+            )
             return []
 
         signals: list[TradeSignal] = []
@@ -160,7 +172,7 @@ class SignalCombiner:
             # (skip 15s — too noisy) with a magnitude threshold to ignore
             # near-zero values that are effectively noise.
             if features is not None and self._config.trend_guard_enabled:
-                trend_min_magnitude = 0.0001  # ~0.01% move
+                trend_min_magnitude = 0.0005  # Hybrid: ~0.05% move (was 0.0001, filters noise)
                 momentums = [
                     features.momentum_60s,
                     features.momentum_180s,
@@ -335,9 +347,28 @@ class SignalCombiner:
             if ticker in self._edge_streak:
                 del self._edge_streak[ticker]
 
-        # 2. FOMO / certainty / settlement — only when no directional signal
+        # 2. Trend continuation / FOMO / certainty / settlement — only when no directional signal
         if not signals:
-            # 2a. Check for FOMO signal (second priority)
+            # 2a. Check for trend continuation (enters early in window during streaks)
+            if (
+                self._config.trend_continuation_enabled
+                and features is not None
+                and not quiet_hours_active
+            ):
+                trend_signal = self._trend_detector.detect(
+                    prediction, features, snapshot, current_position=current_position,
+                )
+                if trend_signal is not None:
+                    signals.append(trend_signal)
+                    logger.debug(
+                        "signal_trend_continuation",
+                        ticker=snapshot.market_ticker,
+                        side=trend_signal.side,
+                        net_edge=trend_signal.net_edge,
+                    )
+                    return signals
+
+            # 2b. Check for FOMO signal
             if self._config.fomo_enabled and features is not None:
                 fomo_signal = self._fomo_detector.detect(prediction, features, snapshot)
                 if fomo_signal is not None:

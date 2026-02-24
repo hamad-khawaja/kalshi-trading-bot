@@ -80,6 +80,7 @@ a{color:#58a6ff}
 .trade-tag.fomo{background:#2a2a1a;color:#d29922}
 .trade-tag.market-making{background:#1a2a1a;color:#3fb950}
 .trade-tag.averaging{background:#2a1a1a;color:#f0883e}
+.trade-tag.trend-continuation{background:#1a2a2a;color:#79c0ff}
 .toggle-wrap{display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none}
 .toggle-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;min-width:54px}
 .toggle-label.active{color:#3fb950}
@@ -158,6 +159,7 @@ a{color:#58a6ff}
 .type-tag.certainty_scalp{background:#1a2a2a;color:#56d4dd}
 .type-tag.market_making{background:#1a2a1a;color:#3fb950}
 .type-tag.averaging{background:#2a1a1a;color:#f0883e}
+.type-tag.trend_continuation{background:#1a2a2a;color:#79c0ff}
 .type-tag.stop_loss{background:#2a1a1a;color:#f85149}
 .type-tag.take_profit{background:#1a3a1a;color:#3fb950}
 .type-tag.settle{background:#1a1a2a;color:#8b949e}
@@ -175,6 +177,14 @@ a{color:#58a6ff}
 .strategy-bar .toggle-knob{width:10px;height:10px;top:2px}
 .strategy-bar .toggle-track.active .toggle-knob{left:18px}
 .strategy-bar .toggle-track.paused .toggle-knob{left:2px}
+/* Settings view */
+#settings-view{display:none;padding:16px}
+.settings-section{margin-bottom:16px}
+.settings-section h3{font-size:12px;text-transform:uppercase;color:#58a6ff;margin-bottom:6px;letter-spacing:0.5px;font-weight:600}
+.settings-grid{display:grid;grid-template-columns:1fr 1fr;gap:2px}
+.setting-row{display:flex;justify-content:space-between;padding:4px 8px;background:#161b22;border-radius:3px;font-size:12px}
+.setting-key{color:#8b949e}
+.setting-val{color:#c9d1d9;font-weight:500;max-width:60%;text-align:right;word-break:break-all}
 </style>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
@@ -216,6 +226,7 @@ a{color:#58a6ff}
 <div class="nav-bar">
   <button class="nav-btn active" data-view="dashboard" onclick="switchView('dashboard')">Dashboard</button>
   <button class="nav-btn" data-view="trades" onclick="switchView('trades')">Trades</button>
+  <button class="nav-btn" data-view="settings" onclick="switchView('settings')">Settings</button>
 </div>
 
 <div class="strategy-bar" id="strategy-bar">
@@ -236,11 +247,19 @@ a{color:#58a6ff}
     <span class="toggle-label active">SETT</span>
     <div class="toggle-track active"><div class="toggle-knob"></div></div>
   </div>
+  <div class="toggle-wrap" data-strategy="trend_continuation" onclick="toggleStrategy('trend_continuation')">
+    <span class="toggle-label active">TREND-C</span>
+    <div class="toggle-track active"><div class="toggle-knob"></div></div>
+  </div>
   <div class="toggle-wrap" data-strategy="market_making" onclick="toggleStrategy('market_making')">
     <span class="toggle-label active">MM</span>
     <div class="toggle-track active"><div class="toggle-knob"></div></div>
   </div>
   <span class="strat-label" style="margin-left:8px">Guards:</span>
+  <div class="toggle-wrap" data-strategy="phase_filter" onclick="toggleStrategy('phase_filter')">
+    <span class="toggle-label active">PHASE</span>
+    <div class="toggle-track active"><div class="toggle-knob"></div></div>
+  </div>
   <div class="toggle-wrap" data-strategy="trend_guard" onclick="toggleStrategy('trend_guard')">
     <span class="toggle-label active">TREND</span>
     <div class="toggle-track active"><div class="toggle-knob"></div></div>
@@ -460,6 +479,7 @@ a{color:#58a6ff}
     <button class="chart-btn" data-strategy="market_making" onclick="filterStrategy('market_making')">Market Making</button>
     <button class="chart-btn" data-strategy="certainty_scalp" onclick="filterStrategy('certainty_scalp')">Certainty Scalp</button>
     <button class="chart-btn" data-strategy="averaging" onclick="filterStrategy('averaging')">Averaging</button>
+    <button class="chart-btn" data-strategy="trend_continuation" onclick="filterStrategy('trend_continuation')">Trend Cont.</button>
     <span style="flex:1"></span>
     <button class="chart-btn" onclick="refreshTrades()" style="border-color:#58a6ff;color:#58a6ff">Refresh</button>
   </div>
@@ -475,6 +495,10 @@ a{color:#58a6ff}
       <tbody id="trade-table-body"></tbody>
     </table>
   </div>
+</div>
+
+<div id="settings-view">
+  <div id="settings-content"></div>
 </div>
 
 <script>
@@ -767,7 +791,7 @@ a{color:#58a6ff}
           const arrow = isYes ? '\\u25B2' : '\\u25BC';
           const cls = isYes ? 'yes' : 'no';
           const label = m.result.toUpperCase();
-          const time = m.close_time ? new Date(m.close_time).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',timeZone:'America/New_York'}) : '';
+          const time = (m.open_time || m.close_time) ? new Date(m.open_time || m.close_time).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',timeZone:'America/New_York'}) : '';
           return '<span class="settle-badge ' + cls + '">' + arrow + label + ' ' + time + '</span>';
         }).join('');
       }
@@ -1139,8 +1163,42 @@ a{color:#58a6ff}
     });
     $('dashboard-view').style.display = view === 'dashboard' ? '' : 'none';
     $('chart-view').style.display = view === 'trades' ? 'block' : 'none';
+    $('settings-view').style.display = view === 'settings' ? 'block' : 'none';
     if (view === 'trades' && allTrades.length === 0) refreshTrades();
+    if (view === 'settings') renderSettings();
   };
+
+  // ===== Settings renderer =====
+  function renderSettings() {
+    const cfg = latestState && latestState.startup_config;
+    if (!cfg || Object.keys(cfg).length === 0) {
+      $('settings-content').innerHTML = '<p style="color:#8b949e">No config data available</p>';
+      return;
+    }
+    let html = '';
+    for (const [section, values] of Object.entries(cfg)) {
+      if (section === 'mode') {
+        html += '<div class="settings-section"><h3>Mode</h3>' +
+          '<div class="setting-row"><span class="setting-key">mode</span>' +
+          '<span class="setting-val">' + values + '</span></div></div>';
+        continue;
+      }
+      if (typeof values !== 'object' || values === null) {
+        html += '<div class="settings-section"><h3>' + section + '</h3>' +
+          '<div class="setting-row"><span class="setting-key">' + section + '</span>' +
+          '<span class="setting-val">' + values + '</span></div></div>';
+        continue;
+      }
+      html += '<div class="settings-section"><h3>' + section + '</h3><div class="settings-grid">';
+      for (const [k, v] of Object.entries(values)) {
+        const display = (typeof v === 'object' && v !== null) ? JSON.stringify(v) : String(v);
+        html += '<div class="setting-row"><span class="setting-key">' + k + '</span>' +
+          '<span class="setting-val">' + display + '</span></div>';
+      }
+      html += '</div></div>';
+    }
+    $('settings-content').innerHTML = html;
+  }
 
   // ===== Trade chart =====
   let allTrades = [];
@@ -1157,6 +1215,7 @@ a{color:#58a6ff}
     market_making: '#3fb950',
     certainty_scalp: '#56d4dd',
     averaging: '#f0883e',
+    trend_continuation: '#79c0ff',
   };
   const STRAT_LABELS = {
     directional: 'Directional',
@@ -1165,6 +1224,7 @@ a{color:#58a6ff}
     market_making: 'Market Making',
     certainty_scalp: 'Certainty Scalp',
     averaging: 'Averaging',
+    trend_continuation: 'Trend Cont.',
   };
 
   window.filterChart = function(filter) {

@@ -226,6 +226,7 @@ class TradeSignal(BaseModel):
     signal_type: Literal[
         "directional", "market_making", "fomo",
         "averaging", "settlement_ride", "certainty_scalp",
+        "trend_continuation",
     ] = "directional"
     entry_zone: int = 0  # Risk zone 1-5 (0 = unknown/MM)
     post_only: bool | None = None  # Override: True=maker, False=taker, None=default
@@ -275,6 +276,9 @@ class FeatureVector(BaseModel):
     volume_weighted_momentum: float = 0.0
     orderbook_depth_imbalance: float = 0.0
     orderbook_top_concentration: float = 0.0  # [-1, 1]: top-level volume concentration imbalance
+    orderbook_support_resistance: float = 0.0  # [-1,1]: nearby support(+) / resistance(-)
+    orderbook_wall_distance: float = 0.0  # [-1, 1]: positive = closer to resistance
+    orderbook_wall_strength: float = 0.0  # [0, 1]: max wall concentration on either side
     cross_exchange_spread: float = 0.0
     cross_exchange_lead: float = 0.0
     taker_buy_sell_ratio: float = 0.0
@@ -292,8 +296,6 @@ class FeatureVector(BaseModel):
     window_phase: int = 0  # 1-5
     hour_of_day_sin: float = 0.0
     hour_of_day_cos: float = 0.0
-    mc_probability: float = 0.5   # MC simulation P(YES), default neutral
-    mc_confidence: float = 0.0    # MC bootstrap confidence, default zero (disabled)
 
     def to_array(self) -> list[float]:
         """Convert to flat list for model input, replacing None with 0."""
@@ -317,6 +319,7 @@ class FeatureVector(BaseModel):
             self.roc_acceleration,
             self.volume_weighted_momentum,
             self.orderbook_depth_imbalance,
+            self.orderbook_support_resistance,
             self.cross_exchange_spread,
             self.cross_exchange_lead,
             self.taker_buy_sell_ratio,
@@ -331,8 +334,6 @@ class FeatureVector(BaseModel):
             self.liquidation_ratio_divergence,
             self.hour_of_day_sin,
             self.hour_of_day_cos,
-            self.mc_probability,
-            self.mc_confidence,
         ]
 
     @staticmethod
@@ -358,6 +359,7 @@ class FeatureVector(BaseModel):
             "roc_acceleration",
             "volume_weighted_momentum",
             "orderbook_depth_imbalance",
+            "orderbook_support_resistance",
             "cross_exchange_spread",
             "cross_exchange_lead",
             "taker_buy_sell_ratio",
@@ -372,8 +374,6 @@ class FeatureVector(BaseModel):
             "liquidation_ratio_divergence",
             "hour_of_day_sin",
             "hour_of_day_cos",
-            "mc_probability",
-            "mc_confidence",
         ]
 
 

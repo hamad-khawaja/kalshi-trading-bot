@@ -27,19 +27,19 @@ binance:
 
 strategy:
   poll_interval_seconds: 4
-  min_edge_threshold: 0.05      # 5% minimum edge (was 0.04 — raise floor to filter noise)
+  min_edge_threshold: 0.03      # 3% minimum edge (robustness baseline)
   max_edge_threshold: 0.12      # Tighter cap on suspicious edges (was 0.15)
-  confidence_min: 0.65          # Require higher confidence (was 0.62 — still entering on marginal signals)
+  confidence_min: 0.55          # Lowered: 0.65 blocked 30%+ edge trades in high vol
   edge_expiry_decay_enabled: true
   edge_expiry_decay_max: 1.8    # At 1 min left, require 1.8x normal edge
   directional_max_spread: 0.15  # Skip wide-spread illiquid books
-  mm_max_inventory: 20          # Don't accumulate huge MM positions
+  mm_max_inventory: 10          # Hybrid: halved to reduce wrong-side accumulation
   confidence_weight: 0.7
   use_market_maker: true
   mm_min_spread: 0.05           # Minimum spread ($) for market-making
   # Stop-loss: exit when position drops beyond threshold
   stop_loss_enabled: true
-  stop_loss_pct: 0.20              # Exit when loss > 20% of entry price (was 30% — avg SL loss $2.09 vs avg TP win $1.41)
+  stop_loss_pct: 0.20              # Exit when loss > 20% of entry price (robustness data: +$295 vs -$16 at 0.35)
   stop_loss_min_bid: 0.05          # Don't sell if bid is below $0.05
   stop_loss_min_hold_seconds: 60.0  # Wait 60s before SL can trigger (was 30s — noise triggered early exits)
   stop_loss_max_dollar_loss: 20.00  # 10x for paper testing (was $2)
@@ -73,8 +73,8 @@ strategy:
   # Pre-expiry exit: only exit if profitable or near-breakeven (don't sell losers at rock bottom)
   pre_expiry_exit_min_pnl_cents: -0.03  # Only pre-expiry exit if PnL >= -$0.03/contract
   # Entry filters
-  min_entry_price: 0.20             # Block entries below $0.20 (lowered for testing)
-  yes_side_edge_multiplier: 1.2     # Require 20% more edge for YES entries (NO side is more profitable)
+  min_entry_price: 0.30             # Block entries below $0.30 (robustness baseline)
+  yes_side_edge_multiplier: 1.4     # Require 40% more edge for YES entries (robustness baseline)
   no_side_edge_multiplier: 1.5      # NO side 16.7% WR — model fights market, require 50% more edge
   asset_edge_multipliers:
     ETH: 1.4                         # ETH is ~1.3-1.5x noisier than BTC, not 2x
@@ -87,8 +87,8 @@ strategy:
   zone_edge_multipliers: [0.6, 0.8, 1.0]  # Zones 1, 2, 3 asymmetric edge
   # Phase timing: gate trades by window phase
   phase_filter_enabled: true
-  phase_observation_end: 420.0        # 7 min (0-5 min entries lose $52.92; profit starts at 8+ min)
-  phase_confirmation_end: 540.0       # 9 min (6 min active phase: 9-15 min)
+  phase_observation_end: 300.0        # 5 min (hybrid: between 3 min and 7 min)
+  phase_confirmation_end: 480.0       # 8 min (hybrid: restored from 9 min)
   phase_active_end: 720.0             # 12 min
   phase_late_end: 840.0               # 14 min
   phase_late_edge_multiplier: 1.3
@@ -137,13 +137,16 @@ strategy:
   certainty_scalp_min_edge: 0.02            # Low bar (fees tiny at extremes)
   certainty_scalp_kelly_fraction: 0.30      # Aggressive sizing
   certainty_scalp_min_spot_distance_pct: 0.002  # 0.2% spot past strike
-  # Monte Carlo model confirmation signal (#17 in HeuristicModel)
-  mc_enabled: false
-  mc_samples: 10000
-  mc_drift_mode: "momentum"
-  mc_vol_multiplier: 1.0
-  mc_min_ttx: 120.0
-  mc_max_ttx: 720.0
+  # Trend continuation: enter early when recent settlements show persistent trend
+  trend_continuation_enabled: true
+  trend_continuation_min_streak: 3           # Hybrid: require stronger streak evidence (was 2)
+  trend_continuation_max_phase: 2
+  trend_continuation_min_implied_prob: 0.35
+  trend_continuation_max_implied_prob: 0.65
+  trend_continuation_streak_prob: 0.60       # Hybrid: less aggressive edge assumption (was 0.65)
+  trend_continuation_min_edge: 0.04
+  trend_continuation_kelly_fraction: 0.50    # Hybrid: smaller positions (was 1.50)
+  trend_continuation_momentum_threshold: 0.002  # Hybrid: stronger momentum confirmation (was 0.001)
 
 risk:
   max_position_per_market: 250   # 10x for paper testing (was 25)
@@ -171,7 +174,7 @@ risk:
   time_scale_full_seconds: 480.0  # Full size above 8 min remaining
   time_scale_min_multiplier: 0.4  # 40% size at expiry
   # Minimum position size: skip tiny positions that statistically lose
-  min_position_size: 50            # 10x for paper testing (was 5)
+  min_position_size: 5             # Original value (10x scaling applies to maximums, not floors)
   # Per-asset position limits: ETH gets smaller sizes with wider stops
   asset_max_position:
     ETH: 150                         # 10x for paper testing (was 15)

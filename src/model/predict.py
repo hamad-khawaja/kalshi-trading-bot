@@ -56,16 +56,15 @@ class HeuristicModel(ProbabilityModel):
     CROSS_ASSET_DIVERGENCE_WEIGHT = 0.03  # Reduced to make room for btc_beta
     CHAINLINK_ORACLE_WEIGHT = 0.02  # Reduced to make room for btc_beta
     BTC_BETA_WEIGHT = 0.06  # BTC-led directional signal for non-BTC assets
-    HOUR_SIGNAL_WEIGHT = 0.01  # Hour-of-day awareness (reduced for futures signals)
-    FUNDING_RATE_WEIGHT = 0.02  # Binance futures funding rate
-    PREDICTED_FUNDING_WEIGHT = 0.01  # Predicted next funding rate
-    LIQUIDATION_WEIGHT = 0.01  # Binance futures liquidation cascades
-    FUNDING_DIVERGENCE_WEIGHT = 0.02  # Cross-asset funding rate divergence
-    LIQUIDATION_RATIO_WEIGHT = 0.01  # Cross-asset liquidation ratio divergence
-    MC_SIGNAL_WEIGHT = 0.02  # Monte Carlo confirmation signal (reduced for new signals)
+    HOUR_SIGNAL_WEIGHT = 0.005  # Hybrid: halved (untested signal)
+    FUNDING_RATE_WEIGHT = 0.01  # Hybrid: halved (untested signal)
+    PREDICTED_FUNDING_WEIGHT = 0.005  # Hybrid: halved (untested signal)
+    LIQUIDATION_WEIGHT = 0.005  # Hybrid: halved (untested signal)
+    FUNDING_DIVERGENCE_WEIGHT = 0.01  # Hybrid: halved (untested signal)
+    LIQUIDATION_RATIO_WEIGHT = 0.005  # Hybrid: halved (untested signal)
 
     # Maximum adjustment from 0.50 base
-    MAX_ADJUSTMENT = 0.22  # Tightened: model overconfident at 0.30 (22.7% WR on 65% predictions)
+    MAX_ADJUSTMENT = 0.26  # Hybrid: split between 0.22 (too tight) and 0.30 (overconfident)
 
     # Maximum adjustment when strong multi-timeframe momentum is detected.
     # Reflects empirical finding: BTC direction -> resolution 96.6% of time
@@ -81,9 +80,9 @@ class HeuristicModel(ProbabilityModel):
     # EMA snap threshold: skip EMA entirely when prediction changes by more than this
     EMA_SNAP_THRESHOLD = 0.08
 
-    # Market anchor: blend toward implied probability when model agrees with market direction
-    MARKET_ANCHOR_WEIGHT = 0.45
-    MARKET_ANCHOR_DISAGREE_WEIGHT = 0.70  # Market is right ~83% when model disagrees (backtest)
+    # Market anchor: blend toward implied probability
+    MARKET_ANCHOR_WEIGHT = 0.35  # Hybrid: model keeps more voice than 0.45
+    MARKET_ANCHOR_DISAGREE_WEIGHT = 0.40  # Hybrid: model keeps 60% of opinion when disagreeing (was 0.70)
 
     def __init__(self, weight_multipliers: dict[str, float] | None = None) -> None:
         self._prev_probabilities: dict[str, float] = {}
@@ -136,11 +135,12 @@ class HeuristicModel(ProbabilityModel):
 
         # --- 3. Order flow signal ---
         # Positive imbalance = more YES bids = bullish pressure
-        # Blend simple imbalance with top-level concentration (wall detection)
+        # Hybrid: imbalance-primary blend with support/resistance secondary
         flow_signal = (
-            features.order_flow_imbalance * 0.3
-            + features.orderbook_top_concentration * 0.2
-        )  # Combined [-0.5, 0.5]
+            features.order_flow_imbalance * 0.40
+            + features.orderbook_top_concentration * 0.10
+            + features.orderbook_support_resistance * 0.50
+        )  # Combined [-1, 1]
 
         # --- 4. Mean reversion component ---
         # RSI-based: overbought/oversold with graduated response
@@ -235,15 +235,6 @@ class HeuristicModel(ProbabilityModel):
         # Invert: more long liqs in this asset vs other → bearish
         liquidation_ratio_signal = -features.liquidation_ratio_divergence
 
-        # --- 17. Monte Carlo confirmation signal ---
-        mc_signal = 0.0
-        if features.mc_confidence > 0:
-            # Normalize MC probability to [-1, 1]: >0.5 bullish, <0.5 bearish
-            mc_signal = (features.mc_probability - 0.5) * 2.0
-            mc_signal = max(-1.0, min(1.0, mc_signal))
-            # Dampen by MC's own confidence
-            mc_signal *= features.mc_confidence
-
         # --- 10. Time decay signal ---
         # Reduced weight: dampen signals near expiry but don't negate them
         time_decay_signal = 0.0
@@ -276,7 +267,6 @@ class HeuristicModel(ProbabilityModel):
         lq_w = self.LIQUIDATION_WEIGHT * m.get("liquidation", 1.0)
         fd_w = self.FUNDING_DIVERGENCE_WEIGHT * m.get("funding_divergence", 1.0)
         lr_w = self.LIQUIDATION_RATIO_WEIGHT * m.get("liquidation_ratio", 1.0)
-        mc_w = self.MC_SIGNAL_WEIGHT * m.get("mc", 1.0)
 
         # Re-normalize so weights sum to the original total
         original_total = (
@@ -297,9 +287,8 @@ class HeuristicModel(ProbabilityModel):
             + self.LIQUIDATION_WEIGHT
             + self.FUNDING_DIVERGENCE_WEIGHT
             + self.LIQUIDATION_RATIO_WEIGHT
-            + self.MC_SIGNAL_WEIGHT
         )
-        adjusted_total = mom_w + tech_w + flow_w + mr_w + td_w + cx_w + tk_w + sb_w + ca_w + cl_w + bb_w + hr_w + fr_w + pf_w + lq_w + fd_w + lr_w + mc_w
+        adjusted_total = mom_w + tech_w + flow_w + mr_w + td_w + cx_w + tk_w + sb_w + ca_w + cl_w + bb_w + hr_w + fr_w + pf_w + lq_w + fd_w + lr_w
         if adjusted_total > 0:
             scale = original_total / adjusted_total
             mom_w *= scale
@@ -319,7 +308,6 @@ class HeuristicModel(ProbabilityModel):
             lq_w *= scale
             fd_w *= scale
             lr_w *= scale
-            mc_w *= scale
 
         # --- Combine signals ---
         raw_adjustment = (
@@ -340,7 +328,6 @@ class HeuristicModel(ProbabilityModel):
             + fd_w * funding_divergence_signal
             + lr_w * liquidation_ratio_signal
             + td_w * time_decay_signal
-            + mc_w * mc_signal
         )
 
         # --- Signal consensus gate ---
@@ -351,7 +338,7 @@ class HeuristicModel(ProbabilityModel):
             cross_asset_signal, chainlink_signal, btc_beta_signal,
             hour_signal, funding_signal, predicted_funding_signal,
             liquidation_signal, funding_divergence_signal, liquidation_ratio_signal,
-            time_decay_signal, mc_signal,
+            time_decay_signal,
         ]
         active_signals = [s for s in all_signals if abs(s) > 0.05]
         n_active = len(active_signals)
@@ -447,9 +434,6 @@ class HeuristicModel(ProbabilityModel):
             "funding_divergence_signal": round(funding_divergence_signal, 4),
             "liquidation_ratio_signal": round(liquidation_ratio_signal, 4),
             "time_decay_signal": round(time_decay_signal, 4),
-            "mc_signal": round(mc_signal, 4),
-            "mc_probability": round(features.mc_probability, 4),
-            "mc_confidence": round(features.mc_confidence, 4),
             "consistency": round(consistency, 4),
             "raw_adjustment": round(raw_adjustment, 4),
             "consensus_active_signals": n_active,
@@ -536,6 +520,16 @@ class HeuristicModel(ProbabilityModel):
                 conf += 0.05  # Depth agrees with signal
             else:
                 conf -= 0.05  # Depth opposes signal
+
+        # Orderbook wall confirmation: strong wall agreeing with signal boosts confidence
+        wall_strength = features.orderbook_wall_strength
+        if wall_strength > 0.5:
+            sr_dir = features.orderbook_support_resistance
+            signal_dir = features.order_flow_imbalance
+            if sr_dir * signal_dir > 0:
+                conf += 0.04  # Wall agrees with signal direction
+            else:
+                conf -= 0.03  # Wall opposes signal direction
 
         return max(0.0, min(1.0, conf))
 

@@ -292,7 +292,6 @@ class Database:
                       model_probability, implied_probability,
                       entry_time, exit_time, strategy_tag
             FROM trades
-            WHERE strategy_tag != 'monte_carlo'
             ORDER BY entry_time DESC LIMIT ?""",
             (limit,),
         )

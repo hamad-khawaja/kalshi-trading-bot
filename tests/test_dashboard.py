@@ -46,7 +46,7 @@ class TestDashboardState:
         data = json.loads(dashboard_state.to_json())
         assert "strategy_toggles" in data
         toggles = data["strategy_toggles"]
-        expected_keys = {"directional", "fomo", "certainty_scalp", "settlement_ride", "market_making", "trend_guard", "mm_vol_filter"}
+        expected_keys = {"directional", "fomo", "certainty_scalp", "settlement_ride", "trend_continuation", "market_making", "phase_filter", "trend_guard", "mm_vol_filter"}
         assert set(toggles.keys()) == expected_keys
         assert toggles["directional"] is True
 

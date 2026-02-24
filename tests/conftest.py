@@ -103,6 +103,9 @@ def sample_feature_vector(now: datetime) -> FeatureVector:
         roc_acceleration=0.0001,
         volume_weighted_momentum=0.0003,
         orderbook_depth_imbalance=0.15,
+        orderbook_support_resistance=0.1,
+        orderbook_wall_distance=-0.05,
+        orderbook_wall_strength=0.3,
     )
 
 
