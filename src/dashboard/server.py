@@ -98,6 +98,9 @@ class DashboardState:
         self, asset: str, action: str, side: str, pnl: float, ticker: str,
         size_dollars: float = 0.0,
         signal_type: str = "",
+        entry_price: float = 0.0,
+        btc_price: float | None = None,
+        strike: float | None = None,
     ) -> None:
         """Record a completed trade result for the trade history panel."""
         if asset not in self.trade_history:
@@ -111,6 +114,9 @@ class DashboardState:
                 "size": round(size_dollars, 2),
                 "ticker": ticker,
                 "signal_type": signal_type,
+                "entry_price": round(entry_price, 4),
+                "btc_price": round(btc_price, 2) if btc_price else None,
+                "strike": round(strike, 2) if strike else None,
             }
         )
         # Accumulate per-asset realized P&L

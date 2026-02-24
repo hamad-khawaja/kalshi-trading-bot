@@ -815,6 +815,10 @@ a{color:#58a6ff}
           const tagCls = st.replace('_', '-');
           const tagLabel = st ? st.replace('_', ' ') : '';
           const tagHtml = tagLabel ? '<span class="trade-tag ' + tagCls + '">' + tagLabel + '</span>' : '';
+          const ep = t.entry_price ? '$' + t.entry_price.toFixed(2) : '';
+          const bp = t.btc_price ? 'BTC $' + t.btc_price.toLocaleString() : '';
+          const sk = t.strike ? 'K $' + t.strike.toLocaleString() : '';
+          const priceInfo = [ep, sk, bp].filter(Boolean).join(' | ');
           return '<div class="trade-hist-row">' +
             '<span class="trade-arrow ' + cls + '">' + arrow + '</span>' +
             tagHtml +
@@ -823,6 +827,7 @@ a{color:#58a6ff}
             '<span style="color:#8b949e">$' + (t.size || 0).toFixed(2) + '</span>' +
             '<span class="trade-pnl ' + cls + '">' + sign + '$' + t.pnl.toFixed(2) + '</span>' +
             '<span class="trade-meta">' + t.time + '</span>' +
+            (priceInfo ? '<div style="font-size:10px;color:#6e7681;margin-left:18px">' + priceInfo + '</div>' : '') +
             '</div>';
         }).join('');
       }

@@ -1007,6 +1007,7 @@ class TradingBot:
                                     "settle", pos.side, float(pnl), exit_ticker,
                                     size_dollars=float(cost),
                                     signal_type=pos.strategy_tag,
+                                    entry_price=float(pos.avg_entry_price),
                                 )
                                 # Log settlement to database
                                 try:
@@ -1064,6 +1065,7 @@ class TradingBot:
                                 "settle", pos.side, float(pnl), exit_ticker,
                                 size_dollars=float(cost),
                                 signal_type=pos.strategy_tag,
+                                entry_price=float(pos.avg_entry_price),
                             )
                             # Log settlement to database
                             try:
@@ -1149,6 +1151,9 @@ class TradingBot:
                                 "pre_expiry", pos.side, float(pnl), pe_ticker,
                                 size_dollars=float(entry_cost),
                                 signal_type=pos.strategy_tag,
+                                entry_price=float(pos.avg_entry_price),
+                                btc_price=float(pe_snap.btc_price) if pe_snap else None,
+                                strike=float(pe_snap.strike_price) if pe_snap and pe_snap.strike_price else None,
                             )
                             # Log pre-expiry exit to database
                             try:
@@ -1229,6 +1234,9 @@ class TradingBot:
                                 "take_profit", pos.side, float(pnl), tp_ticker,
                                 size_dollars=float(entry_cost),
                                 signal_type=pos.strategy_tag,
+                                entry_price=float(pos.avg_entry_price),
+                                btc_price=float(tp_snap.btc_price) if tp_snap else None,
+                                strike=float(tp_snap.strike_price) if tp_snap and tp_snap.strike_price else None,
                             )
                             # Log take-profit to database
                             try:
@@ -1315,6 +1323,9 @@ class TradingBot:
                                 "stop_loss", pos.side, float(pnl), sl_ticker,
                                 size_dollars=float(entry_cost),
                                 signal_type=pos.strategy_tag,
+                                entry_price=float(pos.avg_entry_price),
+                                btc_price=float(sl_snap.btc_price) if sl_snap else None,
+                                strike=float(sl_snap.strike_price) if sl_snap and sl_snap.strike_price else None,
                             )
                             # Log stop-loss to database
                             try:
@@ -1400,11 +1411,15 @@ class TradingBot:
                                 pnl=float(pnl),
                             )
                             self._risk_manager.record_trade(pnl)
+                            tb_snap = snapshots.get(tb_ticker)
                             ds.add_trade_result(
                                 self._data_hub._ticker_to_symbol(tb_ticker),
                                 "thesis_break", pos.side, float(pnl), tb_ticker,
                                 size_dollars=float(entry_cost),
                                 signal_type=pos.strategy_tag,
+                                entry_price=float(pos.avg_entry_price),
+                                btc_price=float(tb_snap.btc_price) if tb_snap else None,
+                                strike=float(tb_snap.strike_price) if tb_snap and tb_snap.strike_price else None,
                             )
                             # Log thesis-break exit to database
                             try:
@@ -1558,6 +1573,7 @@ class TradingBot:
                 "settle", pos.side, float(pnl), ticker,
                 size_dollars=float(cost),
                 signal_type=pos.strategy_tag,
+                entry_price=float(pos.avg_entry_price),
             )
             try:
                 from src.data.models import CompletedTrade
