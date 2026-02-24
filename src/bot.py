@@ -71,6 +71,10 @@ class TradingBot:
         # ticker → (exit_time, strategy_tag)
         self._take_profit_markets: dict[str, tuple[datetime, str]] = {}
 
+        # Stop-loss cooldown: block directional re-entry after SL on same market
+        # ticker → set (one shot per market — if thesis was wrong, don't retry)
+        self._stop_loss_markets: set[str] = set()
+
         # Fee tracking for dashboard
         self._total_fees: Decimal = Decimal("0")
 
@@ -542,6 +546,19 @@ class TradingBot:
             else:
                 # Cooldown expired, remove from tracking
                 del self._take_profit_markets[ticker]
+
+        # Stop-loss cooldown: block directional re-entry after SL (one shot per market)
+        if ticker in self._stop_loss_markets and signals:
+            exempt = ("market_making", "certainty_scalp")
+            buy_signals = [s for s in signals if s.action == "buy" and s.signal_type not in exempt]
+            if buy_signals:
+                logger.info(
+                    "stop_loss_cooldown_blocked",
+                    ticker=ticker,
+                    blocked_count=len(buy_signals),
+                    blocked_types=[s.signal_type for s in buy_signals],
+                )
+                signals = [s for s in signals if s.action != "buy" or s.signal_type in exempt]
 
         # Thesis-break cooldown: only block re-entry from the same strategy that got stopped out
         if ticker in self._thesis_break_markets and signals:
@@ -1305,6 +1322,7 @@ class TradingBot:
                                 await self._db.insert_trade(completed)
                             except Exception:
                                 logger.warning("trade_logging_failed", ticker=sl_ticker)
+                            self._stop_loss_markets.add(sl_ticker)
                             self._position_tracker.remove_expired_positions([sl_ticker])
                             self._update_dashboard_positions()
 
