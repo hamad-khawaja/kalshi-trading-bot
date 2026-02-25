@@ -110,6 +110,8 @@ strategy:
   ppe_filter_enabled: true
   ppe_min_threshold: 0.30
   ppe_kelly_scaling_enabled: true
+  # TC extreme vol filter
+  tc_extreme_vol_filter_enabled: true
   # Quality score
   min_quality_score: 0.80
   # BTC beta

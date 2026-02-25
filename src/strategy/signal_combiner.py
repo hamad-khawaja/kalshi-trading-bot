@@ -388,18 +388,31 @@ class SignalCombiner:
                 and features is not None
                 and not quiet_hours_active
             ):
-                trend_signal = self._trend_detector.detect(
-                    prediction, features, snapshot, current_position=current_position,
-                )
-                if trend_signal is not None:
-                    signals.append(trend_signal)
-                    logger.debug(
-                        "signal_trend_continuation",
+                # Block trend continuation in extreme vol regime
+                if (
+                    self._config.tc_extreme_vol_filter_enabled
+                    and self._vol_tracker is not None
+                    and self._vol_tracker.current_regime == "extreme"
+                ):
+                    logger.info(
+                        "tc_extreme_vol_blocked",
                         ticker=snapshot.market_ticker,
-                        side=trend_signal.side,
-                        net_edge=trend_signal.net_edge,
+                        vol_regime="extreme",
                     )
-                    return signals
+                else:
+                    trend_signal = self._trend_detector.detect(
+                        prediction, features, snapshot,
+                        current_position=current_position,
+                    )
+                    if trend_signal is not None:
+                        signals.append(trend_signal)
+                        logger.debug(
+                            "signal_trend_continuation",
+                            ticker=snapshot.market_ticker,
+                            side=trend_signal.side,
+                            net_edge=trend_signal.net_edge,
+                        )
+                        return signals
 
             # 2b. Check for FOMO signal
             if self._config.fomo_enabled and features is not None:

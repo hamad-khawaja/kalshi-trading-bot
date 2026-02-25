@@ -156,6 +156,7 @@ class TradingBot:
             "trend_guard": settings.strategy.trend_guard_enabled,
             "mm_vol_filter": settings.strategy.mm_vol_filter_enabled,
             "ppe_filter": settings.strategy.ppe_filter_enabled,
+            "tc_extreme_vol_filter": settings.strategy.tc_extreme_vol_filter_enabled,
         }
         # Snapshot startup config for dashboard Settings tab
         self._dashboard_state.startup_config = {
@@ -374,6 +375,9 @@ class TradingBot:
         self._settings.strategy.trend_guard_enabled = st.get("trend_guard", False)
         self._settings.strategy.mm_vol_filter_enabled = st.get("mm_vol_filter", False)
         self._settings.strategy.ppe_filter_enabled = st.get("ppe_filter", True)
+        self._settings.strategy.tc_extreme_vol_filter_enabled = st.get(
+            "tc_extreme_vol_filter", True
+        )
 
         await asyncio.gather(*(self._process_market(m) for m in markets_to_process))
         await self._db.flush()
@@ -1964,6 +1968,7 @@ class TradingBot:
             "trend_guard": self._settings.strategy.trend_guard_enabled,
             "mm_vol_filter": self._settings.strategy.mm_vol_filter_enabled,
             "ppe_filter": self._settings.strategy.ppe_filter_enabled,
+            "tc_extreme_vol_filter": self._settings.strategy.tc_extreme_vol_filter_enabled,
         }
 
         logger.info("mode_switched", old_mode=old_mode, new_mode=target_mode)

@@ -290,6 +290,10 @@ body.live-mode{border-top:3px solid #f85149}
     <span class="toggle-label active">PPE</span>
     <div class="toggle-track active"><div class="toggle-knob"></div></div>
   </div>
+  <div class="toggle-wrap" data-strategy="tc_extreme_vol_filter" onclick="toggleStrategy('tc_extreme_vol_filter')">
+    <span class="toggle-label active">TCVOL</span>
+    <div class="toggle-track active"><div class="toggle-knob"></div></div>
+  </div>
 </div>
 
 <div id="dashboard-view">
