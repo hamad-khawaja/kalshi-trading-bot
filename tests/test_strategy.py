@@ -370,6 +370,7 @@ class TestSignalCombiner:
             ppe_min_threshold=0.30,
             phase_filter_enabled=False,
             edge_confirmation_cycles=1,
+            quiet_hours_enabled=False,
         )
         combiner = SignalCombiner(config)
         snapshot = MarketSnapshot(
