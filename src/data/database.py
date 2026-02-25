@@ -311,18 +311,31 @@ class Database:
         row = await cursor.fetchone()
         return int(row[0]) if row else 0
 
-    async def get_recent_trades(self, limit: int = 50) -> list[dict]:
-        """Get most recent trades."""
+    async def get_recent_trades(
+        self, limit: int = 50, mode: str | None = None
+    ) -> list[dict]:
+        """Get most recent trades, optionally filtered by mode."""
         assert self._db is not None
-        cursor = await self._db.execute(
-            """SELECT order_id, market_ticker, side, action, count,
-                      price_dollars, fees_dollars, pnl_dollars,
-                      model_probability, implied_probability,
-                      entry_time, exit_time, strategy_tag, mode
-            FROM trades
-            ORDER BY entry_time DESC LIMIT ?""",
-            (limit,),
-        )
+        if mode:
+            cursor = await self._db.execute(
+                """SELECT order_id, market_ticker, side, action, count,
+                          price_dollars, fees_dollars, pnl_dollars,
+                          model_probability, implied_probability,
+                          entry_time, exit_time, strategy_tag, mode
+                FROM trades WHERE mode = ?
+                ORDER BY entry_time DESC LIMIT ?""",
+                (mode, limit),
+            )
+        else:
+            cursor = await self._db.execute(
+                """SELECT order_id, market_ticker, side, action, count,
+                          price_dollars, fees_dollars, pnl_dollars,
+                          model_probability, implied_probability,
+                          entry_time, exit_time, strategy_tag, mode
+                FROM trades
+                ORDER BY entry_time DESC LIMIT ?""",
+                (limit,),
+            )
         rows = await cursor.fetchall()
         columns = [
             "order_id", "market_ticker", "side", "action", "count",
@@ -331,6 +344,49 @@ class Database:
             "entry_time", "exit_time", "strategy_tag", "mode",
         ]
         return [dict(zip(columns, row)) for row in rows]
+
+    async def get_pnl_summary(
+        self, mode: str | None = None, days: int | None = None
+    ) -> dict:
+        """Get P&L summary stats, optionally filtered by mode and date range.
+
+        Returns dict with total_pnl, total_fees, trade_count, win_count, win_rate.
+        """
+        assert self._db is not None
+        conditions = ["action != 'buy'"]
+        params: list = []
+        if mode:
+            conditions.append("mode = ?")
+            params.append(mode)
+        if days:
+            conditions.append("entry_time >= datetime('now', ?)")
+            params.append(f"-{days} days")
+        where = " AND ".join(conditions)
+        cursor = await self._db.execute(
+            f"""SELECT
+                COALESCE(SUM(pnl_dollars), 0) as total_pnl,
+                COALESCE(SUM(fees_dollars), 0) as total_fees,
+                COUNT(*) as trade_count,
+                SUM(CASE WHEN pnl_dollars > 0 THEN 1 ELSE 0 END) as win_count
+            FROM trades WHERE {where}""",
+            params,
+        )
+        row = await cursor.fetchone()
+        if not row or row[2] == 0:
+            return {
+                "total_pnl": 0.0,
+                "total_fees": 0.0,
+                "trade_count": 0,
+                "win_count": 0,
+                "win_rate": 0.0,
+            }
+        return {
+            "total_pnl": round(float(row[0]), 2),
+            "total_fees": round(float(row[1]), 2),
+            "trade_count": int(row[2]),
+            "win_count": int(row[3] or 0),
+            "win_rate": round((row[3] or 0) / row[2] * 100, 1),
+        }
 
     async def update_daily_summary(
         self,

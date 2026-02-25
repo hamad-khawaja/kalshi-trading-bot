@@ -226,6 +226,7 @@ class DashboardServer:
         self._app.router.add_post("/api/toggle-btc", self._handle_toggle_btc)
         self._app.router.add_post("/api/toggle-strategy", self._handle_toggle_strategy)
         self._app.router.add_get("/api/trades", self._handle_trades)
+        self._app.router.add_get("/api/pnl-summary", self._handle_pnl_summary)
         self._app.router.add_post("/api/switch-mode", self._handle_switch_mode)
 
         self._runner = web.AppRunner(self._app)
@@ -313,7 +314,10 @@ class DashboardServer:
             )
         try:
             limit = int(request.query.get("limit", "200"))
-            trades = await self._db.get_recent_trades(limit=limit)
+            mode = request.query.get("mode")
+            if mode and mode not in ("paper", "live"):
+                mode = None
+            trades = await self._db.get_recent_trades(limit=limit, mode=mode)
             # Convert Decimal/datetime to JSON-safe types
             for t in trades:
                 for k, v in t.items():
@@ -327,6 +331,38 @@ class DashboardServer:
             logger.warning("trades_api_error", exc_info=True)
             return web.Response(
                 text=json.dumps([]),
+                content_type="application/json",
+            )
+
+    async def _handle_pnl_summary(self, request: web.Request) -> web.Response:
+        """Return P&L summary stats filtered by mode and time range."""
+        if not self._db:
+            return web.Response(
+                text=json.dumps({
+                    "total_pnl": 0, "total_fees": 0,
+                    "trade_count": 0, "win_count": 0, "win_rate": 0,
+                }),
+                content_type="application/json",
+            )
+        try:
+            mode = request.query.get("mode")
+            if mode and mode not in ("paper", "live"):
+                mode = None
+            range_param = request.query.get("range", "1d")
+            days_map = {"1d": 1, "1w": 7, "1m": 30, "1y": 365}
+            days = days_map.get(range_param, 1)
+            summary = await self._db.get_pnl_summary(mode=mode, days=days)
+            return web.Response(
+                text=json.dumps(summary),
+                content_type="application/json",
+            )
+        except Exception:
+            logger.warning("pnl_summary_api_error", exc_info=True)
+            return web.Response(
+                text=json.dumps({
+                    "total_pnl": 0, "total_fees": 0,
+                    "trade_count": 0, "win_count": 0, "win_rate": 0,
+                }),
                 content_type="application/json",
             )
 
