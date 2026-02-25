@@ -258,6 +258,7 @@ class CompletedTrade(BaseModel):
     strategy_tag: str = "directional"
     market_volume: int | None = None
     won: bool | None = None
+    mode: str = "paper"
 
 
 class FeatureVector(BaseModel):

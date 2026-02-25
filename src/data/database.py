@@ -126,6 +126,7 @@ class Database:
         await self._migrate_strategy_tag()
         await self._migrate_market_volume()
         await self._migrate_won_column()
+        await self._migrate_mode_column()
 
     async def _migrate_strategy_tag(self) -> None:
         """Add strategy_tag column if missing (existing databases)."""
@@ -163,6 +164,18 @@ class Database:
             await self._db.commit()
             logger.info("migrated_won_column")
 
+    async def _migrate_mode_column(self) -> None:
+        """Add mode column if missing (existing databases)."""
+        assert self._db is not None
+        cursor = await self._db.execute("PRAGMA table_info(trades)")
+        columns = {row[1] for row in await cursor.fetchall()}
+        if "mode" not in columns:
+            await self._db.execute(
+                "ALTER TABLE trades ADD COLUMN mode TEXT NOT NULL DEFAULT 'paper'"
+            )
+            await self._db.commit()
+            logger.info("migrated_mode_column")
+
     async def flush(self) -> None:
         """Commit any pending writes in a single batch."""
         if self._db:
@@ -175,8 +188,8 @@ class Database:
             """INSERT INTO trades
             (order_id, market_ticker, side, action, count, price_dollars,
              fees_dollars, pnl_dollars, model_probability, implied_probability,
-             entry_time, exit_time, strategy_tag, market_volume, won)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+             entry_time, exit_time, strategy_tag, market_volume, won, mode)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 trade.order_id,
                 trade.market_ticker,
@@ -193,6 +206,7 @@ class Database:
                 trade.strategy_tag,
                 trade.market_volume,
                 int(trade.won) if trade.won is not None else None,
+                trade.mode,
             ),
         )
 
@@ -304,7 +318,7 @@ class Database:
             """SELECT order_id, market_ticker, side, action, count,
                       price_dollars, fees_dollars, pnl_dollars,
                       model_probability, implied_probability,
-                      entry_time, exit_time, strategy_tag
+                      entry_time, exit_time, strategy_tag, mode
             FROM trades
             ORDER BY entry_time DESC LIMIT ?""",
             (limit,),
@@ -314,7 +328,7 @@ class Database:
             "order_id", "market_ticker", "side", "action", "count",
             "price_dollars", "fees_dollars", "pnl_dollars",
             "model_probability", "implied_probability",
-            "entry_time", "exit_time", "strategy_tag",
+            "entry_time", "exit_time", "strategy_tag", "mode",
         ]
         return [dict(zip(columns, row)) for row in rows]
 

@@ -81,6 +81,8 @@ class DashboardState:
 
         # Startup config snapshot (displayed in Settings tab)
         self.startup_config: dict[str, Any] = {}
+        # Live config snapshot (for comparison in Settings tab)
+        self.live_config: dict[str, Any] = {}
 
         # Per-strategy toggles (runtime control from dashboard)
         self.strategy_toggles: dict[str, bool] = {
@@ -193,6 +195,7 @@ class DashboardState:
             "btc_disabled": self.btc_disabled,
             "strategy_toggles": self.strategy_toggles,
             "startup_config": self.startup_config,
+            "live_config": self.live_config,
         }
         return json.dumps(payload, default=str)
 
@@ -201,12 +204,13 @@ class DashboardServer:
     """aiohttp web server serving the dashboard UI and SSE state stream."""
 
     def __init__(
-        self, state: DashboardState, host: str, port: int, db=None
+        self, state: DashboardState, host: str, port: int, db=None, bot=None
     ) -> None:
         self._state = state
         self._host = host
         self._port = port
         self._db = db
+        self._bot = bot
         self._app: web.Application | None = None
         self._runner: web.AppRunner | None = None
 
@@ -222,6 +226,7 @@ class DashboardServer:
         self._app.router.add_post("/api/toggle-btc", self._handle_toggle_btc)
         self._app.router.add_post("/api/toggle-strategy", self._handle_toggle_strategy)
         self._app.router.add_get("/api/trades", self._handle_trades)
+        self._app.router.add_post("/api/switch-mode", self._handle_switch_mode)
 
         self._runner = web.AppRunner(self._app)
         await self._runner.setup()
@@ -275,6 +280,16 @@ class DashboardServer:
         )
 
     async def _handle_toggle_trading(self, _request: web.Request) -> web.Response:
+        if self._state.positions:
+            return web.Response(
+                status=409,
+                text=json.dumps({
+                    "error": "Cannot toggle trading with open positions",
+                    "trading_paused": self._state.trading_paused,
+                    "open_positions": len(self._state.positions),
+                }),
+                content_type="application/json",
+            )
         self._state.trading_paused = not self._state.trading_paused
         # Master off → force quiet hours override off
         if self._state.trading_paused:
@@ -314,6 +329,37 @@ class DashboardServer:
                 text=json.dumps([]),
                 content_type="application/json",
             )
+
+    async def _handle_switch_mode(self, request: web.Request) -> web.Response:
+        """Switch between paper and live mode. Requires zero open positions."""
+        if self._bot is None:
+            return web.Response(
+                status=503,
+                text=json.dumps({"error": "Bot reference not available"}),
+                content_type="application/json",
+            )
+        try:
+            body = await request.json()
+        except Exception:
+            return web.Response(
+                status=400,
+                text=json.dumps({"error": "Invalid JSON body"}),
+                content_type="application/json",
+            )
+        target_mode = body.get("mode", "")
+        if target_mode not in ("paper", "live"):
+            return web.Response(
+                status=400,
+                text=json.dumps({"error": f"Invalid mode: {target_mode}"}),
+                content_type="application/json",
+            )
+        result = await self._bot.switch_mode(target_mode)
+        status_code = 200 if "error" not in result else 409
+        return web.Response(
+            status=status_code,
+            text=json.dumps(result),
+            content_type="application/json",
+        )
 
     async def _handle_toggle_eth(self, _request: web.Request) -> web.Response:
         self._state.eth_disabled = not self._state.eth_disabled

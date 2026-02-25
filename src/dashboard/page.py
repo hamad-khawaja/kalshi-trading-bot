@@ -96,6 +96,14 @@ a{color:#58a6ff}
 .toggle-wrap.disabled{opacity:0.4;cursor:not-allowed}
 .toggle-label.disabled{color:#484f58}
 .toggle-divider{width:1px;height:18px;background:#30363d}
+/* Mode badge */
+.mode-badge{padding:2px 10px;border-radius:4px;font-size:12px;font-weight:700;letter-spacing:0.5px;text-transform:uppercase}
+.mode-badge.paper{background:#1a3a1a;color:#3fb950;border:1px solid #238636}
+.mode-badge.live{background:#2a1a1a;color:#f85149;border:1px solid #da3633;animation:pulse 2s ease-in-out infinite}
+.mode-switch-btn{padding:3px 10px;font-size:11px;font-weight:600;border:1px solid #30363d;border-radius:4px;cursor:pointer;font-family:inherit;background:#161b22;color:#8b949e;transition:all .2s;margin-left:4px}
+.mode-switch-btn:hover{color:#c9d1d9;border-color:#8b949e}
+.mode-switch-btn.disabled{opacity:0.4;cursor:not-allowed}
+body.live-mode{border-top:3px solid #f85149}
 #reconnect-banner{display:none;position:fixed;top:0;left:0;right:0;background:#da3633;color:#fff;text-align:center;padding:6px;font-size:12px;font-weight:600;z-index:999}
 .countdown{font-size:20px;font-weight:700;margin-top:4px;font-variant-numeric:tabular-nums}
 .countdown.urgent{color:#f85149;animation:pulse 1s ease-in-out infinite}
@@ -179,6 +187,9 @@ a{color:#58a6ff}
 .strategy-bar .toggle-track.paused .toggle-knob{left:2px}
 /* Settings view */
 #settings-view{display:none;padding:16px}
+.settings-sub-tabs{display:flex;gap:4px;margin-bottom:12px}
+.settings-sub-tab{padding:4px 12px;border-radius:4px;background:#161b22;color:#8b949e;border:1px solid #30363d;cursor:pointer;font-size:12px;font-weight:500}
+.settings-sub-tab.active{background:#1a2332;color:#58a6ff;border-color:#58a6ff}
 .settings-section{margin-bottom:16px}
 .settings-section h3{font-size:12px;text-transform:uppercase;color:#58a6ff;margin-bottom:6px;letter-spacing:0.5px;font-weight:600}
 .settings-grid{display:grid;grid-template-columns:1fr 1fr;gap:2px}
@@ -188,6 +199,9 @@ a{color:#58a6ff}
 .setting-row.highlighted{background:#1a2332;border-left:2px solid #58a6ff}
 .setting-row.highlighted .setting-key{color:#58a6ff;font-weight:600}
 .setting-row.highlighted .setting-val{color:#e6edf3}
+.setting-row.diff{background:#2a1a1a;border-left:2px solid #f0883e}
+.setting-row.diff .setting-key{color:#f0883e;font-weight:600}
+.setting-row.diff .setting-val{color:#f0883e}
 </style>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
@@ -202,7 +216,8 @@ a{color:#58a6ff}
     <span>Cycle #<span id="cycle">0</span></span>
     <span>Uptime <span id="uptime">0s</span></span>
     <span>Active <span id="active-time">0s</span></span>
-    <span>Mode: <span id="mode">--</span></span>
+    <span id="mode-badge" class="mode-badge paper">PAPER</span>
+    <button id="mode-switch-btn" class="mode-switch-btn" onclick="switchMode()">Switch to Live</button>
     <span id="utc-clock" style="font-weight:600;font-size:13px;padding:2px 8px;border-radius:4px">--:--:-- EST</span>
     <div class="toggle-wrap" id="trade-toggle" onclick="toggleTrading()">
       <span class="toggle-label active" id="toggle-label">Active</span>
@@ -505,6 +520,11 @@ a{color:#58a6ff}
 </div>
 
 <div id="settings-view">
+  <div class="settings-sub-tabs">
+    <button class="settings-sub-tab active" onclick="switchSettingsTab('running')">Running</button>
+    <button class="settings-sub-tab" onclick="switchSettingsTab('live')">Live</button>
+    <button class="settings-sub-tab" onclick="switchSettingsTab('diff')">Diff</button>
+  </div>
   <div id="settings-content"></div>
 </div>
 
@@ -570,7 +590,7 @@ a{color:#58a6ff}
     $('cycle').textContent = s.cycle || 0;
     $('uptime').textContent = fmtDuration(s.uptime_seconds || 0);
     $('active-time').textContent = fmtDuration(s.active_trading_seconds || 0);
-    $('mode').textContent = s.mode || '--';
+    updateModeBadge(s.mode || 'paper', s.positions || []);
 
     // Update quiet hours from server config
     if (s.quiet_hours_est) quietHoursEST = s.quiet_hours_est;
@@ -1043,8 +1063,12 @@ a{color:#58a6ff}
   // Trading toggle
   window.toggleTrading = function() {
     fetch('/api/toggle-trading', {method: 'POST'})
-      .then(r => r.json())
+      .then(r => {
+        if (r.status === 409) return r.json().then(d => { alert(d.error); return null; });
+        return r.json();
+      })
       .then(d => {
+        if (!d) return;
         updateToggleButton(d.trading_paused);
         updateQHToggle(d.quiet_hours_override, d.trading_paused);
       })
@@ -1074,6 +1098,54 @@ a{color:#58a6ff}
       track.className = 'toggle-track active';
     }
   }
+
+  // Mode badge + switch
+  function updateModeBadge(mode, positions) {
+    const badge = $('mode-badge');
+    const btn = $('mode-switch-btn');
+    const hasPositions = positions.length > 0;
+    badge.textContent = mode.toUpperCase();
+    badge.className = 'mode-badge ' + mode;
+    if (mode === 'live') {
+      document.body.classList.add('live-mode');
+    } else {
+      document.body.classList.remove('live-mode');
+    }
+    const targetMode = mode === 'paper' ? 'Live' : 'Paper';
+    btn.textContent = 'Switch to ' + targetMode;
+    if (hasPositions) {
+      btn.classList.add('disabled');
+      btn.title = 'Close all positions before switching mode';
+    } else {
+      btn.classList.remove('disabled');
+      btn.title = '';
+    }
+  }
+
+  window.switchMode = function() {
+    const btn = $('mode-switch-btn');
+    if (btn.classList.contains('disabled')) return;
+    const currentMode = $('mode-badge').textContent.toLowerCase();
+    const targetMode = currentMode === 'paper' ? 'live' : 'paper';
+    if (targetMode === 'live') {
+      if (!confirm('Switch to LIVE mode? Real money will be used for trades.')) return;
+    }
+    btn.textContent = 'Switching...';
+    btn.classList.add('disabled');
+    fetch('/api/switch-mode', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({mode: targetMode})
+    })
+      .then(r => r.json())
+      .then(d => {
+        if (d.error) alert('Mode switch failed: ' + d.error);
+      })
+      .catch(err => {
+        console.error('mode switch error', err);
+        alert('Mode switch failed: network error');
+      });
+  };
 
   // BTC killswitch toggle
   window.toggleBTC = function() {
@@ -1194,36 +1266,74 @@ a{color:#58a6ff}
     'min_balance_dollars', 'drawdown_limit_dollars',
   ]);
 
-  function renderSettings() {
-    const cfg = latestState && latestState.startup_config;
-    if (!cfg || Object.keys(cfg).length === 0) {
-      $('settings-content').innerHTML = '<p style="color:#8b949e">No config data available</p>';
-      return;
-    }
+  let settingsTab = 'running';
+  window.switchSettingsTab = function(tab) {
+    settingsTab = tab;
+    document.querySelectorAll('.settings-sub-tab').forEach(b => {
+      b.classList.toggle('active', b.textContent.toLowerCase() === tab);
+    });
+    renderSettings();
+  };
+
+  function fmtVal(v) {
+    return (typeof v === 'object' && v !== null) ? JSON.stringify(v) : String(v);
+  }
+
+  function renderConfigSection(cfg, compareWith) {
     let html = '';
     for (const [section, values] of Object.entries(cfg)) {
       if (section === 'mode') {
+        const diffCls = compareWith && compareWith.mode !== values ? ' diff' : ' highlighted';
         html += '<div class="settings-section"><h3>Mode</h3>' +
-          '<div class="setting-row highlighted"><span class="setting-key">mode</span>' +
+          '<div class="setting-row' + diffCls + '"><span class="setting-key">mode</span>' +
           '<span class="setting-val">' + values + '</span></div></div>';
         continue;
       }
       if (typeof values !== 'object' || values === null) {
         html += '<div class="settings-section"><h3>' + section + '</h3>' +
           '<div class="setting-row"><span class="setting-key">' + section + '</span>' +
-          '<span class="setting-val">' + values + '</span></div></div>';
+          '<span class="setting-val">' + fmtVal(values) + '</span></div></div>';
         continue;
       }
       html += '<div class="settings-section"><h3>' + section + '</h3><div class="settings-grid">';
+      const cmpSection = compareWith && compareWith[section];
       for (const [k, v] of Object.entries(values)) {
-        const display = (typeof v === 'object' && v !== null) ? JSON.stringify(v) : String(v);
-        const cls = IMPORTANT_SETTINGS.has(k) ? ' highlighted' : '';
+        const display = fmtVal(v);
+        let cls = IMPORTANT_SETTINGS.has(k) ? ' highlighted' : '';
+        if (cmpSection && typeof cmpSection === 'object' && fmtVal(cmpSection[k]) !== display) {
+          cls = ' diff';
+        }
         html += '<div class="setting-row' + cls + '"><span class="setting-key">' + k +
           '</span><span class="setting-val">' + display + '</span></div>';
       }
       html += '</div></div>';
     }
-    $('settings-content').innerHTML = html;
+    return html;
+  }
+
+  function renderSettings() {
+    const running = latestState && latestState.startup_config;
+    const live = latestState && latestState.live_config;
+    if (settingsTab === 'running') {
+      if (!running || Object.keys(running).length === 0) {
+        $('settings-content').innerHTML = '<p style="color:#8b949e">No config data available</p>';
+        return;
+      }
+      $('settings-content').innerHTML = renderConfigSection(running, null);
+    } else if (settingsTab === 'live') {
+      if (!live || Object.keys(live).length === 0) {
+        $('settings-content').innerHTML = '<p style="color:#8b949e">No live config found (config/settings.live.yaml)</p>';
+        return;
+      }
+      $('settings-content').innerHTML = renderConfigSection(live, null);
+    } else {
+      // Diff: show live config with differences from running highlighted
+      if (!running || !live || Object.keys(live).length === 0) {
+        $('settings-content').innerHTML = '<p style="color:#8b949e">Both running and live configs needed for diff</p>';
+        return;
+      }
+      $('settings-content').innerHTML = renderConfigSection(live, running);
+    }
   }
 
   // ===== Trade chart =====
