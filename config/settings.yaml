@@ -93,7 +93,7 @@ strategy:
   # Phase timing: gate trades by window phase
   phase_filter_enabled: true
   phase_observation_end: 120.0        # 2 min — minimal: just enough for features to warm up
-  phase_confirmation_end: 120.0       # Same as observation — no separate confirmation phase
+  phase_confirmation_end: 240.0       # 4 min — require bounce-back confirmation for early directional
   phase_active_end: 840.0             # 14 min — full trading window
   phase_late_end: 840.0               # No separate late phase
   phase_late_edge_multiplier: 1.0     # No late tightening (active runs to 14 min)
