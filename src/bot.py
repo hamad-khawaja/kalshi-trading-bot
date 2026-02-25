@@ -792,8 +792,8 @@ class TradingBot:
                         signal_type=signal_item.signal_type,
                         market_volume=local_market.get("volume"),
                         cycle=self._cycle_count,
-                        spot_price=float(local_snapshot.spot_price),
-                        strike=float(local_snapshot.strike_price) if local_snapshot.strike_price else None,
+                        spot_price=local_snapshot.get("spot_price"),
+                        strike=local_snapshot.get("strike_price"),
                     )
                     # Mark trend continuation market as entered after fill
                     if signal_item.signal_type == "trend_continuation":
@@ -821,8 +821,9 @@ class TradingBot:
                     pos_after_fill = self._position_tracker.get_position(ticker)
                     if pos_after_fill:
                         pos_after_fill.fees_paid += buy_fee
-                        if local_snapshot.strike_price is not None:
-                            pos_after_fill.strike_price = local_snapshot.strike_price
+                        strike = local_snapshot.get("strike_price")
+                        if strike is not None:
+                            pos_after_fill.strike_price = Decimal(str(strike))
                     # Log trade to database
                     try:
                         from src.data.models import CompletedTrade
