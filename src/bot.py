@@ -1338,6 +1338,8 @@ class TradingBot:
                         min_hold_seconds=self._settings.strategy.stop_loss_min_hold_seconds,
                         asset_stop_loss_pct=self._settings.strategy.asset_stop_loss_pct or None,
                         max_dollar_loss=self._settings.strategy.stop_loss_max_dollar_loss,
+                        directional_stop_loss_pct=self._settings.strategy.directional_stop_loss_pct,
+                        directional_max_dollar_loss=self._settings.strategy.directional_stop_loss_max_dollar,
                     )
                     for sl_ticker, sell_price in sl_signals:
                         pos = self._position_tracker.get_position(sl_ticker)

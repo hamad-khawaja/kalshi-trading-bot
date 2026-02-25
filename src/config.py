@@ -127,6 +127,9 @@ class StrategyConfig(BaseModel):
     asset_edge_multipliers: dict[str, float] = {}
     # Per-asset stop-loss override: noisier assets may need wider stops
     asset_stop_loss_pct: dict[str, float] = {}
+    # Per-strategy stop-loss: directional uses tighter SL (0 = use global)
+    directional_stop_loss_pct: float = 0.0
+    directional_stop_loss_max_dollar: float = 0.0
     # Disable directional trading for specific assets (keep MM only)
     asset_directional_disabled: list[str] = []
     # Zone filter: block expensive directional trades
@@ -201,6 +204,8 @@ class StrategyConfig(BaseModel):
     certainty_scalp_kelly_fraction: float = 0.30     # Aggressive sizing
     certainty_scalp_min_spot_distance_pct: float = 0.002  # 0.2% spot past strike
     certainty_scalp_min_fair_value_prob: float = 0.90  # Vol-based: require 90%+ mathematical prob
+    # Per-strategy Kelly fraction for directional (0 = use global)
+    directional_kelly_fraction: float = 0.0
     # Trend guard: block trades against majority momentum direction
     trend_guard_enabled: bool = False
     # MM vol filter: skip market-making in extreme volatility regime
@@ -242,7 +247,7 @@ class RiskConfig(BaseModel):
     time_scale_min_multiplier: float = 0.4  # Minimum scaling at expiry
     min_position_size: int = 5  # Don't enter with fewer than this many contracts
     # Directional high-price boost: size up directional at $0.50+ (92-99% WR zone)
-    directional_high_price_boost: float = 1.5
+    directional_high_price_boost: float = 1.0  # Disabled: kelly_fraction controls sizing
     directional_high_price_threshold: float = 0.50
     # Per-asset position limits: noisier assets get smaller positions
     asset_max_position: dict[str, int] = {}

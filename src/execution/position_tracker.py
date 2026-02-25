@@ -558,6 +558,8 @@ class PositionTracker:
         min_hold_seconds: float = 30.0,
         asset_stop_loss_pct: dict[str, float] | None = None,
         max_dollar_loss: float = 0.0,
+        directional_stop_loss_pct: float = 0.0,
+        directional_max_dollar_loss: float = 0.0,
     ) -> list[tuple[str, str]]:
         """Check positions for stop-loss exits.
 
@@ -611,13 +613,21 @@ class PositionTracker:
                         effective_sl = sl
                         break
 
+            # Per-strategy stop-loss override: directional uses tighter SL
+            effective_max_dollar = max_dollar_loss
+            if position.strategy_tag == "directional":
+                if directional_stop_loss_pct > 0:
+                    effective_sl = directional_stop_loss_pct
+                if directional_max_dollar_loss > 0:
+                    effective_max_dollar = directional_max_dollar_loss
+
             # Compute unrealized dollar loss (entry cost - current value - fees)
             dollar_loss = (entry_float - bid_float) * position.count + float(position.fees_paid)
 
             # Emergency exit: bypass hold period if loss exceeds dollar cap
             # This prevents catastrophic losses during the min hold window
             if within_hold_period:
-                if max_dollar_loss > 0 and dollar_loss >= max_dollar_loss:
+                if effective_max_dollar > 0 and dollar_loss >= effective_max_dollar:
                     logger.warning(
                         "emergency_stop_loss",
                         ticker=ticker,
@@ -626,7 +636,7 @@ class PositionTracker:
                         entry_price=entry_float,
                         current_bid=bid_float,
                         dollar_loss=round(dollar_loss, 2),
-                        max_dollar_loss=max_dollar_loss,
+                        max_dollar_loss=effective_max_dollar,
                         hold_seconds=round(hold_seconds, 1),
                     )
                 else:
@@ -635,7 +645,7 @@ class PositionTracker:
             triggered_by = None
             if loss_pct >= effective_sl:
                 triggered_by = "pct"
-            elif max_dollar_loss > 0 and dollar_loss >= max_dollar_loss:
+            elif effective_max_dollar > 0 and dollar_loss >= effective_max_dollar:
                 triggered_by = "dollar_cap"
 
             if triggered_by:
@@ -649,7 +659,7 @@ class PositionTracker:
                     loss_pct=round(loss_pct, 4),
                     dollar_loss=round(dollar_loss, 2),
                     threshold=effective_sl,
-                    max_dollar_loss=max_dollar_loss,
+                    max_dollar_loss=effective_max_dollar,
                     triggered_by=triggered_by,
                     hold_seconds=round(hold_seconds, 1),
                 )

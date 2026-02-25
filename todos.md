@@ -37,6 +37,16 @@ Implemented: after a stop loss, block directional/settlement ride re-entry for t
 - [ ] **Regime detection** — Detect market microstructure changes (liquidity drying up, spread widening) beyond vol regimes
 - [ ] **Backtest framework** — Replay historical data through the strategy pipeline to validate changes before deploying
 
+### Fix Directional Trading (47.8% WR, -$107 all-time)
+
+Data: avg SL -$6.02, avg TP +$5.21 (inverted risk/reward). $0.50+ entries = 95.7% WR. Losers oversized (40.8 vs 33.8 contracts). Full analysis in `.claude/plans/hazy-shimmying-salamander.md`.
+
+- [ ] **Raise max_directional_price 0.60 → 0.70** (`config/settings.yaml`) — Opens Zone 4 ($0.60-$0.70), 100% historical WR, 0.7x Kelly caps size
+- [ ] **Add directional Kelly fraction = 1.0** (`src/config.py`, `src/risk/position_sizer.py`, `config/settings.yaml`) — Half global 2.0; add `elif signal.signal_type == "directional"` branch in position_sizer
+- [ ] **Add directional-specific stop-loss: 12% / $10 cap** (`src/config.py`, `src/execution/position_tracker.py`, `src/bot.py`, `config/settings.yaml`) — New params `directional_stop_loss_pct`, `directional_stop_loss_max_dollar`; override in `check_stop_loss()` when `strategy_tag == "directional"`; wire from bot.py (line ~1334)
+- [ ] **Disable directional high-price boost** (`config/settings.yaml`) — `directional_high_price_boost: 1.5 → 1.0`
+- [ ] **Run tests + linter** after all changes
+
 ### Operational
 
 - [ ] **Config hot-reload** — Adjust edge thresholds, Kelly fraction, etc. without restarting and dropping positions

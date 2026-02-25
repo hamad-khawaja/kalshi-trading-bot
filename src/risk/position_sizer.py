@@ -89,6 +89,12 @@ class PositionSizer:
             and self._strategy_config is not None
         ):
             effective_kelly = self._strategy_config.trend_continuation_kelly_fraction
+        elif (
+            signal.signal_type == "directional"
+            and self._strategy_config is not None
+            and self._strategy_config.directional_kelly_fraction > 0
+        ):
+            effective_kelly = self._strategy_config.directional_kelly_fraction
         else:
             effective_kelly = self._kelly_fraction
         f = kelly_f * effective_kelly

@@ -185,6 +185,9 @@ a{color:#58a6ff}
 .setting-row{display:flex;justify-content:space-between;padding:4px 8px;background:#161b22;border-radius:3px;font-size:12px}
 .setting-key{color:#8b949e}
 .setting-val{color:#c9d1d9;font-weight:500;max-width:60%;text-align:right;word-break:break-all}
+.setting-row.highlighted{background:#1a2332;border-left:2px solid #58a6ff}
+.setting-row.highlighted .setting-key{color:#58a6ff;font-weight:600}
+.setting-row.highlighted .setting-val{color:#e6edf3}
 </style>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
@@ -1175,6 +1178,18 @@ a{color:#58a6ff}
   };
 
   // ===== Settings renderer =====
+  const IMPORTANT_SETTINGS = new Set([
+    'min_edge_threshold', 'max_edge_threshold', 'confidence_min',
+    'min_entry_price', 'max_directional_price', 'min_quality_score',
+    'stop_loss_pct', 'stop_loss_max_dollar_loss',
+    'directional_stop_loss_pct', 'directional_stop_loss_max_dollar',
+    'directional_kelly_fraction', 'yes_side_edge_multiplier',
+    'no_side_edge_multiplier', 'edge_confirmation_cycles',
+    'kelly_fraction', 'max_position_per_market',
+    'max_total_exposure_dollars', 'max_daily_loss_dollars',
+    'min_balance_dollars', 'drawdown_limit_dollars',
+  ]);
+
   function renderSettings() {
     const cfg = latestState && latestState.startup_config;
     if (!cfg || Object.keys(cfg).length === 0) {
@@ -1185,7 +1200,7 @@ a{color:#58a6ff}
     for (const [section, values] of Object.entries(cfg)) {
       if (section === 'mode') {
         html += '<div class="settings-section"><h3>Mode</h3>' +
-          '<div class="setting-row"><span class="setting-key">mode</span>' +
+          '<div class="setting-row highlighted"><span class="setting-key">mode</span>' +
           '<span class="setting-val">' + values + '</span></div></div>';
         continue;
       }
@@ -1198,8 +1213,9 @@ a{color:#58a6ff}
       html += '<div class="settings-section"><h3>' + section + '</h3><div class="settings-grid">';
       for (const [k, v] of Object.entries(values)) {
         const display = (typeof v === 'object' && v !== null) ? JSON.stringify(v) : String(v);
-        html += '<div class="setting-row"><span class="setting-key">' + k + '</span>' +
-          '<span class="setting-val">' + display + '</span></div>';
+        const cls = IMPORTANT_SETTINGS.has(k) ? ' highlighted' : '';
+        html += '<div class="setting-row' + cls + '"><span class="setting-key">' + k +
+          '</span><span class="setting-val">' + display + '</span></div>';
       }
       html += '</div></div>';
     }
