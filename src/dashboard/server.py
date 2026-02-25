@@ -353,7 +353,15 @@ class DashboardServer:
                 text=json.dumps({"error": f"Invalid mode: {target_mode}"}),
                 content_type="application/json",
             )
-        result = await self._bot.switch_mode(target_mode)
+        try:
+            result = await self._bot.switch_mode(target_mode)
+        except Exception:
+            logger.exception("switch_mode_endpoint_error", target_mode=target_mode)
+            return web.Response(
+                status=500,
+                text=json.dumps({"error": "Internal error during mode switch"}),
+                content_type="application/json",
+            )
         status_code = 200 if "error" not in result else 409
         return web.Response(
             status=status_code,

@@ -433,6 +433,23 @@ class TestModeSwitchEndpoint:
             data = await resp.json()
             assert "error" in data
 
+    @pytest.mark.asyncio
+    async def test_switch_mode_internal_error_returns_500(self):
+        """Returns 500 when bot.switch_mode raises an unexpected exception."""
+        state = DashboardState()
+        bot = AsyncMock()
+        bot.switch_mode = AsyncMock(side_effect=RuntimeError("boom"))
+        app = self._build_app(state, bot=bot)
+
+        async with TestClient(TestServer(app)) as client:
+            resp = await client.post(
+                "/api/switch-mode", json={"mode": "live"},
+            )
+            assert resp.status == 500
+            data = await resp.json()
+            assert "error" in data
+            assert "Internal error" in data["error"]
+
 
 # ---------------------------------------------------------------------------
 # 4. Database Mode Column
