@@ -2013,6 +2013,29 @@ class TradingBot:
         self._dashboard_state.trade_history = {}
         self._dashboard_state.active_trading_seconds = 0.0
         self._dashboard_state.recent_decisions.clear()
+        self._dashboard_state.settlement_history = {}
+        self._dashboard_state.positions = []
+        self._dashboard_state.last_trade = {}
+        self._dashboard_state.signals = []
+        self._dashboard_state.per_asset = {}
+        self._dashboard_state.market = {}
+        self._dashboard_state.snapshot = {}
+        self._dashboard_state.features = {}
+        self._dashboard_state.prediction = {}
+        self._dashboard_state.edge = {}
+        self._dashboard_state.fomo = {}
+        self._dashboard_state.sizing = {}
+        self._dashboard_state.health = {}
+
+        # Immediately refresh balance and push risk stats so the dashboard
+        # doesn't show stale/empty data until the next health check (~60s).
+        try:
+            fresh_balance = await self._get_balance(force=True)
+            self._push_risk_to_dashboard(float(fresh_balance))
+        except Exception:
+            logger.warning("mode_switch_balance_refresh_failed", exc_info=True)
+            # Fallback: push zeroed risk dict so at least structure exists
+            self._push_risk_to_dashboard(0.0)
 
         logger.info(
             "mode_switched", old_mode=old_mode, new_mode=target_mode,
