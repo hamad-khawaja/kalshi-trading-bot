@@ -155,6 +155,7 @@ class TradingBot:
             "phase_filter": settings.strategy.phase_filter_enabled,
             "trend_guard": settings.strategy.trend_guard_enabled,
             "mm_vol_filter": settings.strategy.mm_vol_filter_enabled,
+            "ppe_filter": settings.strategy.ppe_filter_enabled,
         }
         # Snapshot startup config for dashboard Settings tab
         self._dashboard_state.startup_config = {
@@ -360,6 +361,7 @@ class TradingBot:
         self._settings.strategy.phase_filter_enabled = st.get("phase_filter", True)
         self._settings.strategy.trend_guard_enabled = st.get("trend_guard", False)
         self._settings.strategy.mm_vol_filter_enabled = st.get("mm_vol_filter", False)
+        self._settings.strategy.ppe_filter_enabled = st.get("ppe_filter", True)
 
         await asyncio.gather(*(self._process_market(m) for m in markets_to_process))
         await self._db.flush()

@@ -271,6 +271,10 @@ a{color:#58a6ff}
     <span class="toggle-label active">MMVOL</span>
     <div class="toggle-track active"><div class="toggle-knob"></div></div>
   </div>
+  <div class="toggle-wrap" data-strategy="ppe_filter" onclick="toggleStrategy('ppe_filter')">
+    <span class="toggle-label active">PPE</span>
+    <div class="toggle-track active"><div class="toggle-knob"></div></div>
+  </div>
 </div>
 
 <div id="dashboard-view">
