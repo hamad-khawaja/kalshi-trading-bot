@@ -9,6 +9,7 @@ import pytest
 
 from src.config import StrategyConfig
 from src.data.models import (
+    FeatureVector,
     MarketSnapshot,
     Orderbook,
     OrderbookLevel,
@@ -357,3 +358,95 @@ class TestSignalCombiner:
         )
         signals = combiner.evaluate(prediction, snapshot, 0)
         assert len(signals) == 0
+
+    def test_ppe_filter_blocks_low_efficiency(
+        self, now: datetime, sample_feature_vector: FeatureVector
+    ):
+        """PPE filter blocks directional when path efficiency is too low."""
+        config = StrategyConfig(
+            min_edge_threshold=0.03,
+            max_edge_threshold=0.25,
+            ppe_filter_enabled=True,
+            ppe_min_threshold=0.30,
+            phase_filter_enabled=False,
+            edge_confirmation_cycles=1,
+        )
+        combiner = SignalCombiner(config)
+        snapshot = MarketSnapshot(
+            timestamp=now,
+            market_ticker="kxbtc15m-test",
+            spot_price=Decimal("97500"),
+            spot_prices_5min=[
+                Decimal(f"{97480 + i * 0.02}") for i in range(1800)
+            ],
+            orderbook=Orderbook(
+                ticker="test",
+                yes_levels=[OrderbookLevel(price_dollars=Decimal("0.45"), quantity=100)],
+                no_levels=[OrderbookLevel(price_dollars=Decimal("0.45"), quantity=100)],
+                timestamp=now,
+            ),
+            implied_yes_prob=Decimal("0.50"),
+            spread=Decimal("0.02"),
+            time_to_expiry_seconds=600,
+        )
+        prediction = PredictionResult(
+            probability_yes=0.65, confidence=0.7, model_name="test"
+        )
+        # Low PPE features: choppy price path
+        low_ppe_features = sample_feature_vector.model_copy(
+            update={
+                "path_efficiency_60s": 0.10,
+                "path_efficiency_180s": 0.15,
+                "path_efficiency_300s": 0.20,
+            }
+        )
+        signals = combiner.evaluate(prediction, snapshot, 0, features=low_ppe_features)
+        # No directional signals should pass (PPE 0.20 < threshold 0.30)
+        directional = [s for s in signals if s.signal_type == "directional"]
+        assert len(directional) == 0
+        assert any("ppe_filter" in r for r in combiner.last_block_reasons)
+
+    def test_ppe_filter_allows_high_efficiency(
+        self, now: datetime, sample_feature_vector: FeatureVector
+    ):
+        """PPE filter allows directional when path efficiency is above threshold."""
+        config = StrategyConfig(
+            min_edge_threshold=0.03,
+            max_edge_threshold=0.25,
+            ppe_filter_enabled=True,
+            ppe_min_threshold=0.30,
+            phase_filter_enabled=False,
+            edge_confirmation_cycles=1,
+        )
+        combiner = SignalCombiner(config)
+        snapshot = MarketSnapshot(
+            timestamp=now,
+            market_ticker="kxbtc15m-test",
+            spot_price=Decimal("97500"),
+            spot_prices_5min=[
+                Decimal(f"{97480 + i * 0.02}") for i in range(1800)
+            ],
+            orderbook=Orderbook(
+                ticker="test",
+                yes_levels=[OrderbookLevel(price_dollars=Decimal("0.45"), quantity=100)],
+                no_levels=[OrderbookLevel(price_dollars=Decimal("0.45"), quantity=100)],
+                timestamp=now,
+            ),
+            implied_yes_prob=Decimal("0.50"),
+            spread=Decimal("0.02"),
+            time_to_expiry_seconds=600,
+        )
+        prediction = PredictionResult(
+            probability_yes=0.65, confidence=0.7, model_name="test"
+        )
+        # High PPE features: smooth price path
+        high_ppe_features = sample_feature_vector.model_copy(
+            update={
+                "path_efficiency_60s": 0.80,
+                "path_efficiency_180s": 0.70,
+                "path_efficiency_300s": 0.65,
+            }
+        )
+        combiner.evaluate(prediction, snapshot, 0, features=high_ppe_features)
+        # PPE filter should NOT block (0.65 > 0.30)
+        assert not any("ppe_filter" in r for r in combiner.last_block_reasons)

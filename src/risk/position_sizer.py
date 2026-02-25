@@ -109,6 +109,16 @@ class PositionSizer:
             zone_mult = self._config.zone_kelly_multipliers[signal.entry_zone - 1]
             f *= zone_mult
 
+        # Path efficiency scaling: smooth moves get full size, choppy moves get reduced
+        if (
+            signal.signal_type == "directional"
+            and signal.path_efficiency > 0
+            and self._strategy_config is not None
+            and self._strategy_config.ppe_kelly_scaling_enabled
+        ):
+            ppe_mult = 0.5 + 0.5 * signal.path_efficiency  # [0.5, 1.0]
+            f *= ppe_mult
+
         # Directional high-price boost: 92-99% WR at $0.50+ deserves bigger size
         if (
             signal.signal_type == "directional"

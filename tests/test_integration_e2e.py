@@ -273,6 +273,9 @@ def make_features(
         orderbook_wall_distance=-0.05,
         orderbook_wall_strength=0.3,
         taker_buy_sell_ratio=taker_buy_sell_ratio,
+        path_efficiency_60s=0.70,
+        path_efficiency_180s=0.65,
+        path_efficiency_300s=0.60,
     )
     defaults.update(kwargs)
     return FeatureVector(**defaults)

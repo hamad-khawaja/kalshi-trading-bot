@@ -19,6 +19,7 @@ from src.features.indicators import (
     order_flow_imbalance,
     orderbook_depth_imbalance,
     orderbook_support_resistance,
+    path_efficiency,
     rate_of_change_acceleration,
     rsi,
     spread_ratio,
@@ -479,4 +480,66 @@ class TestFeatureEngine:
         arr = sample_feature_vector.to_array()
         names = sample_feature_vector.feature_names()
         assert len(arr) == len(names)
-        assert len(arr) == 34
+        assert len(arr) == 37
+
+
+class TestPathEfficiency:
+    def test_perfect_uptrend(self):
+        """Every tick goes up — efficiency should be 1.0."""
+        prices = np.array([100.0, 101.0, 102.0, 103.0, 104.0])
+        assert path_efficiency(prices) == pytest.approx(1.0)
+
+    def test_perfect_downtrend(self):
+        """Every tick goes down — efficiency should be 1.0."""
+        prices = np.array([104.0, 103.0, 102.0, 101.0, 100.0])
+        assert path_efficiency(prices) == pytest.approx(1.0)
+
+    def test_choppy_no_progress(self):
+        """Price oscillates back to start — efficiency should be 0.0."""
+        prices = np.array([100.0, 102.0, 100.0, 102.0, 100.0])
+        assert path_efficiency(prices) == pytest.approx(0.0)
+
+    def test_choppy_with_progress(self):
+        """Price oscillates but makes some progress — low efficiency."""
+        prices = np.array([100.0, 102.0, 99.0, 103.0, 101.0])
+        result = path_efficiency(prices)
+        # Net: 1.0, path: 2+3+4+2=11. Efficiency = 1/11 ≈ 0.09
+        assert result < 0.15
+        assert result > 0.0
+
+    def test_mostly_smooth_with_small_pullback(self):
+        """Small pullback in a trend — still high efficiency."""
+        prices = np.array([100.0, 101.0, 102.0, 101.5, 103.0])
+        result = path_efficiency(prices)
+        # Net: 3.0, path: 1+1+0.5+1.5=4.0. Efficiency = 3/4 = 0.75
+        assert result == pytest.approx(0.75)
+
+    def test_flat_prices(self):
+        """All prices the same — should return 0.0."""
+        prices = np.array([100.0, 100.0, 100.0, 100.0])
+        assert path_efficiency(prices) == 0.0
+
+    def test_insufficient_data(self):
+        """Single price — should return 0.0."""
+        prices = np.array([100.0])
+        assert path_efficiency(prices) == 0.0
+
+    def test_empty_array(self):
+        prices = np.array([])
+        assert path_efficiency(prices) == 0.0
+
+    def test_with_window(self):
+        """Window parameter should limit the lookback."""
+        # First 3 elements are choppy, last 3 are smooth uptrend
+        prices = np.array([100.0, 102.0, 100.0, 101.0, 102.0, 103.0])
+        # Full array: net=3, path=2+2+1+1+1=7, eff=3/7≈0.43
+        full = path_efficiency(prices)
+        # Window=3 uses last 3: [101, 102, 103] → perfect uptrend
+        windowed = path_efficiency(prices, window=3)
+        assert windowed == pytest.approx(1.0)
+        assert windowed > full
+
+    def test_two_prices(self):
+        """Minimum viable input — 2 prices always gives efficiency 1.0."""
+        prices = np.array([100.0, 105.0])
+        assert path_efficiency(prices) == pytest.approx(1.0)

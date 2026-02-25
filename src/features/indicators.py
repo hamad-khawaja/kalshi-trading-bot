@@ -154,6 +154,32 @@ def mean_reversion_z_score(prices: np.ndarray, window: int = 60) -> float:
     return float((prices[-1] - mean) / std)
 
 
+def path_efficiency(prices: np.ndarray, window: int | None = None) -> float:
+    """Price path efficiency: net displacement / total path length.
+
+    Measures directional conviction vs noise (Kaufman's Efficiency Ratio).
+    Returns value in [0, 1]:
+    1.0 = every tick in same direction (smooth persistent drift)
+    0.0 = pure noise (choppy oscillation with no net progress)
+
+    High efficiency predicts trend continuation; low efficiency predicts reversal.
+    """
+    if len(prices) < 2:
+        return 0.0
+
+    data = prices[-window:] if window and window < len(prices) else prices
+    if len(data) < 2:
+        return 0.0
+
+    net_displacement = abs(float(data[-1]) - float(data[0]))
+    total_path = float(np.sum(np.abs(np.diff(data.astype(float)))))
+
+    if total_path == 0:
+        return 0.0
+
+    return net_displacement / total_path
+
+
 def momentum_divergence(
     short_momentum: float, long_momentum: float
 ) -> float:

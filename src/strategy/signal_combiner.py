@@ -234,6 +234,29 @@ class SignalCombiner:
                         )
                         directional = None
 
+        # Path efficiency filter: block fakeout entries with choppy price paths
+        if (
+            directional is not None
+            and features is not None
+            and self._config.ppe_filter_enabled
+        ):
+            ppe = features.path_efficiency_300s
+            if ppe < self._config.ppe_min_threshold:
+                self.last_block_reasons.append(
+                    f"ppe_filter({ppe:.2f}<{self._config.ppe_min_threshold})"
+                )
+                logger.info(
+                    "ppe_filter_blocked",
+                    ticker=snapshot.market_ticker,
+                    side=directional.side,
+                    ppe_300s=round(ppe, 4),
+                    ppe_180s=round(features.path_efficiency_180s, 4),
+                    ppe_60s=round(features.path_efficiency_60s, 4),
+                    threshold=self._config.ppe_min_threshold,
+                    net_edge=directional.net_edge,
+                )
+                directional = None
+
         # Phase gating for directional signals
         if directional is not None and phase_enabled:
             ticker = snapshot.market_ticker
@@ -336,6 +359,11 @@ class SignalCombiner:
                 # Don't emit directional signal yet — fall through to FOMO/MM
                 directional = None
             else:
+                if features is not None:
+                    directional.path_efficiency = max(
+                        features.path_efficiency_180s,
+                        features.path_efficiency_300s,
+                    )
                 signals.append(directional)
                 confirmed_directional_side = directional.side
                 logger.debug(

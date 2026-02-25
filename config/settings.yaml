@@ -108,6 +108,10 @@ strategy:
   # Cross-asset divergence: use other asset's implied prob as a lead signal
   cross_asset_divergence_enabled: true
   cross_asset_divergence_weight: 0.06
+  # Path efficiency (PPE) filter: block fakeout entries with choppy price paths
+  ppe_filter_enabled: true
+  ppe_min_threshold: 0.30             # Block directional if 300s PPE < 0.30
+  ppe_kelly_scaling_enabled: true     # Scale Kelly fraction by PPE
   # Composite quality score: require combined edge + confidence quality
   min_quality_score: 0.80
   # BTC beta leader: use BTC momentum to enable ETH directional

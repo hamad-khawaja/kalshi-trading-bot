@@ -62,6 +62,7 @@ class HeuristicModel(ProbabilityModel):
     LIQUIDATION_WEIGHT = 0.005  # Hybrid: halved (untested signal)
     FUNDING_DIVERGENCE_WEIGHT = 0.01  # Hybrid: halved (untested signal)
     LIQUIDATION_RATIO_WEIGHT = 0.005  # Hybrid: halved (untested signal)
+    PATH_EFFICIENCY_WEIGHT = 0.02  # Confirms/denies momentum based on price path smoothness
 
     # Maximum adjustment from 0.50 base
     MAX_ADJUSTMENT = 0.26  # Hybrid: split between 0.22 (too tight) and 0.30 (overconfident)
@@ -235,6 +236,16 @@ class HeuristicModel(ProbabilityModel):
         # Invert: more long liqs in this asset vs other → bearish
         liquidation_ratio_signal = -features.liquidation_ratio_divergence
 
+        # --- 17. Path efficiency signal ---
+        # Smooth price path confirms momentum direction; choppy path suggests fakeout.
+        # Aligned with momentum: high PPE + up move = bullish, high PPE + down = bearish.
+        max_ppe = max(features.path_efficiency_180s, features.path_efficiency_300s)
+        ppe_quality = (max_ppe - 0.5) * 2.0  # [-1, 1]: >0.5 = smooth, <0.5 = choppy
+        if abs(mom_signal) > 0.05:
+            ppe_signal = ppe_quality * (1.0 if mom_signal > 0 else -1.0)
+        else:
+            ppe_signal = 0.0
+
         # --- 10. Time decay signal ---
         # Reduced weight: dampen signals near expiry but don't negate them
         time_decay_signal = 0.0
@@ -267,6 +278,7 @@ class HeuristicModel(ProbabilityModel):
         lq_w = self.LIQUIDATION_WEIGHT * m.get("liquidation", 1.0)
         fd_w = self.FUNDING_DIVERGENCE_WEIGHT * m.get("funding_divergence", 1.0)
         lr_w = self.LIQUIDATION_RATIO_WEIGHT * m.get("liquidation_ratio", 1.0)
+        pe_w = self.PATH_EFFICIENCY_WEIGHT * m.get("path_efficiency", 1.0)
 
         # Re-normalize so weights sum to the original total
         original_total = (
@@ -287,8 +299,9 @@ class HeuristicModel(ProbabilityModel):
             + self.LIQUIDATION_WEIGHT
             + self.FUNDING_DIVERGENCE_WEIGHT
             + self.LIQUIDATION_RATIO_WEIGHT
+            + self.PATH_EFFICIENCY_WEIGHT
         )
-        adjusted_total = mom_w + tech_w + flow_w + mr_w + td_w + cx_w + tk_w + sb_w + ca_w + cl_w + bb_w + hr_w + fr_w + pf_w + lq_w + fd_w + lr_w
+        adjusted_total = mom_w + tech_w + flow_w + mr_w + td_w + cx_w + tk_w + sb_w + ca_w + cl_w + bb_w + hr_w + fr_w + pf_w + lq_w + fd_w + lr_w + pe_w
         if adjusted_total > 0:
             scale = original_total / adjusted_total
             mom_w *= scale
@@ -308,6 +321,7 @@ class HeuristicModel(ProbabilityModel):
             lq_w *= scale
             fd_w *= scale
             lr_w *= scale
+            pe_w *= scale
 
         # --- Combine signals ---
         raw_adjustment = (
@@ -327,6 +341,7 @@ class HeuristicModel(ProbabilityModel):
             + lq_w * liquidation_signal
             + fd_w * funding_divergence_signal
             + lr_w * liquidation_ratio_signal
+            + pe_w * ppe_signal
             + td_w * time_decay_signal
         )
 
@@ -338,7 +353,7 @@ class HeuristicModel(ProbabilityModel):
             cross_asset_signal, chainlink_signal, btc_beta_signal,
             hour_signal, funding_signal, predicted_funding_signal,
             liquidation_signal, funding_divergence_signal, liquidation_ratio_signal,
-            time_decay_signal,
+            ppe_signal, time_decay_signal,
         ]
         active_signals = [s for s in all_signals if abs(s) > 0.05]
         n_active = len(active_signals)
@@ -433,6 +448,8 @@ class HeuristicModel(ProbabilityModel):
             "liquidation_signal": round(liquidation_signal, 4),
             "funding_divergence_signal": round(funding_divergence_signal, 4),
             "liquidation_ratio_signal": round(liquidation_ratio_signal, 4),
+            "ppe_signal": round(ppe_signal, 4),
+            "path_efficiency_max": round(max_ppe, 4),
             "time_decay_signal": round(time_decay_signal, 4),
             "consistency": round(consistency, 4),
             "raw_adjustment": round(raw_adjustment, 4),
