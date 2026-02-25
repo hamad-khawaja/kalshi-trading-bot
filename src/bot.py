@@ -812,6 +812,7 @@ class TradingBot:
                         cycle=self._cycle_count,
                         spot_price=local_snapshot.get("spot_price"),
                         strike=local_snapshot.get("strike_price"),
+                        mode=self._settings.mode,
                     )
                     # Mark trend continuation market as entered after fill
                     if signal_item.signal_type == "trend_continuation":
@@ -828,6 +829,7 @@ class TradingBot:
                             net_edge=signal_item.net_edge,
                             model_prob=signal_item.model_probability,
                             implied_prob=signal_item.implied_probability,
+                            mode=self._settings.mode,
                         )
                     # Track buy fee in position for accurate PnL
                     buy_fee = EdgeDetector.compute_fee_dollars(
@@ -1031,6 +1033,7 @@ class TradingBot:
                                     entry_price=float(pos.avg_entry_price),
                                     fees=float(pos.fees_paid),
                                     pnl=float(pnl),
+                                    mode=self._settings.mode,
                                 )
                                 logger.info(
                                     "calibration_data_point",
@@ -1041,6 +1044,7 @@ class TradingBot:
                                     won=won,
                                     signal_type=pos.strategy_tag,
                                     entry_price=float(pos.avg_entry_price),
+                                    mode=self._settings.mode,
                                 )
                                 self._risk_manager.record_trade(pnl)
                                 try:
@@ -1121,6 +1125,7 @@ class TradingBot:
                                 won=pnl > 0,
                                 pnl=float(pnl),
                                 market_volume=exit_volume,
+                                mode=self._settings.mode,
                             )
                             logger.info(
                                 "calibration_data_point",
@@ -1131,6 +1136,7 @@ class TradingBot:
                                 won=won if yes_wins is not None else None,
                                 signal_type=pos.strategy_tag,
                                 entry_price=float(pos.avg_entry_price),
+                                mode=self._settings.mode,
                             )
                             self._risk_manager.record_trade(pnl)
                             try:
@@ -1223,6 +1229,7 @@ class TradingBot:
                                 pnl=float(pnl),
                                 spot_price=float(pe_snap.spot_price) if pe_snap else None,
                                 strike=float(pe_snap.strike_price) if pe_snap and pe_snap.strike_price else None,
+                                mode=self._settings.mode,
                             )
                             self._risk_manager.record_trade(pnl)
                             try:
@@ -1311,6 +1318,7 @@ class TradingBot:
                                 fee=float(sell_fee),
                                 spot_price=float(tp_snap.spot_price) if tp_snap else None,
                                 strike=float(tp_snap.strike_price) if tp_snap and tp_snap.strike_price else None,
+                                mode=self._settings.mode,
                             )
                             self._risk_manager.record_trade(pnl)
                             try:
@@ -1407,6 +1415,7 @@ class TradingBot:
                                 fee=float(sell_fee),
                                 spot_price=float(sl_snap.spot_price) if sl_snap else None,
                                 strike=float(sl_snap.strike_price) if sl_snap and sl_snap.strike_price else None,
+                                mode=self._settings.mode,
                             )
                             self._risk_manager.record_trade(pnl)
                             try:
@@ -1570,6 +1579,7 @@ class TradingBot:
                         ticker=filled_state.signal.market_ticker,
                         side=filled_state.signal.side,
                         filled=filled_state.filled_count,
+                        mode=self._settings.mode,
                     )
                     # Log MM fill event for market-making orders
                     if filled_state.signal.signal_type == "market_making":
@@ -1583,6 +1593,7 @@ class TradingBot:
                             net_edge=filled_state.signal.net_edge,
                             model_prob=filled_state.signal.model_probability,
                             implied_prob=filled_state.signal.implied_probability,
+                            mode=self._settings.mode,
                         )
                     # Force-refresh balance after resting fill
                     await self._get_balance(force=True)
@@ -1669,6 +1680,7 @@ class TradingBot:
                 fees=float(pos.fees_paid),
                 pnl=float(pnl),
                 expedited=True,
+                mode=self._settings.mode,
             )
             logger.info(
                 "calibration_data_point",
@@ -1679,6 +1691,7 @@ class TradingBot:
                 won=won,
                 signal_type=pos.strategy_tag,
                 entry_price=float(pos.avg_entry_price),
+                mode=self._settings.mode,
             )
             self._risk_manager.record_trade(pnl)
             try:
@@ -1924,8 +1937,28 @@ class TradingBot:
         try:
             new_settings = load_settings(config_path)
         except Exception:
-            logger.exception("mode_switch_config_load_error", target_mode=target_mode)
-            return {"error": "Failed to load config", "mode": self._settings.mode}
+            logger.exception(
+                "mode_switch_config_load_error", target_mode=target_mode,
+            )
+            return {"error": "Failed to load config", "mode": old_mode}
+
+        # Build new components before mutating state (fail-safe: if creation
+        # throws, the bot stays in the old mode with no partial mutation).
+        try:
+            new_sizer = PositionSizer(
+                new_settings.risk, strategy_config=new_settings.strategy,
+            )
+            new_risk_mgr = RiskManager(new_settings.risk)
+        except Exception:
+            logger.exception(
+                "mode_switch_component_error", target_mode=target_mode,
+            )
+            return {
+                "error": "Failed to create risk components",
+                "mode": old_mode,
+            }
+
+        # --- Point of no return: apply all mutations atomically ---
 
         # Apply mode and config
         self._settings.mode = target_mode
@@ -1940,11 +1973,9 @@ class TradingBot:
         self._cached_balance = None
         self._balance_fetched_at = 0.0
 
-        # Recreate risk/sizing components with new config
-        self._position_sizer = PositionSizer(
-            self._settings.risk, strategy_config=self._settings.strategy
-        )
-        self._risk_manager = RiskManager(self._settings.risk)
+        # Swap in pre-built components
+        self._position_sizer = new_sizer
+        self._risk_manager = new_risk_mgr
 
         # Update dashboard state
         self._dashboard_state.mode = target_mode
@@ -1971,7 +2002,45 @@ class TradingBot:
             "tc_extreme_vol_filter": self._settings.strategy.tc_extreme_vol_filter_enabled,
         }
 
-        logger.info("mode_switched", old_mode=old_mode, new_mode=target_mode)
+        # Reset session accumulators for a clean slate
+        self._total_fees = Decimal("0")
+        self._thesis_break_markets = {}
+        self._take_profit_markets = {}
+        self._stop_loss_markets = set()
+
+        # Reset dashboard session state
+        self._dashboard_state.per_asset_pnl = {}
+        self._dashboard_state.trade_history = {}
+        self._dashboard_state.active_trading_seconds = 0.0
+        self._dashboard_state.recent_decisions.clear()
+        self._dashboard_state.settlement_history = {}
+        self._dashboard_state.positions = []
+        self._dashboard_state.last_trade = {}
+        self._dashboard_state.signals = []
+        self._dashboard_state.per_asset = {}
+        self._dashboard_state.market = {}
+        self._dashboard_state.snapshot = {}
+        self._dashboard_state.features = {}
+        self._dashboard_state.prediction = {}
+        self._dashboard_state.edge = {}
+        self._dashboard_state.fomo = {}
+        self._dashboard_state.sizing = {}
+        self._dashboard_state.health = {}
+
+        # Immediately refresh balance and push risk stats so the dashboard
+        # doesn't show stale/empty data until the next health check (~60s).
+        try:
+            fresh_balance = await self._get_balance(force=True)
+            self._push_risk_to_dashboard(float(fresh_balance))
+        except Exception:
+            logger.warning("mode_switch_balance_refresh_failed", exc_info=True)
+            # Fallback: push zeroed risk dict so at least structure exists
+            self._push_risk_to_dashboard(0.0)
+
+        logger.info(
+            "mode_switched", old_mode=old_mode, new_mode=target_mode,
+            session_reset=True,
+        )
 
         return {"mode": target_mode, "previous_mode": old_mode}
 

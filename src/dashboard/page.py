@@ -139,7 +139,7 @@ body.live-mode{border-top:3px solid #f85149}
 /* Chart view */
 #chart-view{display:none;padding:16px}
 #chart-view.visible{display:block}
-.chart-controls{display:flex;gap:8px;margin-bottom:12px;align-items:center}
+.chart-controls{display:flex;gap:8px;margin-bottom:12px;align-items:center;flex-wrap:wrap}
 .chart-btn{padding:4px 12px;font-size:11px;font-weight:600;border:1px solid #30363d;border-radius:4px;cursor:pointer;font-family:inherit;background:#161b22;color:#8b949e;transition:all .2s}
 .chart-btn:hover{color:#c9d1d9;border-color:#8b949e}
 .chart-btn.active{background:#1a3a1a;color:#3fb950;border-color:#238636}
@@ -153,6 +153,35 @@ body.live-mode{border-top:3px solid #f85149}
 .ss-name{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px}
 .ss-pnl{font-size:18px;font-weight:700;font-variant-numeric:tabular-nums}
 .ss-detail{font-size:11px;color:#8b949e;margin-top:2px}
+/* P&L summary cards */
+.pnl-summary-bar{display:flex;gap:16px;margin-bottom:16px}
+.pnl-card{flex:1;background:#161b22;border:1px solid #30363d;border-radius:8px;padding:16px;position:relative}
+.pnl-card.paper{border-top:3px solid #3fb950}
+.pnl-card.live{border-top:3px solid #f85149}
+.pnl-card-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+.pnl-card-title{font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px}
+.pnl-card.paper .pnl-card-title{color:#3fb950}
+.pnl-card.live .pnl-card-title{color:#f85149}
+.pnl-range-btns{display:flex;gap:4px}
+.pnl-range-btn{padding:2px 8px;font-size:10px;font-weight:600;border:1px solid #30363d;border-radius:3px;cursor:pointer;font-family:inherit;background:transparent;color:#8b949e;transition:all .2s}
+.pnl-range-btn:hover{color:#c9d1d9;border-color:#8b949e}
+.pnl-range-btn.active{background:#1a3a1a;color:#3fb950;border-color:#238636}
+.pnl-card-stats{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.pnl-stat{text-align:center}
+.pnl-stat-val{font-size:18px;font-weight:700;font-variant-numeric:tabular-nums}
+.pnl-stat-label{font-size:10px;text-transform:uppercase;color:#8b949e;margin-top:2px;letter-spacing:0.5px}
+/* Mode section headers */
+.mode-section{margin-bottom:24px}
+.mode-section-header{display:flex;align-items:center;gap:8px;padding:8px 12px;background:#161b22;border:1px solid #30363d;border-radius:6px;cursor:pointer;user-select:none;margin-bottom:12px}
+.mode-section-header:hover{background:#1c2128}
+.mode-section-arrow{font-size:10px;color:#8b949e;transition:transform .2s}
+.mode-section-arrow.open{transform:rotate(90deg)}
+.mode-section-title{font-size:14px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px}
+.mode-section-header.paper .mode-section-title{color:#3fb950}
+.mode-section-header.live .mode-section-title{color:#f85149}
+.mode-section-count{font-size:11px;color:#8b949e}
+.mode-section-body{overflow:hidden;transition:max-height .3s ease;max-height:0}
+.mode-section-body.open{max-height:5000px}
 .trade-table{width:100%;border-collapse:collapse;font-size:12px}
 .trade-table th{text-align:left;padding:6px 8px;border-bottom:1px solid #30363d;color:#8b949e;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;font-weight:600}
 .trade-table td{padding:6px 8px;border-bottom:1px solid #21262d}
@@ -478,48 +507,123 @@ body.live-mode{border-top:3px solid #f85149}
 </div><!-- end dashboard-view -->
 
 <div id="chart-view">
-  <div class="chart-stats" id="chart-stats">
-    <div class="chart-stat"><div class="cs-val" id="cs-total-trades">--</div><div class="cs-label">Total Trades</div></div>
-    <div class="chart-stat"><div class="cs-val" id="cs-win-rate">--</div><div class="cs-label">Win Rate</div></div>
-    <div class="chart-stat"><div class="cs-val" id="cs-total-pnl">--</div><div class="cs-label">Total P&amp;L</div></div>
-    <div class="chart-stat"><div class="cs-val" id="cs-avg-pnl">--</div><div class="cs-label">Avg P&amp;L</div></div>
-    <div class="chart-stat"><div class="cs-val" id="cs-best">--</div><div class="cs-label">Best Trade</div></div>
-    <div class="chart-stat"><div class="cs-val" id="cs-worst">--</div><div class="cs-label">Worst Trade</div></div>
+  <!-- P&L Summary Bar -->
+  <div class="pnl-summary-bar">
+    <div class="pnl-card paper">
+      <div class="pnl-card-header">
+        <span class="pnl-card-title">Paper Trading</span>
+        <div class="pnl-range-btns" id="pnl-range-paper">
+          <button class="pnl-range-btn active" data-range="1d" onclick="setPnlRange('paper','1d')">1D</button>
+          <button class="pnl-range-btn" data-range="1w" onclick="setPnlRange('paper','1w')">1W</button>
+          <button class="pnl-range-btn" data-range="1m" onclick="setPnlRange('paper','1m')">1M</button>
+          <button class="pnl-range-btn" data-range="1y" onclick="setPnlRange('paper','1y')">1Y</button>
+        </div>
+      </div>
+      <div class="pnl-card-stats">
+        <div class="pnl-stat"><div class="pnl-stat-val" id="pnl-total-paper">--</div><div class="pnl-stat-label">Total P&amp;L</div></div>
+        <div class="pnl-stat"><div class="pnl-stat-val" id="pnl-trades-paper">--</div><div class="pnl-stat-label">Trades</div></div>
+        <div class="pnl-stat"><div class="pnl-stat-val" id="pnl-winrate-paper">--</div><div class="pnl-stat-label">Win Rate</div></div>
+        <div class="pnl-stat"><div class="pnl-stat-val" id="pnl-fees-paper">--</div><div class="pnl-stat-label">Fees</div></div>
+      </div>
+    </div>
+    <div class="pnl-card live">
+      <div class="pnl-card-header">
+        <span class="pnl-card-title">Live Trading</span>
+        <div class="pnl-range-btns" id="pnl-range-live">
+          <button class="pnl-range-btn active" data-range="1d" onclick="setPnlRange('live','1d')">1D</button>
+          <button class="pnl-range-btn" data-range="1w" onclick="setPnlRange('live','1w')">1W</button>
+          <button class="pnl-range-btn" data-range="1m" onclick="setPnlRange('live','1m')">1M</button>
+          <button class="pnl-range-btn" data-range="1y" onclick="setPnlRange('live','1y')">1Y</button>
+        </div>
+      </div>
+      <div class="pnl-card-stats">
+        <div class="pnl-stat"><div class="pnl-stat-val" id="pnl-total-live">--</div><div class="pnl-stat-label">Total P&amp;L</div></div>
+        <div class="pnl-stat"><div class="pnl-stat-val" id="pnl-trades-live">--</div><div class="pnl-stat-label">Trades</div></div>
+        <div class="pnl-stat"><div class="pnl-stat-val" id="pnl-winrate-live">--</div><div class="pnl-stat-label">Win Rate</div></div>
+        <div class="pnl-stat"><div class="pnl-stat-val" id="pnl-fees-live">--</div><div class="pnl-stat-label">Fees</div></div>
+      </div>
+    </div>
   </div>
-  <div id="strategy-stats"></div>
-  <div class="chart-controls">
-    <button class="chart-btn active" data-filter="all" onclick="filterChart('all')">All</button>
-    <button class="chart-btn" data-filter="BTC" onclick="filterChart('BTC')">BTC</button>
-    <button class="chart-btn" data-filter="ETH" onclick="filterChart('ETH')">ETH</button>
-    <span style="color:#30363d;margin:0 4px">|</span>
-    <button class="chart-btn active" data-action="all" onclick="filterAction('all')">All Types</button>
-    <button class="chart-btn" data-action="settle" onclick="filterAction('settle')">Settlement</button>
-    <button class="chart-btn" data-action="stop_loss" onclick="filterAction('stop_loss')">Stop Loss</button>
-    <button class="chart-btn" data-action="take_profit" onclick="filterAction('take_profit')">Take Profit</button>
-    <button class="chart-btn" data-action="thesis_break" onclick="filterAction('thesis_break')">Thesis Break</button>
-    <span style="color:#30363d;margin:0 4px">|</span>
-    <button class="chart-btn active" data-strategy="all" onclick="filterStrategy('all')">All Strategies</button>
-    <button class="chart-btn" data-strategy="directional" onclick="filterStrategy('directional')">Directional</button>
-    <button class="chart-btn" data-strategy="settlement_ride" onclick="filterStrategy('settlement_ride')">Settlement Ride</button>
-    <button class="chart-btn" data-strategy="fomo" onclick="filterStrategy('fomo')">FOMO</button>
-    <button class="chart-btn" data-strategy="market_making" onclick="filterStrategy('market_making')">Market Making</button>
-    <button class="chart-btn" data-strategy="certainty_scalp" onclick="filterStrategy('certainty_scalp')">Certainty Scalp</button>
-    <button class="chart-btn" data-strategy="averaging" onclick="filterStrategy('averaging')">Averaging</button>
-    <button class="chart-btn" data-strategy="trend_continuation" onclick="filterStrategy('trend_continuation')">Trend Cont.</button>
-    <span style="flex:1"></span>
-    <button class="chart-btn" onclick="refreshTrades()" style="border-color:#58a6ff;color:#58a6ff">Refresh</button>
+
+  <!-- Paper Trading Section -->
+  <div class="mode-section" id="section-paper">
+    <div class="mode-section-header paper" onclick="toggleModeSection('paper')">
+      <span class="mode-section-arrow open" id="arrow-paper">&#9654;</span>
+      <span class="mode-section-title">Paper Trading</span>
+      <span class="mode-section-count" id="count-paper"></span>
+      <span style="flex:1"></span>
+      <button class="chart-btn" onclick="event.stopPropagation();refreshTrades()" style="border-color:#58a6ff;color:#58a6ff;font-size:10px;padding:2px 8px">Refresh</button>
+    </div>
+    <div class="mode-section-body open" id="body-paper">
+      <div id="strategy-stats-paper" style="display:flex;gap:6px;padding:0 0 8px;flex-wrap:wrap"></div>
+      <div class="chart-controls" id="filters-paper">
+        <button class="chart-btn active" data-filter="all" onclick="setFilter('paper','chart','all')">All</button>
+        <button class="chart-btn" data-filter="BTC" onclick="setFilter('paper','chart','BTC')">BTC</button>
+        <button class="chart-btn" data-filter="ETH" onclick="setFilter('paper','chart','ETH')">ETH</button>
+        <span style="color:#30363d;margin:0 4px">|</span>
+        <button class="chart-btn active" data-action="all" onclick="setFilter('paper','action','all')">All Types</button>
+        <button class="chart-btn" data-action="settle" onclick="setFilter('paper','action','settle')">Settlement</button>
+        <button class="chart-btn" data-action="stop_loss" onclick="setFilter('paper','action','stop_loss')">Stop Loss</button>
+        <button class="chart-btn" data-action="take_profit" onclick="setFilter('paper','action','take_profit')">Take Profit</button>
+        <button class="chart-btn" data-action="thesis_break" onclick="setFilter('paper','action','thesis_break')">Thesis Break</button>
+        <span style="color:#30363d;margin:0 4px">|</span>
+        <button class="chart-btn active" data-strategy="all" onclick="setFilter('paper','strategy','all')">All Strategies</button>
+        <button class="chart-btn" data-strategy="directional" onclick="setFilter('paper','strategy','directional')">Directional</button>
+        <button class="chart-btn" data-strategy="settlement_ride" onclick="setFilter('paper','strategy','settlement_ride')">Settlement Ride</button>
+        <button class="chart-btn" data-strategy="fomo" onclick="setFilter('paper','strategy','fomo')">FOMO</button>
+        <button class="chart-btn" data-strategy="market_making" onclick="setFilter('paper','strategy','market_making')">Market Making</button>
+        <button class="chart-btn" data-strategy="certainty_scalp" onclick="setFilter('paper','strategy','certainty_scalp')">Certainty Scalp</button>
+        <button class="chart-btn" data-strategy="trend_continuation" onclick="setFilter('paper','strategy','trend_continuation')">Trend Cont.</button>
+      </div>
+      <div class="chart-container"><canvas id="equity-chart-paper" height="300"></canvas></div>
+      <div class="chart-container"><canvas id="pnl-chart-paper" height="200"></canvas></div>
+      <div class="chart-container" style="max-height:400px;overflow-y:auto">
+        <table class="trade-table">
+          <thead><tr><th>Time</th><th>Market</th><th>Side</th><th>Action</th><th>Strategy</th><th>Count</th><th>Price</th><th>Fees</th><th>P&amp;L</th></tr></thead>
+          <tbody id="trade-table-body-paper"></tbody>
+        </table>
+      </div>
+    </div>
   </div>
-  <div class="chart-container">
-    <canvas id="equity-chart" height="300"></canvas>
-  </div>
-  <div class="chart-container">
-    <canvas id="pnl-chart" height="200"></canvas>
-  </div>
-  <div class="chart-container" style="max-height:400px;overflow-y:auto">
-    <table class="trade-table">
-      <thead><tr><th>Time</th><th>Market</th><th>Side</th><th>Action</th><th>Strategy</th><th>Count</th><th>Price</th><th>Fees</th><th>P&amp;L</th></tr></thead>
-      <tbody id="trade-table-body"></tbody>
-    </table>
+
+  <!-- Live Trading Section -->
+  <div class="mode-section" id="section-live">
+    <div class="mode-section-header live" onclick="toggleModeSection('live')">
+      <span class="mode-section-arrow open" id="arrow-live">&#9654;</span>
+      <span class="mode-section-title">Live Trading</span>
+      <span class="mode-section-count" id="count-live"></span>
+      <span style="flex:1"></span>
+    </div>
+    <div class="mode-section-body open" id="body-live">
+      <div id="strategy-stats-live" style="display:flex;gap:6px;padding:0 0 8px;flex-wrap:wrap"></div>
+      <div class="chart-controls" id="filters-live">
+        <button class="chart-btn active" data-filter="all" onclick="setFilter('live','chart','all')">All</button>
+        <button class="chart-btn" data-filter="BTC" onclick="setFilter('live','chart','BTC')">BTC</button>
+        <button class="chart-btn" data-filter="ETH" onclick="setFilter('live','chart','ETH')">ETH</button>
+        <span style="color:#30363d;margin:0 4px">|</span>
+        <button class="chart-btn active" data-action="all" onclick="setFilter('live','action','all')">All Types</button>
+        <button class="chart-btn" data-action="settle" onclick="setFilter('live','action','settle')">Settlement</button>
+        <button class="chart-btn" data-action="stop_loss" onclick="setFilter('live','action','stop_loss')">Stop Loss</button>
+        <button class="chart-btn" data-action="take_profit" onclick="setFilter('live','action','take_profit')">Take Profit</button>
+        <button class="chart-btn" data-action="thesis_break" onclick="setFilter('live','action','thesis_break')">Thesis Break</button>
+        <span style="color:#30363d;margin:0 4px">|</span>
+        <button class="chart-btn active" data-strategy="all" onclick="setFilter('live','strategy','all')">All Strategies</button>
+        <button class="chart-btn" data-strategy="directional" onclick="setFilter('live','strategy','directional')">Directional</button>
+        <button class="chart-btn" data-strategy="settlement_ride" onclick="setFilter('live','strategy','settlement_ride')">Settlement Ride</button>
+        <button class="chart-btn" data-strategy="fomo" onclick="setFilter('live','strategy','fomo')">FOMO</button>
+        <button class="chart-btn" data-strategy="market_making" onclick="setFilter('live','strategy','market_making')">Market Making</button>
+        <button class="chart-btn" data-strategy="certainty_scalp" onclick="setFilter('live','strategy','certainty_scalp')">Certainty Scalp</button>
+        <button class="chart-btn" data-strategy="trend_continuation" onclick="setFilter('live','strategy','trend_continuation')">Trend Cont.</button>
+      </div>
+      <div class="chart-container"><canvas id="equity-chart-live" height="300"></canvas></div>
+      <div class="chart-container"><canvas id="pnl-chart-live" height="200"></canvas></div>
+      <div class="chart-container" style="max-height:400px;overflow-y:auto">
+        <table class="trade-table">
+          <thead><tr><th>Time</th><th>Market</th><th>Side</th><th>Action</th><th>Strategy</th><th>Count</th><th>Price</th><th>Fees</th><th>P&amp;L</th></tr></thead>
+          <tbody id="trade-table-body-live"></tbody>
+        </table>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -1253,7 +1357,7 @@ body.live-mode{border-top:3px solid #f85149}
     $('dashboard-view').style.display = view === 'dashboard' ? '' : 'none';
     $('chart-view').style.display = view === 'trades' ? 'block' : 'none';
     $('settings-view').style.display = view === 'settings' ? 'block' : 'none';
-    if (view === 'trades' && allTrades.length === 0) refreshTrades();
+    if (view === 'trades' && modeState.paper.trades.length === 0 && modeState.live.trades.length === 0) refreshTrades();
     if (view === 'settings') renderSettings();
   };
 
@@ -1340,13 +1444,11 @@ body.live-mode{border-top:3px solid #f85149}
     }
   }
 
-  // ===== Trade chart =====
-  let allTrades = [];
-  let chartFilter = 'all';
-  let actionFilter = 'all';
-  let strategyFilter = 'all';
-  let equityChart = null;
-  let pnlChart = null;
+  // ===== Trade chart (per-mode) =====
+  const modeState = {
+    paper: { trades: [], chartFilter: 'all', actionFilter: 'all', strategyFilter: 'all', equityChart: null, pnlChart: null, pnlRange: '1d' },
+    live:  { trades: [], chartFilter: 'all', actionFilter: 'all', strategyFilter: 'all', equityChart: null, pnlChart: null, pnlRange: '1d' },
+  };
 
   const STRAT_COLORS = {
     directional: '#58a6ff',
@@ -1367,106 +1469,91 @@ body.live-mode{border-top:3px solid #f85149}
     trend_continuation: 'Trend Cont.',
   };
 
-  window.filterChart = function(filter) {
-    chartFilter = filter;
-    document.querySelectorAll('.chart-btn[data-filter]').forEach(b => {
-      b.classList.toggle('active', b.dataset.filter === filter);
-    });
-    renderCharts();
+  window.toggleModeSection = function(mode) {
+    const body = $('body-' + mode);
+    const arrow = $('arrow-' + mode);
+    body.classList.toggle('open');
+    arrow.classList.toggle('open');
   };
 
-  window.filterAction = function(filter) {
-    actionFilter = filter;
-    document.querySelectorAll('.chart-btn[data-action]').forEach(b => {
-      b.classList.toggle('active', b.dataset.action === filter);
-    });
-    renderCharts();
+  window.setFilter = function(mode, type, val) {
+    const s = modeState[mode];
+    if (type === 'chart') s.chartFilter = val;
+    else if (type === 'action') s.actionFilter = val;
+    else if (type === 'strategy') s.strategyFilter = val;
+    const container = $('filters-' + mode);
+    if (type === 'chart') container.querySelectorAll('[data-filter]').forEach(b => b.classList.toggle('active', b.dataset.filter === val));
+    if (type === 'action') container.querySelectorAll('[data-action]').forEach(b => b.classList.toggle('active', b.dataset.action === val));
+    if (type === 'strategy') container.querySelectorAll('[data-strategy]').forEach(b => b.classList.toggle('active', b.dataset.strategy === val));
+    renderModeSection(mode);
   };
 
-  window.filterStrategy = function(filter) {
-    strategyFilter = filter;
-    document.querySelectorAll('.chart-btn[data-strategy]').forEach(b => {
-      b.classList.toggle('active', b.dataset.strategy === filter);
-    });
-    renderCharts();
+  window.setPnlRange = function(mode, range) {
+    modeState[mode].pnlRange = range;
+    $('pnl-range-' + mode).querySelectorAll('.pnl-range-btn').forEach(b => b.classList.toggle('active', b.dataset.range === range));
+    fetchPnlSummary(mode);
   };
+
+  function fetchPnlSummary(mode) {
+    const range = modeState[mode].pnlRange;
+    fetch('/api/pnl-summary?mode=' + mode + '&range=' + range)
+      .then(r => r.json())
+      .then(d => {
+        const tp = $('pnl-total-' + mode);
+        tp.textContent = (d.total_pnl >= 0 ? '+' : '') + '$' + d.total_pnl.toFixed(2);
+        tp.style.color = d.total_pnl >= 0 ? '#3fb950' : '#f85149';
+        $('pnl-trades-' + mode).textContent = d.trade_count;
+        const wr = $('pnl-winrate-' + mode);
+        wr.textContent = d.trade_count > 0 ? d.win_rate.toFixed(1) + '%' : '--';
+        wr.style.color = d.win_rate >= 50 ? '#3fb950' : d.trade_count > 0 ? '#f85149' : '#8b949e';
+        const fe = $('pnl-fees-' + mode);
+        fe.textContent = '$' + d.total_fees.toFixed(2);
+        fe.style.color = '#8b949e';
+      })
+      .catch(err => console.error('pnl summary error', mode, err));
+  }
 
   window.refreshTrades = function() {
-    fetch('/api/trades?limit=500')
-      .then(r => r.json())
-      .then(trades => {
-        allTrades = trades.sort((a, b) => new Date(a.exit_time || a.entry_time) - new Date(b.exit_time || b.entry_time));
-        renderCharts();
-      })
-      .catch(err => console.error('trades fetch error', err));
+    Promise.all([
+      fetch('/api/trades?limit=500&mode=paper').then(r => r.json()),
+      fetch('/api/trades?limit=500&mode=live').then(r => r.json()),
+    ]).then(([paper, live]) => {
+      modeState.paper.trades = paper.sort((a, b) => new Date(a.exit_time || a.entry_time) - new Date(b.exit_time || b.entry_time));
+      modeState.live.trades = live.sort((a, b) => new Date(a.exit_time || a.entry_time) - new Date(b.exit_time || b.entry_time));
+      $('count-paper').textContent = paper.length + ' trades';
+      $('count-live').textContent = live.length + ' trades';
+      renderModeSection('paper');
+      renderModeSection('live');
+    }).catch(err => console.error('trades fetch error', err));
+    fetchPnlSummary('paper');
+    fetchPnlSummary('live');
   };
 
-  function getFilteredTrades() {
-    return allTrades.filter(t => {
-      // Only show exit trades (settle, stop_loss, take_profit, etc) not buy entries
+  function getFilteredTrades(mode) {
+    const s = modeState[mode];
+    return s.trades.filter(t => {
       if (t.action === 'buy') return false;
-      if (chartFilter !== 'all') {
+      if (s.chartFilter !== 'all') {
         const ticker = (t.market_ticker || '').toUpperCase();
-        if (chartFilter === 'BTC' && !ticker.includes('BTC')) return false;
-        if (chartFilter === 'ETH' && !ticker.includes('ETH')) return false;
+        if (s.chartFilter === 'BTC' && !ticker.includes('BTC')) return false;
+        if (s.chartFilter === 'ETH' && !ticker.includes('ETH')) return false;
       }
-      if (actionFilter !== 'all' && t.action !== actionFilter) return false;
-      if (strategyFilter !== 'all' && (t.strategy_tag || 'directional') !== strategyFilter) return false;
+      if (s.actionFilter !== 'all' && t.action !== s.actionFilter) return false;
+      if (s.strategyFilter !== 'all' && (t.strategy_tag || 'directional') !== s.strategyFilter) return false;
       return true;
     });
   }
 
-  function renderCharts() {
-    const trades = getFilteredTrades();
-    renderStats(trades);
-    renderStrategyStats(trades);
-    renderEquityChart(trades);
-    renderPnlChart(trades);
-    renderTradeTable(trades);
+  function renderModeSection(mode) {
+    const trades = getFilteredTrades(mode);
+    renderStrategyStats(mode, trades);
+    renderEquityChart(mode, trades);
+    renderPnlChart(mode, trades);
+    renderTradeTable(mode, trades);
   }
 
-  function renderStats(trades) {
-    const total = trades.length;
-    const wins = trades.filter(t => (t.pnl_dollars || 0) > 0).length;
-    const pnls = trades.map(t => t.pnl_dollars || 0);
-    const totalPnl = pnls.reduce((a, b) => a + b, 0);
-
-    $('cs-total-trades').textContent = total;
-    const wr = $('cs-win-rate');
-    if (total > 0) {
-      const rate = (wins / total * 100).toFixed(1);
-      wr.textContent = rate + '%';
-      wr.style.color = wins / total >= 0.5 ? '#3fb950' : '#f85149';
-    } else { wr.textContent = '--'; wr.style.color = '#8b949e'; }
-
-    const tp = $('cs-total-pnl');
-    tp.textContent = (totalPnl >= 0 ? '+' : '') + '$' + totalPnl.toFixed(2);
-    tp.style.color = totalPnl >= 0 ? '#3fb950' : '#f85149';
-
-    const avg = $('cs-avg-pnl');
-    if (total > 0) {
-      const a = totalPnl / total;
-      avg.textContent = (a >= 0 ? '+' : '') + '$' + a.toFixed(2);
-      avg.style.color = a >= 0 ? '#3fb950' : '#f85149';
-    } else { avg.textContent = '--'; avg.style.color = '#8b949e'; }
-
-    const best = $('cs-best');
-    if (pnls.length > 0) {
-      const b = Math.max(...pnls);
-      best.textContent = '+$' + b.toFixed(2);
-      best.style.color = '#3fb950';
-    } else { best.textContent = '--'; best.style.color = '#8b949e'; }
-
-    const worst = $('cs-worst');
-    if (pnls.length > 0) {
-      const w = Math.min(...pnls);
-      worst.textContent = '$' + w.toFixed(2);
-      worst.style.color = '#f85149';
-    } else { worst.textContent = '--'; worst.style.color = '#8b949e'; }
-  }
-
-  function renderStrategyStats(trades) {
-    const container = $('strategy-stats');
+  function renderStrategyStats(mode, trades) {
+    const container = $('strategy-stats-' + mode);
     const byStrat = {};
     for (const t of trades) {
       const tag = t.strategy_tag || 'directional';
@@ -1495,11 +1582,11 @@ body.live-mode{border-top:3px solid #f85149}
     }).join('');
   }
 
-  function renderEquityChart(trades) {
-    const ctx = $('equity-chart').getContext('2d');
-    if (equityChart) equityChart.destroy();
+  function renderEquityChart(mode, trades) {
+    const s = modeState[mode];
+    const ctx = $('equity-chart-' + mode).getContext('2d');
+    if (s.equityChart) s.equityChart.destroy();
 
-    // Group trades by strategy
     const byStrat = {};
     for (const t of trades) {
       const tag = t.strategy_tag || 'directional';
@@ -1510,8 +1597,6 @@ body.live-mode{border-top:3px solid #f85149}
     const multiStrat = stratKeys.length > 1;
 
     const datasets = [];
-
-    // Per-strategy cumulative P&L lines
     for (const tag of stratKeys) {
       const stTrades = byStrat[tag];
       const color = STRAT_COLORS[tag] || '#8b949e';
@@ -1522,7 +1607,7 @@ body.live-mode{border-top:3px solid #f85149}
         cum += (t.pnl_dollars || 0);
         points.push({x: new Date(t.exit_time || t.entry_time).getTime(), y: Math.round(cum * 100) / 100});
       }
-      const hidden = strategyFilter !== 'all' && strategyFilter !== tag;
+      const hidden = s.strategyFilter !== 'all' && s.strategyFilter !== tag;
       datasets.push({
         label: label,
         data: points,
@@ -1533,11 +1618,9 @@ body.live-mode{border-top:3px solid #f85149}
         borderWidth: 2,
         pointRadius: 0,
         hidden: hidden,
-        _stratTag: tag,
       });
     }
 
-    // Dashed white "Total" line when multiple strategies
     if (multiStrat) {
       let cumTotal = 0;
       const totalPts = [{x: trades.length > 0 ? new Date(trades[0].exit_time || trades[0].entry_time).getTime() - 60000 : Date.now(), y: 0}];
@@ -1555,11 +1638,10 @@ body.live-mode{border-top:3px solid #f85149}
         borderWidth: 2,
         borderDash: [6, 3],
         pointRadius: 0,
-        hidden: strategyFilter !== 'all',
+        hidden: s.strategyFilter !== 'all',
       });
     }
 
-    // Scatter markers per strategy
     const markerDatasets = [];
     for (const tag of stratKeys) {
       const stTrades = byStrat[tag];
@@ -1580,7 +1662,7 @@ body.live-mode{border-top:3px solid #f85149}
           strategy: label,
         });
       }
-      const hidden = strategyFilter !== 'all' && strategyFilter !== tag;
+      const hidden = s.strategyFilter !== 'all' && s.strategyFilter !== tag;
       markerDatasets.push({
         label: 'Trades',
         data: markers,
@@ -1591,12 +1673,11 @@ body.live-mode{border-top:3px solid #f85149}
         pointBorderColor: markers.map(m => m.pnl >= 0 ? '#238636' : '#da3633'),
         pointBorderWidth: 2,
         hidden: hidden,
-        _stratTag: tag,
       });
     }
     datasets.push(...markerDatasets);
 
-    equityChart = new Chart(ctx, {
+    s.equityChart = new Chart(ctx, {
       type: 'line',
       data: { datasets: datasets },
       options: {
@@ -1658,9 +1739,10 @@ body.live-mode{border-top:3px solid #f85149}
     });
   }
 
-  function renderPnlChart(trades) {
-    const ctx = $('pnl-chart').getContext('2d');
-    if (pnlChart) pnlChart.destroy();
+  function renderPnlChart(mode, trades) {
+    const s = modeState[mode];
+    const ctx = $('pnl-chart-' + mode).getContext('2d');
+    if (s.pnlChart) s.pnlChart.destroy();
 
     const bars = trades.map(t => ({
       x: new Date(t.exit_time || t.entry_time).getTime(),
@@ -1670,7 +1752,7 @@ body.live-mode{border-top:3px solid #f85149}
       side: t.side,
     }));
 
-    pnlChart = new Chart(ctx, {
+    s.pnlChart = new Chart(ctx, {
       type: 'bar',
       data: {
         datasets: [{
@@ -1723,8 +1805,8 @@ body.live-mode{border-top:3px solid #f85149}
     });
   }
 
-  function renderTradeTable(trades) {
-    const tbody = $('trade-table-body');
+  function renderTradeTable(mode, trades) {
+    const tbody = $('trade-table-body-' + mode);
     const rows = trades.slice().reverse();
     tbody.innerHTML = rows.map(t => {
       const pnl = t.pnl_dollars || 0;
