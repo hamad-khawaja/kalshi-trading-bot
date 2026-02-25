@@ -155,6 +155,8 @@ class TradingBot:
             "phase_filter": settings.strategy.phase_filter_enabled,
             "trend_guard": settings.strategy.trend_guard_enabled,
             "mm_vol_filter": settings.strategy.mm_vol_filter_enabled,
+            "ppe_filter": settings.strategy.ppe_filter_enabled,
+            "tc_extreme_vol_filter": settings.strategy.tc_extreme_vol_filter_enabled,
         }
         # Snapshot startup config for dashboard Settings tab
         self._dashboard_state.startup_config = {
@@ -164,11 +166,23 @@ class TradingBot:
             "features": settings.features.model_dump(),
             "averaging": settings.averaging.model_dump(),
         }
+        # Load live config for comparison in Settings tab
+        live_path = Path("config/settings.live.yaml")
+        if live_path.exists():
+            live_settings = load_settings(str(live_path))
+            self._dashboard_state.live_config = {
+                "mode": live_settings.mode,
+                "strategy": live_settings.strategy.model_dump(),
+                "risk": live_settings.risk.model_dump(),
+                "features": live_settings.features.model_dump(),
+                "averaging": live_settings.averaging.model_dump(),
+            }
         self._dashboard_server = DashboardServer(
             self._dashboard_state,
             settings.dashboard.host,
             settings.dashboard.port,
             db=self._db,
+            bot=self,
         ) if settings.dashboard.enabled else None
 
         # Feature engine (pass shared settlement_history dict reference)
@@ -360,6 +374,10 @@ class TradingBot:
         self._settings.strategy.phase_filter_enabled = st.get("phase_filter", True)
         self._settings.strategy.trend_guard_enabled = st.get("trend_guard", False)
         self._settings.strategy.mm_vol_filter_enabled = st.get("mm_vol_filter", False)
+        self._settings.strategy.ppe_filter_enabled = st.get("ppe_filter", True)
+        self._settings.strategy.tc_extreme_vol_filter_enabled = st.get(
+            "tc_extreme_vol_filter", True
+        )
 
         await asyncio.gather(*(self._process_market(m) for m in markets_to_process))
         await self._db.flush()
@@ -792,8 +810,8 @@ class TradingBot:
                         signal_type=signal_item.signal_type,
                         market_volume=local_market.get("volume"),
                         cycle=self._cycle_count,
-                        spot_price=float(local_snapshot.spot_price),
-                        strike=float(local_snapshot.strike_price) if local_snapshot.strike_price else None,
+                        spot_price=local_snapshot.get("spot_price"),
+                        strike=local_snapshot.get("strike_price"),
                     )
                     # Mark trend continuation market as entered after fill
                     if signal_item.signal_type == "trend_continuation":
@@ -821,8 +839,9 @@ class TradingBot:
                     pos_after_fill = self._position_tracker.get_position(ticker)
                     if pos_after_fill:
                         pos_after_fill.fees_paid += buy_fee
-                        if local_snapshot.strike_price is not None:
-                            pos_after_fill.strike_price = local_snapshot.strike_price
+                        strike = local_snapshot.get("strike_price")
+                        if strike is not None:
+                            pos_after_fill.strike_price = Decimal(str(strike))
                     # Log trade to database
                     try:
                         from src.data.models import CompletedTrade
@@ -841,6 +860,7 @@ class TradingBot:
                             strategy_tag=signal_item.signal_type,
                             market_volume=local_market.get("volume"),
                             won=None,
+                            mode=self._settings.mode,
                         )
                         await self._db.insert_trade(completed)
                     except Exception:
@@ -1052,6 +1072,7 @@ class TradingBot:
                                         model_probability=pos.model_probability,
                                         implied_probability=pos.implied_probability,
                                         won=won,
+                                        mode=self._settings.mode,
                                     )
                                     await self._db.insert_trade(completed)
                                 except Exception:
@@ -1141,6 +1162,7 @@ class TradingBot:
                                     model_probability=pos.model_probability,
                                     implied_probability=pos.implied_probability,
                                     won=won if yes_wins is not None else None,
+                                    mode=self._settings.mode,
                                 )
                                 await self._db.insert_trade(completed)
                             except Exception:
@@ -1234,6 +1256,7 @@ class TradingBot:
                                     market_volume=pe_snap.volume if pe_snap else None,
                                     model_probability=pos.model_probability,
                                     implied_probability=pos.implied_probability,
+                                    mode=self._settings.mode,
                                 )
                                 await self._db.insert_trade(completed)
                             except Exception:
@@ -1321,6 +1344,7 @@ class TradingBot:
                                     market_volume=tp_snap.volume if tp_snap else None,
                                     model_probability=pos.model_probability,
                                     implied_probability=pos.implied_probability,
+                                    mode=self._settings.mode,
                                 )
                                 await self._db.insert_trade(completed)
                             except Exception:
@@ -1338,6 +1362,8 @@ class TradingBot:
                         min_hold_seconds=self._settings.strategy.stop_loss_min_hold_seconds,
                         asset_stop_loss_pct=self._settings.strategy.asset_stop_loss_pct or None,
                         max_dollar_loss=self._settings.strategy.stop_loss_max_dollar_loss,
+                        directional_stop_loss_pct=self._settings.strategy.directional_stop_loss_pct,
+                        directional_max_dollar_loss=self._settings.strategy.directional_stop_loss_max_dollar,
                     )
                     for sl_ticker, sell_price in sl_signals:
                         pos = self._position_tracker.get_position(sl_ticker)
@@ -1414,6 +1440,7 @@ class TradingBot:
                                     market_volume=sl_snap.volume if sl_snap else None,
                                     model_probability=pos.model_probability,
                                     implied_probability=pos.implied_probability,
+                                    mode=self._settings.mode,
                                 )
                                 await self._db.insert_trade(completed)
                             except Exception:
@@ -1513,6 +1540,7 @@ class TradingBot:
                                     market_volume=tb_snap.volume if tb_snap else None,
                                     model_probability=pos.model_probability,
                                     implied_probability=pos.implied_probability,
+                                    mode=self._settings.mode,
                                 )
                                 await self._db.insert_trade(completed)
                             except Exception:
@@ -1681,6 +1709,7 @@ class TradingBot:
                     model_probability=pos.model_probability,
                     implied_probability=pos.implied_probability,
                     won=won,
+                    mode=self._settings.mode,
                 )
                 await self._db.insert_trade(completed)
             except Exception:
@@ -1855,6 +1884,96 @@ class TradingBot:
             "total_fees": float(self._total_fees),
             "daily_pnl_peak": float(self._risk_manager.daily_pnl_peak),
         }
+
+    async def switch_mode(self, target_mode: str) -> dict:
+        """Switch between paper and live mode at runtime.
+
+        Returns a dict with status info for the dashboard API response.
+        Requires zero open positions as a safety gate.
+        """
+        if target_mode not in ("paper", "live"):
+            return {"error": f"Invalid mode: {target_mode}", "mode": self._settings.mode}
+
+        if target_mode == self._settings.mode:
+            return {"mode": self._settings.mode, "message": "Already in this mode"}
+
+        # Safety gate: require zero open positions
+        if self._position_tracker.position_count > 0:
+            return {
+                "error": "Cannot switch mode with open positions",
+                "mode": self._settings.mode,
+                "open_positions": self._position_tracker.position_count,
+            }
+
+        # Safety gate: require no active orders
+        active_orders = self._order_manager.get_active_orders()
+        if active_orders:
+            return {
+                "error": "Cannot switch mode with active orders",
+                "mode": self._settings.mode,
+                "active_orders": len(active_orders),
+            }
+
+        old_mode = self._settings.mode
+
+        # Load appropriate settings file
+        config_path = (
+            "config/settings.live.yaml" if target_mode == "live"
+            else "config/settings.yaml"
+        )
+        try:
+            new_settings = load_settings(config_path)
+        except Exception:
+            logger.exception("mode_switch_config_load_error", target_mode=target_mode)
+            return {"error": "Failed to load config", "mode": self._settings.mode}
+
+        # Apply mode and config
+        self._settings.mode = target_mode
+        self._settings.strategy = new_settings.strategy
+        self._settings.risk = new_settings.risk
+
+        # Flip paper_mode on execution components
+        self._order_manager._paper_mode = (target_mode == "paper")
+        self._position_tracker._paper_mode = (target_mode == "paper")
+
+        # Clear balance cache
+        self._cached_balance = None
+        self._balance_fetched_at = 0.0
+
+        # Recreate risk/sizing components with new config
+        self._position_sizer = PositionSizer(
+            self._settings.risk, strategy_config=self._settings.strategy
+        )
+        self._risk_manager = RiskManager(self._settings.risk)
+
+        # Update dashboard state
+        self._dashboard_state.mode = target_mode
+        self._dashboard_state.startup_config = {
+            "mode": target_mode,
+            "strategy": self._settings.strategy.model_dump(),
+            "risk": self._settings.risk.model_dump(),
+            "features": self._settings.features.model_dump(),
+            "averaging": self._settings.averaging.model_dump(),
+        }
+
+        # Sync strategy toggles to match new config
+        self._dashboard_state.strategy_toggles = {
+            "directional": self._settings.strategy.directional_enabled,
+            "fomo": self._settings.strategy.fomo_enabled,
+            "certainty_scalp": self._settings.strategy.certainty_scalp_enabled,
+            "settlement_ride": self._settings.strategy.settlement_ride_enabled,
+            "trend_continuation": self._settings.strategy.trend_continuation_enabled,
+            "market_making": self._settings.strategy.use_market_maker,
+            "phase_filter": self._settings.strategy.phase_filter_enabled,
+            "trend_guard": self._settings.strategy.trend_guard_enabled,
+            "mm_vol_filter": self._settings.strategy.mm_vol_filter_enabled,
+            "ppe_filter": self._settings.strategy.ppe_filter_enabled,
+            "tc_extreme_vol_filter": self._settings.strategy.tc_extreme_vol_filter_enabled,
+        }
+
+        logger.info("mode_switched", old_mode=old_mode, new_mode=target_mode)
+
+        return {"mode": target_mode, "previous_mode": old_mode}
 
     def _update_dashboard_positions(self) -> None:
         """Push current positions and risk stats to the dashboard immediately."""

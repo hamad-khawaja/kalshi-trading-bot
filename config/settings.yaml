@@ -82,15 +82,18 @@ strategy:
     ETH: 1.4                         # ETH is ~1.3-1.5x noisier than BTC, not 2x
   asset_stop_loss_pct:
     ETH: 0.20                        # ETH matches tighter global SL (was 30%)
+  directional_stop_loss_pct: 0.12    # 12% SL for directional (vs global 20%) — tighter for higher-quality entries
+  directional_stop_loss_max_dollar: 10.00  # $10 max loss per directional trade (vs global $20)
   asset_directional_disabled: [ETH]  # ETH: MM-only (45% directional WR was dragging BTC profits)
+  directional_kelly_fraction: 1.0    # Half global kelly (2.0) — reduce directional position sizes
   # Zone filter: block expensive directional trades
   zone_filter_enabled: true
-  max_directional_price: 0.60
+  max_directional_price: 0.70       # Open Zone 4 ($0.60-$0.70): 100% historical WR, 0.7x Kelly caps size
   zone_edge_multipliers: [0.6, 0.8, 1.0]  # Zones 1, 2, 3 asymmetric edge
   # Phase timing: gate trades by window phase
   phase_filter_enabled: true
   phase_observation_end: 120.0        # 2 min — minimal: just enough for features to warm up
-  phase_confirmation_end: 120.0       # Same as observation — no separate confirmation phase
+  phase_confirmation_end: 240.0       # 4 min — require bounce-back confirmation for early directional
   phase_active_end: 840.0             # 14 min — full trading window
   phase_late_end: 840.0               # No separate late phase
   phase_late_edge_multiplier: 1.0     # No late tightening (active runs to 14 min)
@@ -105,6 +108,12 @@ strategy:
   # Cross-asset divergence: use other asset's implied prob as a lead signal
   cross_asset_divergence_enabled: true
   cross_asset_divergence_weight: 0.06
+  # Path efficiency (PPE) filter: block fakeout entries with choppy price paths
+  ppe_filter_enabled: true
+  ppe_min_threshold: 0.30             # Block directional if 300s PPE < 0.30
+  ppe_kelly_scaling_enabled: true     # Scale Kelly fraction by PPE
+  # TC extreme vol filter: block trend continuation in extreme vol regime
+  tc_extreme_vol_filter_enabled: true
   # Composite quality score: require combined edge + confidence quality
   min_quality_score: 0.80
   # BTC beta leader: use BTC momentum to enable ETH directional
@@ -112,7 +121,7 @@ strategy:
   btc_beta_min_signal: 0.20    # |btc_beta_signal| threshold to allow ETH directional (lowered: ~0.075% BTC move)
   # Quiet hours: skip directional trading during low-volume hours (MM still allowed)
   quiet_hours_enabled: true
-  quiet_hours_est: [18, 19, 20, 21, 22, 23, 0, 1, 2, 3, 4]  # 6 PM - 4:59 AM EST — overnight low-volume, consistently unprofitable
+  quiet_hours_est: [17, 18, 19, 20, 21, 0, 1, 2, 3]  # 5 PM - 3:59 AM EST — 5PM is 12.5% WR (-$118), 4AM EST is profitable (+$60)
   # Settlement-ride: enter after 10 min, hold to settlement
   settlement_ride_enabled: true
   settlement_ride_min_elapsed_seconds: 600.0

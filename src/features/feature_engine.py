@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from decimal import Decimal
-
 import math
+from decimal import Decimal
 from typing import Any
 
 import numpy as np
@@ -19,6 +18,7 @@ from src.features.indicators import (
     orderbook_depth_imbalance,
     orderbook_support_resistance,
     orderbook_top_concentration,
+    path_efficiency,
     rate_of_change_acceleration,
     rsi,
     spread_ratio,
@@ -117,6 +117,11 @@ class FeatureEngine:
             ob.yes_levels, ob.no_levels, implied_prob,
         )
 
+        # Path efficiency at multiple windows (tick-estimated like momentum)
+        ppe_60s = path_efficiency(prices, window=max(1, 60 * 2))
+        ppe_180s = path_efficiency(prices, window=max(1, 180 * 2))
+        ppe_300s = path_efficiency(prices, window=max(1, 300 * 2))
+
         # Settlement bias from recent Kalshi outcomes
         asset_symbol = self._extract_asset_symbol(snapshot.market_ticker)
         settle_bias = self._compute_settlement_bias(asset_symbol)
@@ -163,6 +168,9 @@ class FeatureEngine:
             window_phase=snapshot.window_phase,
             hour_of_day_sin=hour_of_day_sin,
             hour_of_day_cos=hour_of_day_cos,
+            path_efficiency_60s=ppe_60s,
+            path_efficiency_180s=ppe_180s,
+            path_efficiency_300s=ppe_300s,
         )
 
     @staticmethod

@@ -237,6 +237,7 @@ class TradeSignal(BaseModel):
     ] = "directional"
     entry_zone: int = 0  # Risk zone 1-5 (0 = unknown/MM)
     post_only: bool | None = None  # Override: True=maker, False=taker, None=default
+    path_efficiency: float = 0.0  # [0, 1]: price path efficiency at entry
 
 
 class CompletedTrade(BaseModel):
@@ -257,6 +258,7 @@ class CompletedTrade(BaseModel):
     strategy_tag: str = "directional"
     market_volume: int | None = None
     won: bool | None = None
+    mode: str = "paper"
 
 
 class FeatureVector(BaseModel):
@@ -304,6 +306,9 @@ class FeatureVector(BaseModel):
     window_phase: int = 0  # 1-5
     hour_of_day_sin: float = 0.0
     hour_of_day_cos: float = 0.0
+    path_efficiency_60s: float = 0.0  # [0, 1]: 60s price path efficiency
+    path_efficiency_180s: float = 0.0  # [0, 1]: 180s price path efficiency
+    path_efficiency_300s: float = 0.0  # [0, 1]: 300s price path efficiency
 
     def to_array(self) -> list[float]:
         """Convert to flat list for model input, replacing None with 0."""
@@ -342,6 +347,9 @@ class FeatureVector(BaseModel):
             self.liquidation_ratio_divergence,
             self.hour_of_day_sin,
             self.hour_of_day_cos,
+            self.path_efficiency_60s,
+            self.path_efficiency_180s,
+            self.path_efficiency_300s,
         ]
 
     @staticmethod
@@ -382,6 +390,9 @@ class FeatureVector(BaseModel):
             "liquidation_ratio_divergence",
             "hour_of_day_sin",
             "hour_of_day_cos",
+            "path_efficiency_60s",
+            "path_efficiency_180s",
+            "path_efficiency_300s",
         ]
 
 
