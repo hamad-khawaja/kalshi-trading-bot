@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from collections import deque
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import structlog
@@ -46,37 +46,79 @@ class MarketMaker:
         self._last_quotes: dict[str, tuple[Decimal, datetime]] = {}
         # Throttle skip logging: ticker → last_reason logged
         self._last_skip_reason: dict[str, str] = {}
-        # Fill tracking for asymmetry detection: (ticker, side)
-        self._recent_fills: deque[tuple[str, str]] = deque(
+        # Fill tracking for asymmetry detection: (ticker, side, timestamp)
+        self._recent_fills: deque[tuple[str, str, datetime]] = deque(
             maxlen=config.mm_fill_asymmetry_window
         )
 
-    def _vol_spread_offset(self) -> Decimal:
-        """Return spread offset based on current volatility regime.
+    def _compute_fair_value(
+        self, prediction: PredictionResult, snapshot: MarketSnapshot
+    ) -> Decimal:
+        """Blend model probability with orderbook midpoint for fair value."""
+        model_fv = Decimal(str(round(prediction.probability_yes, 2)))
+        ob_mid = snapshot.orderbook.implied_yes_prob
+        blend = self._config.mm_ob_mid_blend
+        if ob_mid is not None and blend > 0:
+            blended = Decimal(str(blend)) * ob_mid + Decimal(str(1 - blend)) * model_fv
+            return max(Decimal("0.01"), min(Decimal("0.99"), blended))
+        return model_fv
 
-        Low vol = tighter quotes (more fills), high vol = wider quotes (less adverse selection).
-        Returns early skip signal via extreme regime check in generate_quotes.
+    def _fills_per_minute(self, ticker: str) -> float:
+        """Count fills for a ticker in the last 60 seconds."""
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=60)
+        return sum(1 for t, _, ts in self._recent_fills if t == ticker and ts >= cutoff)
+
+    def _dynamic_spread_offset(self, ticker: str) -> Decimal:
+        """Compute spread offset based on fill rate and vol regime.
+
+        Higher fill rate → wider spread (adverse selection protection).
+        Vol regime applies a multiplier on top.
         """
-        if self._vol_tracker is None:
-            return Decimal("0.02")
+        min_offset = self._config.mm_min_spread_offset
+        max_offset = self._config.mm_max_spread_offset
+        target_fpm = self._config.mm_target_fills_per_minute
 
-        regime = self._vol_tracker.current_regime
-        offsets = {
-            "low": Decimal("0.01"),
-            "normal": Decimal("0.02"),
-            "high": Decimal("0.04"),
-            "extreme": Decimal("0.04"),  # Won't reach here — blocked in generate_quotes
-        }
-        return offsets.get(regime, Decimal("0.02"))
+        # Linear interpolation based on fill rate
+        fpm = self._fills_per_minute(ticker)
+        if target_fpm > 0:
+            ratio = min(fpm / target_fpm, 1.0)
+        else:
+            ratio = 0.0
+        base_offset = min_offset + ratio * (max_offset - min_offset)
+
+        # Vol regime multiplier
+        vol_mult = 1.0
+        if self._vol_tracker is not None:
+            regime = self._vol_tracker.current_regime
+            vol_mults = {"low": 0.7, "normal": 1.0, "high": 1.5, "extreme": 2.0}
+            vol_mult = vol_mults.get(regime, 1.0)
+
+        return Decimal(str(round(base_offset * vol_mult, 6)))
+
+    def _depth_imbalance_skew(self, snapshot: MarketSnapshot) -> Decimal:
+        """Compute quote skew based on orderbook depth imbalance.
+
+        Positive imbalance (more YES depth) → tighten YES bid, widen NO bid.
+        """
+        yes_depth = snapshot.orderbook.yes_bid_depth
+        no_depth = snapshot.orderbook.no_bid_depth
+        total = yes_depth + no_depth
+        if total == 0:
+            return Decimal("0")
+        imbalance = (yes_depth - no_depth) / total  # [-1, 1]
+        skew = imbalance * self._config.mm_depth_imbalance_max_skew
+        return Decimal(str(round(skew, 6)))
 
     def should_requote(
-        self, ticker: str, current_fair_value: Decimal, threshold: float = 0.03
+        self, ticker: str, current_fair_value: Decimal, threshold: float | None = None
     ) -> bool:
         """Check if fair value has moved enough to warrant requoting.
 
         Returns True if the fair value has moved more than threshold since
         the last quotes were generated for this ticker.
         """
+        if threshold is None:
+            threshold = self._config.mm_requote_threshold
         prev = self._last_quotes.get(ticker)
         if prev is None:
             return False
@@ -89,7 +131,7 @@ class MarketMaker:
 
     def record_fill(self, ticker: str, side: str) -> None:
         """Record an MM fill for asymmetry tracking."""
-        self._recent_fills.append((ticker, side))
+        self._recent_fills.append((ticker, side, datetime.now(timezone.utc)))
 
     def is_quote_stale(self, ticker: str, max_age: float) -> bool:
         """Check if existing quotes for a ticker are older than max_age seconds."""
@@ -102,8 +144,8 @@ class MarketMaker:
 
     def _fill_ratio(self, ticker: str) -> tuple[int, int]:
         """Count recent YES and NO fills for a ticker."""
-        yes_count = sum(1 for t, s in self._recent_fills if t == ticker and s == "yes")
-        no_count = sum(1 for t, s in self._recent_fills if t == ticker and s == "no")
+        yes_count = sum(1 for t, s, _ in self._recent_fills if t == ticker and s == "yes")
+        no_count = sum(1 for t, s, _ in self._recent_fills if t == ticker and s == "no")
         return yes_count, no_count
 
     def _log_skip(self, ticker: str, reason: str, **kwargs: object) -> None:
@@ -204,11 +246,14 @@ class MarketMaker:
         if best_yes_bid is None or best_no_bid is None:
             return []
 
-        # Fair value from model
-        fair_value = Decimal(str(round(prediction.probability_yes, 2)))
+        # Fair value: blend model probability with OB midpoint
+        fair_value = self._compute_fair_value(prediction, snapshot)
 
-        # Vol-aware spread offset
-        spread_offset = self._vol_spread_offset()
+        # Dynamic spread offset based on fill rate + vol regime
+        spread_offset = self._dynamic_spread_offset(snapshot.market_ticker)
+
+        # Depth imbalance skew: tighten on heavy side, widen on thin side
+        depth_skew = self._depth_imbalance_skew(snapshot)
 
         signals: list[TradeSignal] = []
         now = datetime.now(timezone.utc)
@@ -224,7 +269,8 @@ class MarketMaker:
         )
 
         # YES bid: buy YES below fair value
-        yes_bid_price = fair_value - spread_offset - max(Decimal("0"), inventory_skew)
+        # +depth_skew: positive imbalance (more YES depth) → tighten YES bid
+        yes_bid_price = fair_value - spread_offset - max(Decimal("0"), inventory_skew) + depth_skew
         yes_bid_price = max(best_yes_bid + Decimal("0.01"), yes_bid_price)
         yes_bid_price = max(Decimal("0.01"), min(Decimal("0.99"), yes_bid_price))
 
@@ -268,8 +314,9 @@ class MarketMaker:
             )
 
         # NO bid: buy NO below (1 - fair_value)
+        # -depth_skew: positive imbalance (more YES depth) → widen NO bid
         no_fair = Decimal("1") - fair_value
-        no_bid_price = no_fair - spread_offset + min(Decimal("0"), inventory_skew)
+        no_bid_price = no_fair - spread_offset + min(Decimal("0"), inventory_skew) - depth_skew
         no_bid_price = max(best_no_bid + Decimal("0.01"), no_bid_price)
         no_bid_price = max(Decimal("0.01"), min(Decimal("0.99"), no_bid_price))
 

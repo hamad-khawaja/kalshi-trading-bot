@@ -598,3 +598,184 @@ class TestSignalCombiner:
         combiner.evaluate(prediction, snapshot, 0, features=high_ppe_features)
         # PPE filter should NOT block (0.65 > 0.30)
         assert not any("ppe_filter" in r for r in combiner.last_block_reasons)
+
+
+class TestMMMidPriceBlend:
+    """Tests for Fix #1: Mid-price blending with OB midpoint."""
+
+    def test_mm_fair_value_blends_ob_mid(self, now: datetime):
+        """blend=0.3, model=0.60, ob_mid=0.50 → fv ≈ 0.57."""
+        config = StrategyConfig(mm_ob_mid_blend=0.3)
+        mm = MarketMaker(config)
+        prediction = PredictionResult(
+            probability_yes=0.60, confidence=0.7, model_name="test"
+        )
+        snapshot = MarketSnapshot(
+            timestamp=now,
+            market_ticker="test",
+            spot_price=Decimal("97500"),
+            orderbook=Orderbook(
+                ticker="test",
+                yes_levels=[OrderbookLevel(price_dollars=Decimal("0.45"), quantity=100)],
+                no_levels=[OrderbookLevel(price_dollars=Decimal("0.45"), quantity=100)],
+                timestamp=now,
+            ),
+            implied_yes_prob=Decimal("0.50"),
+            time_to_expiry_seconds=600,
+        )
+        fv = mm._compute_fair_value(prediction, snapshot)
+        # 0.3 * 0.50 + 0.7 * 0.60 = 0.15 + 0.42 = 0.57
+        assert fv == Decimal("0.57")
+
+    def test_mm_fair_value_fallback_no_ob(self, now: datetime):
+        """No OB data → pure model prob."""
+        config = StrategyConfig(mm_ob_mid_blend=0.3)
+        mm = MarketMaker(config)
+        prediction = PredictionResult(
+            probability_yes=0.60, confidence=0.7, model_name="test"
+        )
+        snapshot = MarketSnapshot(
+            timestamp=now,
+            market_ticker="test",
+            spot_price=Decimal("97500"),
+            orderbook=Orderbook(ticker="test", timestamp=now),
+            time_to_expiry_seconds=600,
+        )
+        fv = mm._compute_fair_value(prediction, snapshot)
+        assert fv == Decimal("0.60")
+
+    def test_mm_fair_value_blend_zero(self, now: datetime):
+        """blend=0.0 → pure model, even with OB data."""
+        config = StrategyConfig(mm_ob_mid_blend=0.0)
+        mm = MarketMaker(config)
+        prediction = PredictionResult(
+            probability_yes=0.60, confidence=0.7, model_name="test"
+        )
+        snapshot = MarketSnapshot(
+            timestamp=now,
+            market_ticker="test",
+            spot_price=Decimal("97500"),
+            orderbook=Orderbook(
+                ticker="test",
+                yes_levels=[OrderbookLevel(price_dollars=Decimal("0.45"), quantity=100)],
+                no_levels=[OrderbookLevel(price_dollars=Decimal("0.45"), quantity=100)],
+                timestamp=now,
+            ),
+            implied_yes_prob=Decimal("0.50"),
+            time_to_expiry_seconds=600,
+        )
+        fv = mm._compute_fair_value(prediction, snapshot)
+        assert fv == Decimal("0.60")
+
+
+class TestMMDynamicSpread:
+    """Tests for Fix #2: Dynamic spread based on fill rate."""
+
+    def test_mm_dynamic_spread_tightens_no_fills(self, now: datetime):
+        """No fills → minimum spread offset (base only)."""
+        config = StrategyConfig(
+            mm_min_spread_offset=0.01,
+            mm_max_spread_offset=0.06,
+            mm_target_fills_per_minute=2.0,
+        )
+        mm = MarketMaker(config)
+        offset = mm._dynamic_spread_offset("test")
+        # No fills, no vol tracker → ratio=0 → min_offset * 1.0
+        assert offset == Decimal("0.01")
+
+    def test_mm_dynamic_spread_widens_with_fills(self, now: datetime):
+        """Recent fills → wider spread offset."""
+        from datetime import timedelta
+        config = StrategyConfig(
+            mm_min_spread_offset=0.01,
+            mm_max_spread_offset=0.06,
+            mm_target_fills_per_minute=2.0,
+            mm_fill_asymmetry_window=100,
+        )
+        mm = MarketMaker(config)
+        # Record 4 fills in the last 30 seconds (well above target 2/min)
+        recent = datetime.now(timezone.utc) - timedelta(seconds=10)
+        for _ in range(4):
+            mm._recent_fills.append(("test", "yes", recent))
+        offset = mm._dynamic_spread_offset("test")
+        # fpm=4, target=2 → ratio=min(4/2, 1.0)=1.0 → 0.01 + 1.0*(0.06-0.01) = 0.06
+        assert offset == Decimal("0.06")
+
+    def test_mm_fills_per_minute(self, now: datetime):
+        """Fill-rate calculation with timestamps."""
+        from datetime import timedelta
+        config = StrategyConfig(mm_fill_asymmetry_window=100)
+        mm = MarketMaker(config)
+        recent = datetime.now(timezone.utc) - timedelta(seconds=30)
+        old = datetime.now(timezone.utc) - timedelta(seconds=120)
+        # 2 recent fills, 1 old fill
+        mm._recent_fills.append(("test", "yes", recent))
+        mm._recent_fills.append(("test", "no", recent))
+        mm._recent_fills.append(("test", "yes", old))
+        assert mm._fills_per_minute("test") == 2
+
+
+class TestMMDepthImbalance:
+    """Tests for Fix #3: Depth imbalance skew."""
+
+    def test_mm_depth_imbalance_skews_quotes(self, now: datetime):
+        """YES depth >> NO → positive skew (tighten YES, widen NO)."""
+        config = StrategyConfig(mm_depth_imbalance_max_skew=0.03)
+        mm = MarketMaker(config)
+        snapshot = MarketSnapshot(
+            timestamp=now,
+            market_ticker="test",
+            spot_price=Decimal("97500"),
+            orderbook=Orderbook(
+                ticker="test",
+                yes_levels=[
+                    OrderbookLevel(price_dollars=Decimal("0.50"), quantity=300),
+                ],
+                no_levels=[
+                    OrderbookLevel(price_dollars=Decimal("0.50"), quantity=100),
+                ],
+                timestamp=now,
+            ),
+            time_to_expiry_seconds=600,
+        )
+        skew = mm._depth_imbalance_skew(snapshot)
+        # imbalance = (300-100)/400 = 0.5, skew = 0.5 * 0.03 = 0.015
+        assert skew == Decimal("0.015")
+        assert skew > 0  # Positive → tighten YES bid
+
+    def test_mm_depth_imbalance_capped(self, now: datetime):
+        """Extreme imbalance → capped at max_skew."""
+        config = StrategyConfig(mm_depth_imbalance_max_skew=0.03)
+        mm = MarketMaker(config)
+        snapshot = MarketSnapshot(
+            timestamp=now,
+            market_ticker="test",
+            spot_price=Decimal("97500"),
+            orderbook=Orderbook(
+                ticker="test",
+                yes_levels=[
+                    OrderbookLevel(price_dollars=Decimal("0.50"), quantity=1000),
+                ],
+                no_levels=[],  # Zero NO depth → imbalance = 1.0
+                timestamp=now,
+            ),
+            time_to_expiry_seconds=600,
+        )
+        skew = mm._depth_imbalance_skew(snapshot)
+        # imbalance = (1000-0)/1000 = 1.0, skew = 1.0 * 0.03 = 0.03 (max)
+        assert skew == Decimal("0.03")
+
+
+class TestMMRequoteThreshold:
+    """Tests for Fix #4: Configurable requote threshold."""
+
+    def test_mm_requote_threshold_configurable(self, now: datetime):
+        """Config value used instead of hardcoded 0.03."""
+        config = StrategyConfig(mm_requote_threshold=0.02)
+        mm = MarketMaker(config)
+        # Record a quote at 0.50
+        mm._last_quotes["test"] = (Decimal("0.50"), datetime.now(timezone.utc))
+        # Move fair value by 0.025 — should trigger with threshold=0.02
+        assert mm.should_requote("test", Decimal("0.525")) is True
+        # But not with explicit higher threshold
+        assert mm.should_requote("test", Decimal("0.525"), threshold=0.03) is False

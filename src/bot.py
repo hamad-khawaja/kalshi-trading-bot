@@ -819,6 +819,7 @@ class TradingBot:
                         self._signal_combiner._trend_detector.mark_entered(ticker)
                     # Log MM fill event for immediate market-making fills
                     if signal_item.signal_type == "market_making":
+                        self._dashboard_state.mm_metrics["total_fills"] += 1
                         logger.info(
                             "mm_fill",
                             ticker=ticker,
@@ -1139,6 +1140,15 @@ class TradingBot:
                                 mode=self._settings.mode,
                             )
                             self._risk_manager.record_trade(pnl)
+                            if pos.strategy_tag == "market_making":
+                                ds.mm_metrics["total_pnl"] = round(
+                                    ds.mm_metrics["total_pnl"] + float(pnl), 2
+                                )
+                                fills = ds.mm_metrics["total_fills"]
+                                if fills > 0:
+                                    ds.mm_metrics["avg_profit_per_fill"] = round(
+                                        ds.mm_metrics["total_pnl"] / fills, 4
+                                    )
                             try:
                                 ds.add_trade_result(
                                     self._data_hub._ticker_to_symbol(exit_ticker),
@@ -1177,6 +1187,7 @@ class TradingBot:
 
                     if actually_settled:
                         self._position_tracker.remove_expired_positions(actually_settled)
+                        self._clear_mm_quote_state(actually_settled)
                         self._update_dashboard_positions()
 
                 # Check for pre-expiry exits (sell before settlement)
@@ -1269,6 +1280,7 @@ class TradingBot:
                             except Exception:
                                 logger.warning("trade_logging_failed", ticker=pe_ticker)
                             self._position_tracker.remove_expired_positions([pe_ticker])
+                            self._clear_mm_quote_state([pe_ticker])
                             self._update_dashboard_positions()
 
                 # Check for take-profit opportunities
@@ -1358,6 +1370,7 @@ class TradingBot:
                             except Exception:
                                 logger.warning("trade_logging_failed", ticker=tp_ticker)
                             self._position_tracker.remove_expired_positions([tp_ticker])
+                            self._clear_mm_quote_state([tp_ticker])
                             self._take_profit_markets[tp_ticker] = (datetime.now(timezone.utc), pos.strategy_tag)
                             self._update_dashboard_positions()
 
@@ -1456,6 +1469,7 @@ class TradingBot:
                                 logger.warning("trade_logging_failed", ticker=sl_ticker)
                             self._stop_loss_markets.add(sl_ticker)
                             self._position_tracker.remove_expired_positions([sl_ticker])
+                            self._clear_mm_quote_state([sl_ticker])
                             self._update_dashboard_positions()
 
                 # Check for thesis breaks — sell positions where model flipped
@@ -1555,6 +1569,7 @@ class TradingBot:
                             except Exception:
                                 logger.warning("trade_logging_failed", ticker=tb_ticker)
                             self._position_tracker.remove_expired_positions([tb_ticker])
+                            self._clear_mm_quote_state([tb_ticker])
                             self._thesis_break_markets[tb_ticker] = pos.strategy_tag
                             self._update_dashboard_positions()
 
@@ -1587,6 +1602,7 @@ class TradingBot:
                             filled_state.signal.market_ticker,
                             filled_state.signal.side,
                         )
+                        self._dashboard_state.mm_metrics["total_fills"] += 1
                         logger.info(
                             "mm_fill",
                             ticker=filled_state.signal.market_ticker,
@@ -2061,6 +2077,12 @@ class TradingBot:
             for p in positions
         ]
         self._push_risk_to_dashboard()
+
+    def _clear_mm_quote_state(self, tickers: list[str]) -> None:
+        """Clear MM quote state for closed positions to prevent stale quotes."""
+        mm = self._signal_combiner._market_maker
+        for ticker in tickers:
+            mm.clear_quote_state(ticker)
 
     async def shutdown(self) -> None:
         """Graceful shutdown: cancel orders, close connections, persist state."""

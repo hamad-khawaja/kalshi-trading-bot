@@ -77,6 +77,12 @@ class StrategyConfig(BaseModel):
     mm_max_quote_age_seconds: float = 60.0  # Force requote if quotes older than this
     mm_fill_asymmetry_threshold: float = 3.0  # Max YES:NO fill ratio before skipping side
     mm_fill_asymmetry_window: int = 10  # Number of recent fills to track
+    mm_ob_mid_blend: float = 0.3  # 30% OB mid + 70% model probability
+    mm_min_spread_offset: float = 0.01
+    mm_max_spread_offset: float = 0.06
+    mm_target_fills_per_minute: float = 2.0
+    mm_depth_imbalance_max_skew: float = 0.03
+    mm_requote_threshold: float = 0.02  # Lowered from hardcoded 0.03
     use_time_profiles: bool = True
     time_profile_lookback_days: int = 30
     # FOMO exploitation parameters

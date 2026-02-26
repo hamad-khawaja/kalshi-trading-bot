@@ -305,7 +305,7 @@ class PositionTracker:
         results: list[tuple[str, str]] = []
 
         for ticker, position in list(self._positions.items()):
-            if position.strategy_tag in ("settlement_ride", "certainty_scalp"):
+            if position.strategy_tag in ("settlement_ride", "certainty_scalp", "market_making"):
                 continue
             snapshot = snapshots.get(ticker)
             if snapshot is None:
@@ -385,7 +385,7 @@ class PositionTracker:
         breaks = []
         now = datetime.now(timezone.utc)
         for ticker, position in list(self._positions.items()):
-            if position.strategy_tag in ("settlement_ride", "certainty_scalp"):
+            if position.strategy_tag in ("settlement_ride", "certainty_scalp", "market_making"):
                 continue
             prediction = predictions.get(ticker)
             if prediction is None:
@@ -437,7 +437,7 @@ class PositionTracker:
         now = datetime.now(timezone.utc)
 
         for ticker, position in list(self._positions.items()):
-            if position.strategy_tag in ("settlement_ride", "certainty_scalp"):
+            if position.strategy_tag in ("settlement_ride", "certainty_scalp", "market_making"):
                 continue
             snapshot = snapshots.get(ticker)
             if snapshot is None:
@@ -573,7 +573,7 @@ class PositionTracker:
         now = datetime.now(timezone.utc)
 
         for ticker, position in list(self._positions.items()):
-            if position.strategy_tag in ("settlement_ride", "certainty_scalp"):
+            if position.strategy_tag in ("settlement_ride", "certainty_scalp", "market_making"):
                 continue
             snapshot = snapshots.get(ticker)
             if snapshot is None:
