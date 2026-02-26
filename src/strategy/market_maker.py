@@ -149,9 +149,16 @@ class MarketMaker:
         return age > max_age
 
     def _fill_ratio(self, ticker: str) -> tuple[int, int]:
-        """Count recent YES and NO fills for a ticker."""
-        yes_count = sum(1 for t, s, _ in self._recent_fills if t == ticker and s == "yes")
-        no_count = sum(1 for t, s, _ in self._recent_fills if t == ticker and s == "no")
+        """Count YES and NO fills for a ticker in the last 60 seconds."""
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=60)
+        yes_count = sum(
+            1 for t, s, ts in self._recent_fills
+            if t == ticker and s == "yes" and ts >= cutoff
+        )
+        no_count = sum(
+            1 for t, s, ts in self._recent_fills
+            if t == ticker and s == "no" and ts >= cutoff
+        )
         return yes_count, no_count
 
     def _log_skip(self, ticker: str, reason: str, **kwargs: object) -> None:
