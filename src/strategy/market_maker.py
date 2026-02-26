@@ -381,6 +381,12 @@ class MarketMaker:
                 )
             )
 
+        # Kalshi doesn't support holding both YES and NO simultaneously —
+        # buying the opposite side nets out the position.  Only quote the
+        # single best side (highest net edge) per cycle.
+        if len(signals) > 1:
+            signals = [max(signals, key=lambda s: s.net_edge)]
+
         if signals:
             vol_regime = self._vol_tracker.current_regime if self._vol_tracker else "unknown"
             logger.info(
@@ -389,6 +395,7 @@ class MarketMaker:
                 spread=float(spread),
                 fair_value=float(fair_value),
                 num_quotes=len(signals),
+                side=signals[0].side,
                 inventory=current_position,
                 effective_inventory=effective_position,
                 vol_regime=vol_regime,

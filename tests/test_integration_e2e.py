@@ -647,7 +647,7 @@ class TestSettlementRideFlow:
 class TestMarketMakingFlow:
     """Test market making quotes → full pipeline."""
 
-    async def test_mm_both_sides(
+    async def test_mm_single_best_side(
         self,
         integration_settings,
         order_manager,
@@ -655,7 +655,7 @@ class TestMarketMakingFlow:
         risk_manager,
         position_sizer,
     ):
-        """Wide spread → MM generates quotes on both sides."""
+        """Wide spread → MM generates single best-side quote."""
         # Use tight model probability near 0.50, wide spread → MM opportunity
         cfg = integration_settings.strategy.model_copy(
             update={"directional_enabled": False}
@@ -680,11 +680,11 @@ class TestMarketMakingFlow:
 
         signals = combiner.evaluate(prediction, snapshot, current_position=0)
         mm = [s for s in signals if s.signal_type == "market_making"]
-        assert len(mm) == 2
-        sides = {s.side for s in mm}
-        assert sides == {"yes", "no"}
+        # Kalshi doesn't support holding both sides — MM picks the single best side
+        assert len(mm) == 1
+        assert mm[0].side in ("yes", "no")
 
-        # Run just the first signal through the full pipeline
+        # Run the signal through the full pipeline
         order_id, position = await run_pipeline(
             mm[0], position_sizer, risk_manager, order_manager, position_tracker,
         )

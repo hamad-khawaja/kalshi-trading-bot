@@ -93,6 +93,68 @@ class TestOrderManager:
         # May or may not remove (depends on timing)
         assert isinstance(removed, int)
 
+    @pytest.mark.asyncio
+    async def test_cancel_market_orders_exclude_ids(
+        self, order_manager: OrderManager, signal: TradeSignal
+    ):
+        """cancel_market_orders should skip orders in exclude_order_ids.
+
+        Prevents MM opposite-side cancel from killing a directional order
+        placed earlier in the same cycle.
+        """
+        ticker = signal.market_ticker
+        # Manually create two resting (non-terminal) orders on the YES side
+        # to simulate live mode where post_only orders rest on the book.
+        yes_signal_1 = signal.model_copy(update={"side": "yes"})
+        yes_signal_2 = signal.model_copy(update={"side": "yes"})
+
+        state_1 = OrderState(
+            order_id="order-1",
+            client_order_id="c1",
+            signal=yes_signal_1,
+            requested_count=5,
+        )
+        state_1.status = "active"  # Resting, not filled
+
+        state_2 = OrderState(
+            order_id="order-2",
+            client_order_id="c2",
+            signal=yes_signal_2,
+            requested_count=5,
+        )
+        state_2.status = "active"
+
+        order_manager._pending_orders["order-1"] = state_1
+        order_manager._pending_orders["order-2"] = state_2
+
+        # Cancel YES orders but exclude order-1 (simulating same-cycle protection)
+        canceled = await order_manager.cancel_market_orders(
+            ticker, side="yes", exclude_order_ids={"order-1"},
+        )
+
+        assert canceled == 1
+        assert state_1.status == "active"  # Protected — still resting
+        assert state_2.status == "canceled"  # Not excluded — canceled
+
+    @pytest.mark.asyncio
+    async def test_cancel_market_orders_no_exclusions(
+        self, order_manager: OrderManager, signal: TradeSignal
+    ):
+        """Without exclude_order_ids, all matching orders are canceled."""
+        ticker = signal.market_ticker
+        state = OrderState(
+            order_id="order-1",
+            client_order_id="c1",
+            signal=signal,
+            requested_count=5,
+        )
+        state.status = "active"
+        order_manager._pending_orders["order-1"] = state
+
+        canceled = await order_manager.cancel_market_orders(ticker, side="yes")
+        assert canceled == 1
+        assert state.status == "canceled"
+
 
 class TestPositionState:
     def test_exposure_calculation(self):

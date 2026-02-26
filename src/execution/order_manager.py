@@ -377,15 +377,23 @@ class OrderManager:
         return total
 
     async def cancel_market_orders(
-        self, ticker: str, side: str | None = None
+        self, ticker: str, side: str | None = None,
+        exclude_order_ids: set[str] | None = None,
     ) -> int:
         """Cancel all resting orders for a ticker, optionally filtered by side.
+
+        Args:
+            ticker: Market ticker to cancel orders for.
+            side: Optional side filter ("yes" or "no").
+            exclude_order_ids: Order IDs to skip (e.g., orders placed this cycle).
 
         Returns number of orders canceled.
         """
         canceled = 0
         for order_id, state in list(self._pending_orders.items()):
             if state.is_terminal:
+                continue
+            if exclude_order_ids and order_id in exclude_order_ids:
                 continue
             if state.signal.market_ticker != ticker:
                 continue

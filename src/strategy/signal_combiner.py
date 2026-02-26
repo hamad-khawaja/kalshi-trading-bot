@@ -79,6 +79,8 @@ class SignalCombiner:
         snapshot: MarketSnapshot,
         current_position: int = 0,
         features: FeatureVector | None = None,
+        resting_qty_yes: int = 0,
+        resting_qty_no: int = 0,
     ) -> list[TradeSignal]:
         """Evaluate all strategies and return prioritized signals.
 
@@ -87,6 +89,8 @@ class SignalCombiner:
             snapshot: Current market data snapshot
             current_position: Net YES contracts held (positive = long YES)
             features: Feature vector for signal evaluation
+            resting_qty_yes: Unfilled YES contracts in resting orders
+            resting_qty_no: Unfilled NO contracts in resting orders
 
         Returns:
             List of trade signals to execute (may be empty)
@@ -450,6 +454,8 @@ class SignalCombiner:
             mm_signals = self._market_maker.generate_quotes(
                 prediction, snapshot, current_position,
                 directional_side=confirmed_directional_side,
+                resting_qty_yes=resting_qty_yes,
+                resting_qty_no=resting_qty_no,
             )
             if mm_signals:
                 signals.extend(mm_signals)

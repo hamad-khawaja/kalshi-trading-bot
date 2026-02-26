@@ -520,9 +520,14 @@ class TradingBot:
         # Get current position for this market
         current_position = self._position_tracker.get_market_position_count(ticker)
 
+        # Resting order counts for MM inventory awareness
+        resting_yes = self._order_manager.get_resting_order_count(ticker, "yes")
+        resting_no = self._order_manager.get_resting_order_count(ticker, "no")
+
         # Generate signals
         signals = self._signal_combiner.evaluate(
-            prediction, snapshot, current_position, features=features
+            prediction, snapshot, current_position, features=features,
+            resting_qty_yes=resting_yes, resting_qty_no=resting_no,
         )
 
         # Update edge analysis from the internal edge detector
@@ -696,6 +701,7 @@ class TradingBot:
                     break
 
         # Process each signal
+        cycle_order_ids: set[str] = set()  # Track orders placed this cycle
         for signal_item in signals:
             # Per-cycle cap check
             if signal_item.action == "buy" and cycle_contracts_placed >= max_per_cycle:
@@ -705,9 +711,13 @@ class TradingBot:
                 )
                 break
 
-            # Cancel conflicting orders (opposite side) before placing new ones
+            # Cancel conflicting orders (opposite side) before placing new ones,
+            # but preserve orders submitted earlier in this same cycle (e.g. don't
+            # let an MM NO quote cancel a directional YES order placed moments ago).
             opposite_side = "no" if signal_item.side == "yes" else "yes"
-            await self._order_manager.cancel_market_orders(ticker, side=opposite_side)
+            await self._order_manager.cancel_market_orders(
+                ticker, side=opposite_side, exclude_order_ids=cycle_order_ids,
+            )
 
             # Include resting orders in position count for sizing
             resting = self._order_manager.get_resting_order_count(
@@ -793,6 +803,7 @@ class TradingBot:
             order_id = await self._order_manager.submit(signal_item, final_count)
 
             if order_id:
+                cycle_order_ids.add(order_id)
                 # Update position tracker if order filled immediately
                 order_state = self._order_manager.get_order(order_id)
                 if order_state and order_state.filled_count > 0:
