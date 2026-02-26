@@ -1612,6 +1612,39 @@ class TradingBot:
                             implied_prob=filled_state.signal.implied_probability,
                             mode=self._settings.mode,
                         )
+                    # Log resting fill to database
+                    try:
+                        from src.data.models import CompletedTrade
+                        rf_fee = EdgeDetector.compute_fee_dollars(
+                            filled_state.filled_count,
+                            float(filled_state.signal.suggested_price_dollars),
+                            is_maker=True,
+                        ) if filled_state.signal.action == "buy" else Decimal("0")
+                        rf_snap = snapshots.get(filled_state.signal.market_ticker)
+                        completed = CompletedTrade(
+                            order_id=filled_state.order_id,
+                            market_ticker=filled_state.signal.market_ticker,
+                            side=filled_state.signal.side,
+                            action="buy",
+                            count=filled_state.filled_count,
+                            price_dollars=Decimal(
+                                filled_state.signal.suggested_price_dollars
+                            ),
+                            fees_dollars=rf_fee,
+                            model_probability=filled_state.signal.model_probability,
+                            implied_probability=filled_state.signal.implied_probability,
+                            entry_time=datetime.now(timezone.utc),
+                            strategy_tag=filled_state.signal.signal_type,
+                            market_volume=rf_snap.volume if rf_snap else None,
+                            won=None,
+                            mode=self._settings.mode,
+                        )
+                        await self._db.insert_trade(completed)
+                    except Exception:
+                        logger.warning(
+                            "resting_fill_logging_failed",
+                            ticker=filled_state.signal.market_ticker,
+                        )
                     # Force-refresh balance after resting fill
                     await self._get_balance(force=True)
                     self._update_dashboard_positions()

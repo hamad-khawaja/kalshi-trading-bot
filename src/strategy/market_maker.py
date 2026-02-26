@@ -378,6 +378,8 @@ class MarketMaker:
                 inventory=current_position,
                 vol_regime=vol_regime,
                 spread_offset=float(spread_offset),
+                inventory_skew=float(inventory_skew),
+                depth_skew=float(depth_skew),
             )
             # Track quote state for requote detection
             self._last_quotes[snapshot.market_ticker] = (fair_value, now)
