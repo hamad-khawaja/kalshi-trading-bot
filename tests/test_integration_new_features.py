@@ -159,7 +159,6 @@ def _base_strategy_config(**overrides) -> StrategyConfig:
         no_side_edge_multiplier=1.0,
         directional_enabled=False,
         use_market_maker=False,
-        fomo_enabled=False,
         certainty_scalp_enabled=False,
         settlement_ride_enabled=False,
         trend_continuation_enabled=True,

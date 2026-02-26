@@ -253,7 +253,6 @@ kalshi:
 │   ├── strategy/
 │   │   ├── signal_combiner.py     # Signal prioritization + settlement ride + certainty scalp
 │   │   ├── edge_detector.py       # Model vs market edge calculation
-│   │   ├── fomo_detector.py       # Contrarian retail panic detector
 │   │   ├── market_maker.py        # Spread capture strategy (per-asset min spread)
 │   │   ├── mc_detector.py         # Monte Carlo simulation strategy
 │   │   └── averager.py            # Asymmetric pyramiding

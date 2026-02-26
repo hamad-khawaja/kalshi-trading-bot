@@ -23,7 +23,6 @@ class BacktestAnalyzer:
             f"Windows Evaluated: {result.total_windows}",
             f"Total Trades:      {result.total_trades}",
             f"  Directional:     {result.directional_trades}",
-            f"  FOMO:            {result.fomo_trades}",
             f"  Sett. Ride:      {result.settlement_ride_trades}",
             f"  Cert. Scalp:     {result.certainty_scalp_trades}",
             f"Trade Rate:        {result.trade_rate:.1%} of windows",
@@ -95,7 +94,7 @@ class BacktestAnalyzer:
             "-" * 55,
         ]
 
-        for sig_type in ["directional", "fomo", "settlement_ride", "certainty_scalp"]:
+        for sig_type in ["directional", "settlement_ride", "certainty_scalp"]:
             trades = [t for t in result.trades if t.signal_type == sig_type]
             if not trades:
                 continue
@@ -169,7 +168,6 @@ class BacktestAnalyzer:
             "-" * 70,
             f"{'Total Trades':<22} {baseline.total_trades:>14} {candidate.total_trades:>14} {_delta(baseline.total_trades, candidate.total_trades, '+d'):>16}",
             f"{'  Directional':<22} {baseline.directional_trades:>14} {candidate.directional_trades:>14} {_delta(baseline.directional_trades, candidate.directional_trades, '+d'):>16}",
-            f"{'  FOMO':<22} {baseline.fomo_trades:>14} {candidate.fomo_trades:>14} {_delta(baseline.fomo_trades, candidate.fomo_trades, '+d'):>16}",
             f"{'  Sett. Ride':<22} {baseline.settlement_ride_trades:>14} {candidate.settlement_ride_trades:>14} {_delta(baseline.settlement_ride_trades, candidate.settlement_ride_trades, '+d'):>16}",
             f"{'  Cert. Scalp':<22} {baseline.certainty_scalp_trades:>14} {candidate.certainty_scalp_trades:>14} {_delta(baseline.certainty_scalp_trades, candidate.certainty_scalp_trades, '+d'):>16}",
             f"{'Win Rate':<22} {baseline.win_rate:>13.1%} {candidate.win_rate:>13.1%} {_delta(baseline.win_rate * 100, candidate.win_rate * 100, '+.1f'):>15}pp",

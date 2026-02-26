@@ -43,17 +43,6 @@ strategy:
   stop_loss_min_bid: 0.05          # Don't sell if bid is below $0.05
   stop_loss_min_hold_seconds: 60.0  # Wait 60s before SL can trigger (was 30s — noise triggered early exits)
   stop_loss_max_dollar_loss: 20.00  # 10x for paper testing (was $2)
-  # FOMO exploitation — DISABLED: 0/3 trades, all stopped out (-$1.41 total)
-  fomo_enabled: false
-  fomo_min_divergence: 0.20        # Require bigger gap (was 0.12)
-  fomo_edge_threshold: 0.08        # Require more edge after fees (was 0.02)
-  fomo_min_score: 0.65             # Higher composite score (was 0.50)
-  fomo_min_confidence: 0.80        # Higher confidence (was 0.70)
-  fomo_momentum_min_magnitude: 0.003
-  fomo_momentum_consistency_required: true
-  fomo_max_implied_prob: 0.85
-  fomo_min_implied_prob: 0.15
-  fomo_min_entry_price: 0.10          # FOMO targets cheap contracts — lower than global $0.40
   # Trailing take-profit
   trailing_take_profit_enabled: true
   trailing_take_profit_activation_cents: 0.10  # Profit to activate trailing (was 0.08 — avg win still half avg loss, let winners run)

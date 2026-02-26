@@ -46,15 +46,15 @@ class TestDashboardState:
         data = json.loads(dashboard_state.to_json())
         assert "strategy_toggles" in data
         toggles = data["strategy_toggles"]
-        expected_keys = {"directional", "fomo", "certainty_scalp", "settlement_ride", "trend_continuation", "market_making", "phase_filter", "trend_guard", "mm_vol_filter"}
+        expected_keys = {"directional", "certainty_scalp", "settlement_ride", "trend_continuation", "market_making", "phase_filter", "trend_guard", "mm_vol_filter"}
         assert set(toggles.keys()) == expected_keys
         assert toggles["directional"] is True
 
     def test_strategy_toggles_reflect_changes(self, dashboard_state: DashboardState):
         """Mutating strategy_toggles dict is reflected in JSON."""
-        dashboard_state.strategy_toggles["fomo"] = False
+        dashboard_state.strategy_toggles["directional"] = False
         data = json.loads(dashboard_state.to_json())
-        assert data["strategy_toggles"]["fomo"] is False
+        assert data["strategy_toggles"]["directional"] is False
 
 
 def _build_app(state: DashboardState) -> web.Application:

@@ -52,7 +52,7 @@ class BacktestTrade:
     timestamp: datetime
     market_ticker: str
     side: str  # "yes" / "no"
-    signal_type: str  # "directional" / "fomo" / "settlement_ride" / "certainty_scalp"
+    signal_type: str  # "directional" / "settlement_ride" / "certainty_scalp"
     count: int
     price: float
     model_prob: float
@@ -138,7 +138,6 @@ class BacktestResult:
     total_windows: int = 0
     trade_rate: float = 0.0  # trades / windows
     directional_trades: int = 0
-    fomo_trades: int = 0
     settlement_ride_trades: int = 0
     certainty_scalp_trades: int = 0
     stop_loss_exits: int = 0
@@ -169,7 +168,6 @@ class BacktestResult:
             "total_windows": self.total_windows,
             "trade_rate": self.trade_rate,
             "directional_trades": self.directional_trades,
-            "fomo_trades": self.fomo_trades,
             "settlement_ride_trades": self.settlement_ride_trades,
             "certainty_scalp_trades": self.certainty_scalp_trades,
             "stop_loss_exits": self.stop_loss_exits,
@@ -207,7 +205,6 @@ class BacktestResult:
             total_windows=data.get("total_windows", 0),
             trade_rate=data.get("trade_rate", 0.0),
             directional_trades=data.get("directional_trades", 0),
-            fomo_trades=data.get("fomo_trades", 0),
             settlement_ride_trades=data.get("settlement_ride_trades", 0),
             certainty_scalp_trades=data.get("certainty_scalp_trades", 0),
             stop_loss_exits=data.get("stop_loss_exits", 0),
@@ -254,7 +251,7 @@ class Backtester:
     1. Compute strike from window start candle
     2. Evaluate at minutes 3-14 (multi-point, first signal wins)
     3. Compute features from candle history
-    4. Run through SignalCombiner (edge + trend guard + FOMO + settlement ride + certainty scalp)
+    4. Run through SignalCombiner (edge + trend guard + settlement ride + certainty scalp)
     5. Size position via Kelly
     6. Check risk limits
     7. Simulate stop-loss or hold to settlement
@@ -858,7 +855,6 @@ class Backtester:
 
         # Signal type breakdown
         directional = [t for t in trades if t.signal_type == "directional"]
-        fomo = [t for t in trades if t.signal_type == "fomo"]
         settlement_ride = [t for t in trades if t.signal_type == "settlement_ride"]
         certainty_scalp = [t for t in trades if t.signal_type == "certainty_scalp"]
         stop_loss_exits = [t for t in trades if t.exit_type == "stop_loss"]
@@ -879,7 +875,6 @@ class Backtester:
             total_windows=total_windows,
             trade_rate=round(len(trades) / total_windows, 4) if total_windows > 0 else 0.0,
             directional_trades=len(directional),
-            fomo_trades=len(fomo),
             settlement_ride_trades=len(settlement_ride),
             certainty_scalp_trades=len(certainty_scalp),
             stop_loss_exits=len(stop_loss_exits),

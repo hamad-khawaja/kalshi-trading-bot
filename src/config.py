@@ -85,18 +85,6 @@ class StrategyConfig(BaseModel):
     mm_requote_threshold: float = 0.02  # Lowered from hardcoded 0.03
     use_time_profiles: bool = True
     time_profile_lookback_days: int = 30
-    # FOMO exploitation parameters
-    fomo_enabled: bool = True
-    fomo_min_divergence: float = 0.18
-    fomo_edge_threshold: float = 0.06
-    fomo_momentum_min_magnitude: float = 0.003
-    fomo_momentum_consistency_required: bool = True
-    fomo_max_implied_prob: float = 0.85
-    fomo_min_implied_prob: float = 0.15
-    fomo_min_confidence: float = 0.70
-    fomo_min_score: float = 0.50
-    fomo_max_bet_dollars: float = 2.00  # Max dollar exposure per FOMO trade
-    fomo_min_entry_price: float = 0.10  # FOMO-specific floor (lower than global)
     # Stop-loss parameters
     stop_loss_enabled: bool = True
     stop_loss_pct: float = 0.35  # Exit when loss > 35% of entry price

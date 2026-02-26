@@ -74,7 +74,6 @@ def integration_settings() -> BotSettings:
             # Strategy toggles — all enabled
             directional_enabled=True,
             use_market_maker=True,
-            fomo_enabled=True,
             certainty_scalp_enabled=True,
             settlement_ride_enabled=True,
             trend_continuation_enabled=True,
@@ -85,14 +84,6 @@ def integration_settings() -> BotSettings:
             mm_max_spread=0.30,
             mm_max_inventory=20,
             mm_vol_filter_enabled=False,
-            # FOMO parameters — relaxed
-            fomo_min_divergence=0.15,
-            fomo_edge_threshold=0.04,
-            fomo_momentum_min_magnitude=0.002,
-            fomo_min_confidence=0.65,
-            fomo_min_score=0.30,
-            fomo_max_bet_dollars=5.00,
-            fomo_min_entry_price=0.10,
             # Settlement ride — relaxed
             settlement_ride_min_elapsed_seconds=600.0,
             settlement_ride_min_edge=0.03,
@@ -432,67 +423,7 @@ class TestDirectionalFlow:
 
 
 # ---------------------------------------------------------------------------
-# 2. FOMO flow
-# ---------------------------------------------------------------------------
-
-
-class TestFomoFlow:
-    """Test FOMO contrarian signal → full pipeline."""
-
-    async def test_fomo_contrarian_entry(
-        self,
-        integration_settings,
-        order_manager,
-        position_tracker,
-        risk_manager,
-        position_sizer,
-    ):
-        """BTC momentum up, retail overbids YES → FOMO buys NO."""
-        # Disable directional so FOMO gets a chance
-        cfg = integration_settings.strategy.model_copy(
-            update={"directional_enabled": False}
-        )
-        combiner = SignalCombiner(cfg)
-
-        # Strong upward momentum → retail overbuys YES → implied pushed high
-        # Model says 0.55 but implied is 0.75 → divergence = 0.20 (> 0.15 threshold)
-        # Momentum UP → underpriced side is NO
-        ob = make_orderbook(
-            yes_prices=[0.75, 0.73, 0.70],
-            no_prices=[0.27, 0.25, 0.22],
-        )
-        snapshot = make_snapshot(
-            implied_yes_prob=0.75,
-            spread=0.02,
-            ttx=600.0,
-            orderbook=ob,
-        )
-        prediction = PredictionResult(
-            probability_yes=0.55, confidence=0.80, model_name="test"
-        )
-        features = make_features(
-            momentum_60s=0.005,
-            momentum_180s=0.004,
-            momentum_600s=0.006,
-            momentum_15s=0.003,
-            implied_probability=0.75,
-        )
-
-        signals = combiner.evaluate(prediction, snapshot, current_position=0, features=features)
-        fomo = [s for s in signals if s.signal_type == "fomo"]
-        assert len(fomo) == 1
-        assert fomo[0].side == "no"
-
-        order_id, position = await run_pipeline(
-            fomo[0], position_sizer, risk_manager, order_manager, position_tracker,
-        )
-        assert order_id is not None
-        assert position is not None
-        assert position.side == "no"
-
-
-# ---------------------------------------------------------------------------
-# 3. Trend continuation flow
+# 2. Trend continuation flow
 # ---------------------------------------------------------------------------
 
 

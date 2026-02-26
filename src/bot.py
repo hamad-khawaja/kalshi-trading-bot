@@ -147,7 +147,6 @@ class TradingBot:
             self._dashboard_state.quiet_hours_est = settings.strategy.quiet_hours_est
         self._dashboard_state.strategy_toggles = {
             "directional": settings.strategy.directional_enabled,
-            "fomo": settings.strategy.fomo_enabled,
             "certainty_scalp": settings.strategy.certainty_scalp_enabled,
             "settlement_ride": settings.strategy.settlement_ride_enabled,
             "trend_continuation": settings.strategy.trend_continuation_enabled,
@@ -366,7 +365,6 @@ class TradingBot:
         # Sync strategy toggles from dashboard to config
         st = self._dashboard_state.strategy_toggles
         self._settings.strategy.directional_enabled = st.get("directional", True)
-        self._settings.strategy.fomo_enabled = st.get("fomo", False)
         self._settings.strategy.certainty_scalp_enabled = st.get("certainty_scalp", True)
         self._settings.strategy.settlement_ride_enabled = st.get("settlement_ride", True)
         self._settings.strategy.use_market_maker = st.get("market_making", True)
@@ -532,12 +530,6 @@ class TradingBot:
         if edge_analysis:
             ds.edge = edge_analysis
 
-        # Update FOMO analysis from the internal FOMO detector
-        if self._signal_combiner._fomo_detector is not None:
-            fomo_analysis = self._signal_combiner._fomo_detector.last_analysis
-            if fomo_analysis:
-                ds.fomo = fomo_analysis
-
         # Write per-asset dashboard state for tabbed UI
         # Use local variables to avoid cross-market contamination from asyncio.gather
         ds.per_asset[asset_symbol] = {
@@ -546,7 +538,6 @@ class TradingBot:
             "features": dict(local_features),
             "prediction": dict(local_prediction),
             "edge": dict(ds.edge) if ds.edge else {},
-            "fomo": dict(ds.fomo) if ds.fomo else {},
         }
 
         # Take-profit cooldown: block all re-entry after TP (except MM, certainty scalp, trend cont)
@@ -2010,7 +2001,6 @@ class TradingBot:
         # Sync strategy toggles to match new config
         self._dashboard_state.strategy_toggles = {
             "directional": self._settings.strategy.directional_enabled,
-            "fomo": self._settings.strategy.fomo_enabled,
             "certainty_scalp": self._settings.strategy.certainty_scalp_enabled,
             "settlement_ride": self._settings.strategy.settlement_ride_enabled,
             "trend_continuation": self._settings.strategy.trend_continuation_enabled,
@@ -2043,7 +2033,6 @@ class TradingBot:
         self._dashboard_state.features = {}
         self._dashboard_state.prediction = {}
         self._dashboard_state.edge = {}
-        self._dashboard_state.fomo = {}
         self._dashboard_state.sizing = {}
         self._dashboard_state.health = {}
 
