@@ -1070,6 +1070,149 @@ class TestMMBidFloor:
         )
 
 
+class TestMMSideFlipBlocked:
+    """MM should not flip sides when holding a position (Kalshi netting = double fees)."""
+
+    def test_blocks_opposite_side_when_long_yes(self, now: datetime):
+        """Long YES position → MM should not quote NO (would net out)."""
+        config = StrategyConfig(
+            mm_min_spread=0.05,
+            mm_max_spread=0.30,
+            mm_max_inventory=10,
+            mm_ob_mid_blend=0.0,
+            mm_min_spread_offset=0.02,
+            mm_max_spread_offset=0.02,
+            mm_depth_imbalance_max_skew=0.0,
+            mm_vol_filter_enabled=False,
+        )
+        mm = MarketMaker(config)
+        prediction = PredictionResult(
+            probability_yes=0.50, confidence=0.7, model_name="test"
+        )
+        snapshot = MarketSnapshot(
+            timestamp=now,
+            market_ticker="test",
+            spot_price=Decimal("97500"),
+            orderbook=Orderbook(
+                ticker="test",
+                yes_levels=[OrderbookLevel(price_dollars=Decimal("0.40"), quantity=100)],
+                no_levels=[OrderbookLevel(price_dollars=Decimal("0.40"), quantity=100)],
+                timestamp=now,
+            ),
+            implied_yes_prob=Decimal("0.50"),
+            spread=Decimal("0.10"),
+            time_to_expiry_seconds=600,
+        )
+        # With position=+5 (long YES), any NO quote should be blocked
+        quotes = mm.generate_quotes(prediction, snapshot, current_position=5)
+        for q in quotes:
+            assert q.side == "yes", f"Should not quote NO when long YES, got {q.side}"
+
+    def test_blocks_opposite_side_when_long_no(self, now: datetime):
+        """Long NO position → MM should not quote YES (would net out)."""
+        config = StrategyConfig(
+            mm_min_spread=0.05,
+            mm_max_spread=0.30,
+            mm_max_inventory=10,
+            mm_ob_mid_blend=0.0,
+            mm_min_spread_offset=0.02,
+            mm_max_spread_offset=0.02,
+            mm_depth_imbalance_max_skew=0.0,
+            mm_vol_filter_enabled=False,
+        )
+        mm = MarketMaker(config)
+        prediction = PredictionResult(
+            probability_yes=0.50, confidence=0.7, model_name="test"
+        )
+        snapshot = MarketSnapshot(
+            timestamp=now,
+            market_ticker="test",
+            spot_price=Decimal("97500"),
+            orderbook=Orderbook(
+                ticker="test",
+                yes_levels=[OrderbookLevel(price_dollars=Decimal("0.40"), quantity=100)],
+                no_levels=[OrderbookLevel(price_dollars=Decimal("0.40"), quantity=100)],
+                timestamp=now,
+            ),
+            implied_yes_prob=Decimal("0.50"),
+            spread=Decimal("0.10"),
+            time_to_expiry_seconds=600,
+        )
+        # With position=-5 (long NO), any YES quote should be blocked
+        quotes = mm.generate_quotes(prediction, snapshot, current_position=-5)
+        for q in quotes:
+            assert q.side == "no", f"Should not quote YES when long NO, got {q.side}"
+
+    def test_allows_same_side_when_holding(self, now: datetime):
+        """Should still quote the same side as existing position."""
+        config = StrategyConfig(
+            mm_min_spread=0.05,
+            mm_max_spread=0.30,
+            mm_max_inventory=10,
+            mm_ob_mid_blend=0.0,
+            mm_min_spread_offset=0.02,
+            mm_max_spread_offset=0.02,
+            mm_depth_imbalance_max_skew=0.0,
+            mm_vol_filter_enabled=False,
+        )
+        mm = MarketMaker(config)
+        # FV=0.40 → YES is cheap, YES side has best edge
+        prediction = PredictionResult(
+            probability_yes=0.40, confidence=0.7, model_name="test"
+        )
+        snapshot = MarketSnapshot(
+            timestamp=now,
+            market_ticker="test",
+            spot_price=Decimal("97500"),
+            orderbook=Orderbook(
+                ticker="test",
+                yes_levels=[OrderbookLevel(price_dollars=Decimal("0.30"), quantity=100)],
+                no_levels=[OrderbookLevel(price_dollars=Decimal("0.50"), quantity=100)],
+                timestamp=now,
+            ),
+            implied_yes_prob=Decimal("0.40"),
+            spread=Decimal("0.20"),
+            time_to_expiry_seconds=600,
+        )
+        # Position=+2 (long YES), and FV favors YES → should still quote YES
+        quotes = mm.generate_quotes(prediction, snapshot, current_position=2)
+        assert len(quotes) == 1
+        assert quotes[0].side == "yes"
+
+    def test_flat_position_allows_any_side(self, now: datetime):
+        """Zero position → no side-flip restriction."""
+        config = StrategyConfig(
+            mm_min_spread=0.05,
+            mm_max_spread=0.30,
+            mm_max_inventory=10,
+            mm_ob_mid_blend=0.0,
+            mm_min_spread_offset=0.02,
+            mm_max_spread_offset=0.02,
+            mm_depth_imbalance_max_skew=0.0,
+            mm_vol_filter_enabled=False,
+        )
+        mm = MarketMaker(config)
+        prediction = PredictionResult(
+            probability_yes=0.50, confidence=0.7, model_name="test"
+        )
+        snapshot = MarketSnapshot(
+            timestamp=now,
+            market_ticker="test",
+            spot_price=Decimal("97500"),
+            orderbook=Orderbook(
+                ticker="test",
+                yes_levels=[OrderbookLevel(price_dollars=Decimal("0.40"), quantity=100)],
+                no_levels=[OrderbookLevel(price_dollars=Decimal("0.40"), quantity=100)],
+                timestamp=now,
+            ),
+            implied_yes_prob=Decimal("0.50"),
+            spread=Decimal("0.10"),
+            time_to_expiry_seconds=600,
+        )
+        quotes = mm.generate_quotes(prediction, snapshot, current_position=0)
+        assert len(quotes) == 1, "Should generate a quote when flat"
+
+
 class TestMMCooldownExemption:
     """Test Fix #5: MM signals survive entry cooldown."""
 

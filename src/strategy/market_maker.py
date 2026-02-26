@@ -387,6 +387,21 @@ class MarketMaker:
         if len(signals) > 1:
             signals = [max(signals, key=lambda s: s.net_edge)]
 
+        # Prevent side-flipping: if holding a position, only quote the same
+        # side.  On Kalshi buying the opposite side nets out with double fees
+        # instead of capturing spread.  Let the position monitor handle exits.
+        if signals and effective_position != 0:
+            position_side = "yes" if effective_position > 0 else "no"
+            if signals[0].side != position_side:
+                self._log_skip(
+                    snapshot.market_ticker,
+                    "side_flip_blocked",
+                    position=effective_position,
+                    wanted_side=signals[0].side,
+                    position_side=position_side,
+                )
+                signals = []
+
         if signals:
             vol_regime = self._vol_tracker.current_regime if self._vol_tracker else "unknown"
             logger.info(
