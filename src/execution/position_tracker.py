@@ -478,7 +478,12 @@ class PositionTracker:
 
                 if peak_profit >= activation:
                     drop_from_peak = float(position.high_water_bid - current_bid)
-                    if drop_from_peak >= drop_threshold:
+                    # Ensure exit still covers fees — don't lock in a near-zero profit
+                    exit_fee = float(EdgeDetector.compute_fee_dollars(
+                        1, float(current_bid), is_maker=True,
+                    ))
+                    net_profit = float(profit_per_contract) - exit_fee
+                    if drop_from_peak >= drop_threshold and net_profit > exit_fee:
                         results.append((ticker, str(current_bid)))
                         logger.info(
                             "trailing_take_profit_signal",
@@ -489,6 +494,7 @@ class PositionTracker:
                             high_water=float(position.high_water_bid),
                             peak_profit=round(peak_profit, 4),
                             drop_from_peak=round(drop_from_peak, 4),
+                            net_profit=round(net_profit, 4),
                         )
                         continue  # Skip fixed TP check — trailing already triggered
 
