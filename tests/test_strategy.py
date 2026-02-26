@@ -7,13 +7,14 @@ from decimal import Decimal
 
 import pytest
 
-from src.config import StrategyConfig
+from src.config import RiskConfig, StrategyConfig
 from src.data.models import (
     FeatureVector,
     MarketSnapshot,
     Orderbook,
     OrderbookLevel,
     PredictionResult,
+    TradeSignal,
 )
 from src.risk.volatility import VolatilityTracker
 from src.strategy.edge_detector import EdgeDetector
@@ -260,6 +261,152 @@ class TestMarketMaker:
         )
         quotes = market_maker.generate_quotes(sample_prediction, snapshot, 0)
         assert len(quotes) == 0
+
+
+    def test_mm_quotes_have_post_only_true(
+        self, market_maker: MarketMaker, sample_prediction: PredictionResult, now: datetime
+    ):
+        """MM quotes must set post_only=True for maker fees."""
+        snapshot = MarketSnapshot(
+            timestamp=now,
+            market_ticker="test",
+            spot_price=Decimal("97500"),
+            orderbook=Orderbook(
+                ticker="test",
+                yes_levels=[OrderbookLevel(price_dollars=Decimal("0.45"), quantity=100)],
+                no_levels=[OrderbookLevel(price_dollars=Decimal("0.45"), quantity=100)],
+                timestamp=now,
+            ),
+            spread=Decimal("0.10"),
+            implied_yes_prob=Decimal("0.50"),
+            time_to_expiry_seconds=600,
+        )
+        quotes = market_maker.generate_quotes(sample_prediction, snapshot, 0)
+        assert len(quotes) >= 1
+        for q in quotes:
+            assert q.post_only is True
+
+    def test_mm_fill_asymmetry_skips_heavy_side(
+        self, sample_prediction: PredictionResult, now: datetime
+    ):
+        """When YES fills dominate, MM should skip YES side."""
+        config = StrategyConfig(mm_fill_asymmetry_threshold=2.0, mm_fill_asymmetry_window=10)
+        mm = MarketMaker(config)
+        # Record 4 YES fills and 1 NO fill → ratio 4:1 > threshold 2.0
+        for _ in range(4):
+            mm.record_fill("test", "yes")
+        mm.record_fill("test", "no")
+        snapshot = MarketSnapshot(
+            timestamp=now,
+            market_ticker="test",
+            spot_price=Decimal("97500"),
+            orderbook=Orderbook(
+                ticker="test",
+                yes_levels=[OrderbookLevel(price_dollars=Decimal("0.45"), quantity=100)],
+                no_levels=[OrderbookLevel(price_dollars=Decimal("0.45"), quantity=100)],
+                timestamp=now,
+            ),
+            spread=Decimal("0.10"),
+            implied_yes_prob=Decimal("0.50"),
+            time_to_expiry_seconds=600,
+        )
+        quotes = mm.generate_quotes(sample_prediction, snapshot, 0)
+        # YES side should be skipped; only NO quote (if any)
+        yes_quotes = [q for q in quotes if q.side == "yes"]
+        assert len(yes_quotes) == 0
+
+    def test_mm_quote_staleness_detection(self, now: datetime):
+        """is_quote_stale returns True when quotes are older than max_age."""
+        config = StrategyConfig()
+        mm = MarketMaker(config)
+        # No quotes yet — not stale
+        assert mm.is_quote_stale("test", 60.0) is False
+        # Record a quote with a timestamp 120s ago
+        from datetime import timedelta
+        old_ts = datetime.now(timezone.utc) - timedelta(seconds=120)
+        mm._last_quotes["test"] = (Decimal("0.50"), old_ts)
+        assert mm.is_quote_stale("test", 60.0) is True
+        assert mm.is_quote_stale("test", 300.0) is False
+
+    def test_mm_fill_ratio_tracking(self, now: datetime):
+        """record_fill and _fill_ratio correctly track per-ticker fills."""
+        config = StrategyConfig(mm_fill_asymmetry_window=5)
+        mm = MarketMaker(config)
+        mm.record_fill("A", "yes")
+        mm.record_fill("A", "yes")
+        mm.record_fill("A", "no")
+        mm.record_fill("B", "yes")
+        y, n = mm._fill_ratio("A")
+        assert y == 2
+        assert n == 1
+        y_b, n_b = mm._fill_ratio("B")
+        assert y_b == 1
+        assert n_b == 0
+
+
+class TestMMPositionSizing:
+    """Test MM-specific Kelly fraction and confidence scaling."""
+
+    def test_mm_uses_dedicated_kelly_fraction(self, now: datetime):
+        """MM signals should use mm_kelly_fraction, not global Kelly."""
+        from src.risk.position_sizer import PositionSizer
+        risk_config = RiskConfig(
+            kelly_fraction=0.15, min_position_size=1,
+            max_position_per_market=200,
+        )
+        strat_config = StrategyConfig(
+            mm_kelly_fraction=0.07,
+            stop_loss_max_dollar_loss=500.0,
+        )
+        sizer = PositionSizer(risk_config, strategy_config=strat_config)
+        signal = TradeSignal(
+            market_ticker="test",
+            side="yes",
+            action="buy",
+            raw_edge=0.10,
+            net_edge=0.08,
+            model_probability=0.60,
+            implied_probability=0.50,
+            confidence=0.50,
+            suggested_price_dollars="0.45",
+            suggested_count=0,
+            timestamp=now,
+            signal_type="market_making",
+        )
+        mm_count = sizer.size(signal, Decimal("1000"), Decimal("0"))
+        # Same signal but directional (uses global kelly 0.15)
+        dir_signal = signal.model_copy(update={"signal_type": "directional"})
+        dir_count = sizer.size(dir_signal, Decimal("1000"), Decimal("0"))
+        # MM should be smaller than directional due to lower Kelly
+        assert mm_count > 0
+        assert dir_count > 0
+        assert mm_count < dir_count
+
+    def test_mm_skips_confidence_scaling(self, now: datetime):
+        """MM signals should not be scaled by confidence."""
+        from src.risk.position_sizer import PositionSizer
+        risk_config = RiskConfig(
+            kelly_fraction=0.15, min_position_size=1,
+            max_position_per_market=200,
+        )
+        strat_config = StrategyConfig(
+            mm_kelly_fraction=0.07,
+            stop_loss_max_dollar_loss=500.0,
+        )
+        sizer = PositionSizer(risk_config, strategy_config=strat_config)
+        high_conf = TradeSignal(
+            market_ticker="test", side="yes", action="buy",
+            raw_edge=0.10, net_edge=0.08, model_probability=0.60,
+            implied_probability=0.50, confidence=0.90,
+            suggested_price_dollars="0.45", suggested_count=0,
+            timestamp=now, signal_type="market_making",
+        )
+        low_conf = high_conf.model_copy(update={"confidence": 0.30})
+        high_count = sizer.size(high_conf, Decimal("1000"), Decimal("0"))
+        low_count = sizer.size(low_conf, Decimal("1000"), Decimal("0"))
+        # Without confidence scaling, both should produce the same size
+        assert high_count > 0
+        assert high_count == low_count
 
 
 class TestEdgeDetectorVolAdjusted:

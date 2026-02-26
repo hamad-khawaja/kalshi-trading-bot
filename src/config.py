@@ -73,6 +73,10 @@ class StrategyConfig(BaseModel):
     mm_min_spread: float = 0.05
     mm_max_spread: float = 0.30
     mm_max_inventory: int = 20  # Stop MM when holding this many contracts
+    mm_kelly_fraction: float = 0.07  # Conservative Kelly for non-directional MM
+    mm_max_quote_age_seconds: float = 60.0  # Force requote if quotes older than this
+    mm_fill_asymmetry_threshold: float = 3.0  # Max YES:NO fill ratio before skipping side
+    mm_fill_asymmetry_window: int = 10  # Number of recent fills to track
     use_time_profiles: bool = True
     time_profile_lookback_days: int = 30
     # FOMO exploitation parameters

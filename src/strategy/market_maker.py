@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from collections import deque
 from datetime import datetime, timezone
 from decimal import Decimal
 
@@ -45,6 +46,10 @@ class MarketMaker:
         self._last_quotes: dict[str, tuple[Decimal, datetime]] = {}
         # Throttle skip logging: ticker → last_reason logged
         self._last_skip_reason: dict[str, str] = {}
+        # Fill tracking for asymmetry detection: (ticker, side)
+        self._recent_fills: deque[tuple[str, str]] = deque(
+            maxlen=config.mm_fill_asymmetry_window
+        )
 
     def _vol_spread_offset(self) -> Decimal:
         """Return spread offset based on current volatility regime.
@@ -81,6 +86,25 @@ class MarketMaker:
     def clear_quote_state(self, ticker: str) -> None:
         """Clear tracked quote state for a ticker (after cancellation)."""
         self._last_quotes.pop(ticker, None)
+
+    def record_fill(self, ticker: str, side: str) -> None:
+        """Record an MM fill for asymmetry tracking."""
+        self._recent_fills.append((ticker, side))
+
+    def is_quote_stale(self, ticker: str, max_age: float) -> bool:
+        """Check if existing quotes for a ticker are older than max_age seconds."""
+        prev = self._last_quotes.get(ticker)
+        if prev is None:
+            return False
+        _, ts = prev
+        age = (datetime.now(timezone.utc) - ts).total_seconds()
+        return age > max_age
+
+    def _fill_ratio(self, ticker: str) -> tuple[int, int]:
+        """Count recent YES and NO fills for a ticker."""
+        yes_count = sum(1 for t, s in self._recent_fills if t == ticker and s == "yes")
+        no_count = sum(1 for t, s in self._recent_fills if t == ticker and s == "no")
+        return yes_count, no_count
 
     def _log_skip(self, ticker: str, reason: str, **kwargs: object) -> None:
         """Log MM skip reason once per ticker per reason change."""
@@ -213,8 +237,17 @@ class MarketMaker:
         yes_fee = EdgeDetector.compute_fee_dollars(1, float(yes_bid_price), is_maker=True)
         potential_profit_yes = yes_ask - yes_bid_price
 
-        # Only generate YES bid if not filtered by directional side
+        # Only generate YES bid if not filtered by directional side or fill asymmetry
         generate_yes = directional_side != "yes"
+        if generate_yes:
+            yes_fills, no_fills = self._fill_ratio(snapshot.market_ticker)
+            threshold = self._config.mm_fill_asymmetry_threshold
+            if yes_fills > 0 and yes_fills / max(1, no_fills) > threshold:
+                generate_yes = False
+                self._log_skip(
+                    snapshot.market_ticker, "fill_asymmetry_yes",
+                    yes_fills=yes_fills, no_fills=no_fills,
+                )
         if generate_yes and potential_profit_yes > yes_fee and yes_bid_price >= Decimal("0.01"):
             signals.append(
                 TradeSignal(
@@ -230,6 +263,7 @@ class MarketMaker:
                     suggested_count=0,
                     timestamp=now,
                     signal_type="market_making",
+                    post_only=True,
                 )
             )
 
@@ -248,8 +282,17 @@ class MarketMaker:
         no_fee = EdgeDetector.compute_fee_dollars(1, float(no_bid_price), is_maker=True)
         potential_profit_no = no_ask - no_bid_price
 
-        # Only generate NO bid if not filtered by directional side
+        # Only generate NO bid if not filtered by directional side or fill asymmetry
         generate_no = directional_side != "no"
+        if generate_no:
+            yes_fills, no_fills = self._fill_ratio(snapshot.market_ticker)
+            threshold = self._config.mm_fill_asymmetry_threshold
+            if no_fills > 0 and no_fills / max(1, yes_fills) > threshold:
+                generate_no = False
+                self._log_skip(
+                    snapshot.market_ticker, "fill_asymmetry_no",
+                    yes_fills=yes_fills, no_fills=no_fills,
+                )
         if generate_no and potential_profit_no > no_fee and no_bid_price >= Decimal("0.01"):
             signals.append(
                 TradeSignal(
@@ -267,6 +310,7 @@ class MarketMaker:
                     suggested_count=0,
                     timestamp=now,
                     signal_type="market_making",
+                    post_only=True,
                 )
             )
 

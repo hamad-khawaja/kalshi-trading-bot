@@ -1581,8 +1581,12 @@ class TradingBot:
                         filled=filled_state.filled_count,
                         mode=self._settings.mode,
                     )
-                    # Log MM fill event for market-making orders
+                    # Log MM fill event and track for asymmetry detection
                     if filled_state.signal.signal_type == "market_making":
+                        self._signal_combiner._market_maker.record_fill(
+                            filled_state.signal.market_ticker,
+                            filled_state.signal.side,
+                        )
                         logger.info(
                             "mm_fill",
                             ticker=filled_state.signal.market_ticker,

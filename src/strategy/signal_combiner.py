@@ -456,6 +456,13 @@ class SignalCombiner:
                     break
 
         if self._config.use_market_maker and mm_allowed:
+            # Clear stale quote state so MM generates fresh quotes
+            if self._market_maker.is_quote_stale(
+                snapshot.market_ticker,
+                self._config.mm_max_quote_age_seconds,
+            ):
+                self._market_maker.clear_quote_state(snapshot.market_ticker)
+
             # When directional signal exists, only MM on the opposite side
             mm_signals = self._market_maker.generate_quotes(
                 prediction, snapshot, current_position,
