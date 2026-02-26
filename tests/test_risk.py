@@ -411,8 +411,8 @@ class TestMMExitExemptions:
         tracker._positions[ticker] = pos
         return tracker, pos
 
-    def test_mm_exit_exempt_pre_expiry(self, now: datetime):
-        """strategy_tag='market_making' → skipped by pre-expiry exit."""
+    def test_mm_pre_expiry_exit_triggers(self, now: datetime):
+        """strategy_tag='market_making' → triggers pre-expiry exit (not exempt)."""
         from src.data.models import MarketSnapshot, Orderbook, OrderbookLevel
         tracker, _ = self._make_mm_position()
         snapshots = {
@@ -430,7 +430,7 @@ class TestMMExitExemptions:
             ),
         }
         results = tracker.check_pre_expiry_exits(snapshots, pre_expiry_seconds=90.0)
-        assert len(results) == 0
+        assert len(results) == 1
 
     def test_mm_exit_exempt_thesis_break(self, now: datetime):
         """strategy_tag='market_making' → skipped by thesis break."""
@@ -470,8 +470,8 @@ class TestMMExitExemptions:
         results = tracker.check_take_profit(snapshots, config)
         assert len(results) == 0
 
-    def test_mm_exit_exempt_stop_loss(self, now: datetime):
-        """strategy_tag='market_making' → skipped by stop-loss."""
+    def test_mm_stop_loss_triggers(self, now: datetime):
+        """strategy_tag='market_making' → triggers stop-loss (not exempt)."""
         from src.data.models import MarketSnapshot, Orderbook, OrderbookLevel
         tracker, pos = self._make_mm_position()
         pos.avg_entry_price = Decimal("0.70")  # Entered high
@@ -492,7 +492,7 @@ class TestMMExitExemptions:
         results = tracker.check_stop_loss(
             snapshots, stop_loss_pct=0.35, min_hold_seconds=0,
         )
-        assert len(results) == 0
+        assert len(results) == 1
 
 
 class TestStrategyPnLSummary:

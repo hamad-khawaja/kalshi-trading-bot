@@ -305,7 +305,7 @@ class PositionTracker:
         results: list[tuple[str, str]] = []
 
         for ticker, position in list(self._positions.items()):
-            if position.strategy_tag in ("settlement_ride", "certainty_scalp", "market_making"):
+            if position.strategy_tag in ("settlement_ride", "certainty_scalp"):
                 continue
             snapshot = snapshots.get(ticker)
             if snapshot is None:
@@ -579,7 +579,7 @@ class PositionTracker:
         now = datetime.now(timezone.utc)
 
         for ticker, position in list(self._positions.items()):
-            if position.strategy_tag in ("settlement_ride", "certainty_scalp", "market_making"):
+            if position.strategy_tag in ("settlement_ride", "certainty_scalp"):
                 continue
             snapshot = snapshots.get(ticker)
             if snapshot is None:

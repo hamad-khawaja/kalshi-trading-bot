@@ -368,7 +368,7 @@ class MarketMaker:
                     action="buy",
                     raw_edge=float(potential_profit_no),
                     net_edge=float(potential_profit_no - no_fee),
-                    model_probability=1.0 - prediction.probability_yes,
+                    model_probability=prediction.probability_yes,
                     implied_probability=float(
                         Decimal("1") - (snapshot.implied_yes_prob or Decimal("0.5"))
                     ),
