@@ -61,7 +61,7 @@ class MarketMaker:
         self, prediction: PredictionResult, snapshot: MarketSnapshot
     ) -> Decimal:
         """Blend model probability with orderbook midpoint for fair value."""
-        model_fv = Decimal(str(round(prediction.probability_yes, 2)))
+        model_fv = Decimal(str(prediction.probability_yes))
         ob_mid = snapshot.orderbook.implied_yes_prob
         blend = self._config.mm_ob_mid_blend
         if ob_mid is not None and blend > 0:
@@ -173,6 +173,8 @@ class MarketMaker:
         snapshot: MarketSnapshot,
         current_position: int,  # Positive = net YES, negative = net NO
         directional_side: str | None = None,  # When running alongside directional
+        resting_qty_yes: int = 0,  # Unfilled YES bid contracts resting on book
+        resting_qty_no: int = 0,  # Unfilled NO bid contracts resting on book
     ) -> list[TradeSignal]:
         """Generate bid/ask quote pair for market making.
 
@@ -183,6 +185,8 @@ class MarketMaker:
             snapshot: Current market data snapshot
             current_position: Net YES contracts held (positive = long YES)
             directional_side: If set, only generate MM quotes on the opposite side
+            resting_qty_yes: Unfilled YES contracts in resting orders
+            resting_qty_no: Unfilled NO contracts in resting orders
         """
         # Skip market-making in high/extreme volatility (togglable from dashboard)
         if (
@@ -242,12 +246,17 @@ class MarketMaker:
             )
             return []
 
+        # Effective position includes resting orders that haven't filled yet.
+        # If they all fill simultaneously (e.g. price sweep), this is our
+        # actual exposure — use it for inventory cap and skew.
+        effective_position = current_position + resting_qty_yes - resting_qty_no
+
         # Don't market-make when inventory is already large
-        if abs(current_position) >= self._max_inventory:
+        if abs(effective_position) >= self._max_inventory:
             self._log_skip(
                 snapshot.market_ticker,
                 "inventory_full",
-                position=current_position,
+                position=effective_position,
                 cap=self._max_inventory,
             )
             return []
@@ -274,7 +283,7 @@ class MarketMaker:
         # Non-linear inventory skew: quadratic scaling
         # normalized ∈ [-1, 1], skew = sign(n) * n² * 0.08
         if self._max_inventory > 0:
-            normalized = current_position / self._max_inventory
+            normalized = effective_position / self._max_inventory
         else:
             normalized = 0.0
         inventory_skew = Decimal(
@@ -284,7 +293,6 @@ class MarketMaker:
         # YES bid: buy YES below fair value
         # +depth_skew: positive imbalance (more YES depth) → tighten YES bid
         yes_bid_price = fair_value - spread_offset - inventory_skew + depth_skew
-        yes_bid_price = max(best_yes_bid + Decimal("0.01"), yes_bid_price)
         yes_bid_price = max(Decimal("0.01"), min(Decimal("0.99"), yes_bid_price))
 
         # Clamp YES bid below the effective YES ask to prevent post_only cross
@@ -318,7 +326,7 @@ class MarketMaker:
                     model_probability=prediction.probability_yes,
                     implied_probability=float(snapshot.implied_yes_prob or Decimal("0.5")),
                     confidence=prediction.confidence,
-                    suggested_price_dollars=f"{yes_bid_price:.2f}",
+                    suggested_price_dollars=f"{float(yes_bid_price):.2f}",
                     suggested_count=0,
                     timestamp=now,
                     signal_type="market_making",
@@ -330,7 +338,6 @@ class MarketMaker:
         # -depth_skew: positive imbalance (more YES depth) → widen NO bid
         no_fair = Decimal("1") - fair_value
         no_bid_price = no_fair - spread_offset + inventory_skew - depth_skew
-        no_bid_price = max(best_no_bid + Decimal("0.01"), no_bid_price)
         no_bid_price = max(Decimal("0.01"), min(Decimal("0.99"), no_bid_price))
 
         # Clamp NO bid below the effective NO ask to prevent post_only cross
@@ -366,7 +373,7 @@ class MarketMaker:
                         Decimal("1") - (snapshot.implied_yes_prob or Decimal("0.5"))
                     ),
                     confidence=prediction.confidence,
-                    suggested_price_dollars=f"{no_bid_price:.2f}",
+                    suggested_price_dollars=f"{float(no_bid_price):.2f}",
                     suggested_count=0,
                     timestamp=now,
                     signal_type="market_making",
@@ -383,6 +390,7 @@ class MarketMaker:
                 fair_value=float(fair_value),
                 num_quotes=len(signals),
                 inventory=current_position,
+                effective_inventory=effective_position,
                 vol_regime=vol_regime,
                 spread_offset=float(spread_offset),
                 inventory_skew=float(inventory_skew),
