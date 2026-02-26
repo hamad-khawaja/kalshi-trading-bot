@@ -619,7 +619,11 @@ class TradingBot:
         if existing_pos and existing_pos.count > 0:
             held_side = existing_pos.side
             before_count = len(signals)
-            signals = [s for s in signals if not (s.action == "buy" and s.side != held_side)]
+            signals = [
+                s for s in signals
+                if not (s.action == "buy" and s.side != held_side
+                        and s.signal_type != "market_making")
+            ]
             blocked = before_count - len(signals)
             if blocked > 0:
                 logger.info(
@@ -657,7 +661,10 @@ class TradingBot:
         if position and position.count > 0 and cooldown > 0:
             elapsed = (datetime.now(timezone.utc) - position.last_fill_time).total_seconds()
             if elapsed < cooldown:
-                buy_signals = [s for s in signals if s.action == "buy"]
+                buy_signals = [
+                    s for s in signals
+                    if s.action == "buy" and s.signal_type != "market_making"
+                ]
                 if buy_signals:
                     logger.info(
                         "entry_cooldown_active",
@@ -666,8 +673,11 @@ class TradingBot:
                         cooldown=cooldown,
                         count=position.count,
                     )
-                    # Only keep sell signals (take-profit etc), skip buys
-                    signals = [s for s in signals if s.action != "buy"]
+                    # Only keep sell signals and MM quotes, skip directional buys
+                    signals = [
+                        s for s in signals
+                        if s.action != "buy" or s.signal_type == "market_making"
+                    ]
                     if not signals:
                         ds.add_decision(
                             self._cycle_count, "reject",
@@ -810,6 +820,9 @@ class TradingBot:
                         self._signal_combiner._trend_detector.mark_entered(ticker)
                     # Log MM fill event for immediate market-making fills
                     if signal_item.signal_type == "market_making":
+                        self._signal_combiner._market_maker.record_fill(
+                            ticker, signal_item.side,
+                        )
                         self._dashboard_state.mm_metrics["total_fills"] += 1
                         logger.info(
                             "mm_fill",
@@ -1039,6 +1052,7 @@ class TradingBot:
                                     mode=self._settings.mode,
                                 )
                                 self._risk_manager.record_trade(pnl)
+                                self._update_mm_metrics(pos.strategy_tag, pnl)
                                 try:
                                     ds.add_trade_result(
                                         self._data_hub._ticker_to_symbol(exit_ticker),
@@ -1131,15 +1145,7 @@ class TradingBot:
                                 mode=self._settings.mode,
                             )
                             self._risk_manager.record_trade(pnl)
-                            if pos.strategy_tag == "market_making":
-                                ds.mm_metrics["total_pnl"] = round(
-                                    ds.mm_metrics["total_pnl"] + float(pnl), 2
-                                )
-                                fills = ds.mm_metrics["total_fills"]
-                                if fills > 0:
-                                    ds.mm_metrics["avg_profit_per_fill"] = round(
-                                        ds.mm_metrics["total_pnl"] / fills, 4
-                                    )
+                            self._update_mm_metrics(pos.strategy_tag, pnl)
                             try:
                                 ds.add_trade_result(
                                     self._data_hub._ticker_to_symbol(exit_ticker),
@@ -1624,7 +1630,10 @@ class TradingBot:
                 # Quote refresh: cancel and re-quote when fair value moves >$0.03
                 for qticker, pred in self._last_predictions.items():
                     mm = self._signal_combiner._market_maker
-                    fair_value = Decimal(str(round(pred.probability_yes, 2)))
+                    snap = snapshots.get(qticker)
+                    if snap is None:
+                        continue
+                    fair_value = mm.compute_fair_value(pred, snap)
                     if mm.should_requote(qticker, fair_value):
                         await self._order_manager.cancel_market_orders(qticker)
                         mm.clear_quote_state(qticker)
@@ -1705,6 +1714,7 @@ class TradingBot:
                 mode=self._settings.mode,
             )
             self._risk_manager.record_trade(pnl)
+            self._update_mm_metrics(pos.strategy_tag, pnl)
             try:
                 ds.add_trade_result(
                     self._data_hub._ticker_to_symbol(ticker),
@@ -2052,6 +2062,17 @@ class TradingBot:
         )
 
         return {"mode": target_mode, "previous_mode": old_mode}
+
+    def _update_mm_metrics(self, strategy_tag: str, pnl: Decimal) -> None:
+        """Update MM-specific dashboard metrics after a settlement."""
+        if strategy_tag == "market_making":
+            ds = self._dashboard_state
+            ds.mm_metrics["total_pnl"] = round(ds.mm_metrics["total_pnl"] + float(pnl), 2)
+            fills = ds.mm_metrics["total_fills"]
+            if fills > 0:
+                ds.mm_metrics["avg_profit_per_fill"] = round(
+                    ds.mm_metrics["total_pnl"] / fills, 4
+                )
 
     def _update_dashboard_positions(self) -> None:
         """Push current positions and risk stats to the dashboard immediately."""

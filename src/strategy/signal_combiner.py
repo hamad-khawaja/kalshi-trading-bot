@@ -33,7 +33,6 @@ class SignalCombiner:
     """
 
     MIN_TIME_TO_TRADE_SECONDS = 60.0  # No new positions < 60s to expiry
-    MM_CANCEL_BEFORE_EXPIRY_SECONDS = 30.0  # Cancel MM orders 30s before expiry
 
     def __init__(
         self,

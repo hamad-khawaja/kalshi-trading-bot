@@ -51,6 +51,12 @@ class MarketMaker:
             maxlen=config.mm_fill_asymmetry_window
         )
 
+    def compute_fair_value(
+        self, prediction: PredictionResult, snapshot: MarketSnapshot
+    ) -> Decimal:
+        """Compute blended fair value (public — used by requote check)."""
+        return self._compute_fair_value(prediction, snapshot)
+
     def _compute_fair_value(
         self, prediction: PredictionResult, snapshot: MarketSnapshot
     ) -> Decimal:
@@ -270,7 +276,7 @@ class MarketMaker:
 
         # YES bid: buy YES below fair value
         # +depth_skew: positive imbalance (more YES depth) → tighten YES bid
-        yes_bid_price = fair_value - spread_offset - max(Decimal("0"), inventory_skew) + depth_skew
+        yes_bid_price = fair_value - spread_offset - inventory_skew + depth_skew
         yes_bid_price = max(best_yes_bid + Decimal("0.01"), yes_bid_price)
         yes_bid_price = max(Decimal("0.01"), min(Decimal("0.99"), yes_bid_price))
 
@@ -316,7 +322,7 @@ class MarketMaker:
         # NO bid: buy NO below (1 - fair_value)
         # -depth_skew: positive imbalance (more YES depth) → widen NO bid
         no_fair = Decimal("1") - fair_value
-        no_bid_price = no_fair - spread_offset + min(Decimal("0"), inventory_skew) - depth_skew
+        no_bid_price = no_fair - spread_offset + inventory_skew - depth_skew
         no_bid_price = max(best_no_bid + Decimal("0.01"), no_bid_price)
         no_bid_price = max(Decimal("0.01"), min(Decimal("0.99"), no_bid_price))
 

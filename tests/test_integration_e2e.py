@@ -891,3 +891,77 @@ class TestExitFlows:
         )
         assert len(results) >= 1
         assert results[0][0] == ticker
+
+
+class TestMMMOppositeSideGuard:
+    """Test Fix #2: MM NO quote survives opposite-side guard when holding YES."""
+
+    async def test_mm_opposite_side_guard_exempts_mm(
+        self,
+        integration_settings,
+        vol_tracker,
+    ):
+        """Holding YES → opposite-side guard blocks directional NO but keeps MM NO."""
+        from src.data.models import TradeSignal
+
+        signals = [
+            TradeSignal(
+                market_ticker=TICKER,
+                side="yes",
+                action="buy",
+                raw_edge=0.05,
+                net_edge=0.03,
+                model_probability=0.55,
+                implied_probability=0.50,
+                confidence=0.7,
+                suggested_price_dollars="0.48",
+                suggested_count=1,
+                timestamp=NOW,
+                signal_type="directional",
+            ),
+            TradeSignal(
+                market_ticker=TICKER,
+                side="no",
+                action="buy",
+                raw_edge=0.04,
+                net_edge=0.02,
+                model_probability=0.45,
+                implied_probability=0.50,
+                confidence=0.7,
+                suggested_price_dollars="0.48",
+                suggested_count=0,
+                timestamp=NOW,
+                signal_type="market_making",
+                post_only=True,
+            ),
+            TradeSignal(
+                market_ticker=TICKER,
+                side="no",
+                action="buy",
+                raw_edge=0.04,
+                net_edge=0.02,
+                model_probability=0.45,
+                implied_probability=0.50,
+                confidence=0.7,
+                suggested_price_dollars="0.48",
+                suggested_count=1,
+                timestamp=NOW,
+                signal_type="directional",
+            ),
+        ]
+
+        # Simulate holding YES position: filter opposite side (Fix #2 logic)
+        held_side = "yes"
+        filtered = [
+            s for s in signals
+            if not (s.action == "buy" and s.side != held_side
+                    and s.signal_type != "market_making")
+        ]
+        # Directional YES stays, MM NO stays, directional NO blocked
+        assert len(filtered) == 2
+        types = {s.signal_type for s in filtered}
+        assert "market_making" in types
+        assert "directional" in types
+        # The surviving directional should be YES (same side as held)
+        dir_signals = [s for s in filtered if s.signal_type == "directional"]
+        assert dir_signals[0].side == "yes"

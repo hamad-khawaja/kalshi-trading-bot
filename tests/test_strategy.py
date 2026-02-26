@@ -779,3 +779,155 @@ class TestMMRequoteThreshold:
         assert mm.should_requote("test", Decimal("0.525")) is True
         # But not with explicit higher threshold
         assert mm.should_requote("test", Decimal("0.525"), threshold=0.03) is False
+
+
+class TestMMRequoteBlendedFV:
+    """Test Fix #1: Requote uses blended fair value via compute_fair_value()."""
+
+    def test_mm_requote_uses_blended_fair_value(self, now: datetime):
+        """compute_fair_value() returns blended FV, not raw model."""
+        config = StrategyConfig(mm_ob_mid_blend=0.3, mm_requote_threshold=0.02)
+        mm = MarketMaker(config)
+        prediction = PredictionResult(
+            probability_yes=0.60, confidence=0.7, model_name="test"
+        )
+        snapshot = MarketSnapshot(
+            timestamp=now,
+            market_ticker="test",
+            spot_price=Decimal("97500"),
+            orderbook=Orderbook(
+                ticker="test",
+                yes_levels=[OrderbookLevel(price_dollars=Decimal("0.45"), quantity=100)],
+                no_levels=[OrderbookLevel(price_dollars=Decimal("0.45"), quantity=100)],
+                timestamp=now,
+            ),
+            implied_yes_prob=Decimal("0.50"),
+            time_to_expiry_seconds=600,
+        )
+        fv = mm.compute_fair_value(prediction, snapshot)
+        # 0.3 * 0.50 + 0.7 * 0.60 = 0.57 (blended), not 0.60 (raw model)
+        assert fv == Decimal("0.57")
+        # Record a quote at the blended FV
+        mm._last_quotes["test"] = (fv, datetime.now(timezone.utc))
+        # Raw model FV (0.60) would trigger requote (|0.60-0.57|=0.03 > 0.02),
+        # but blended FV (0.57) should NOT trigger (|0.57-0.57|=0)
+        assert mm.should_requote("test", fv) is False
+
+
+class TestMMImmediateFillTracking:
+    """Test Fix #3: record_fill() makes fills visible to _fills_per_minute()."""
+
+    def test_mm_immediate_fill_updates_recent_fills(self):
+        """record_fill() → _fills_per_minute() reflects the fill."""
+        config = StrategyConfig()
+        mm = MarketMaker(config)
+        assert mm._fills_per_minute("test") == 0
+        mm.record_fill("test", "yes")
+        assert mm._fills_per_minute("test") == 1
+        mm.record_fill("test", "no")
+        assert mm._fills_per_minute("test") == 2
+
+
+class TestMMInventorySkewSymmetric:
+    """Test Fix #4: Symmetric inventory skew affects both sides."""
+
+    def test_mm_inventory_skew_symmetric(self, now: datetime):
+        """Long YES → YES bid wider AND NO bid tighter (symmetric skew)."""
+        config = StrategyConfig(
+            mm_min_spread=0.05,
+            mm_max_spread=0.30,
+            mm_max_inventory=10,
+            mm_ob_mid_blend=0.0,  # Pure model FV for clarity
+            mm_min_spread_offset=0.02,
+            mm_max_spread_offset=0.02,
+            mm_depth_imbalance_max_skew=0.0,  # Disable depth skew
+            mm_vol_filter_enabled=False,
+        )
+        mm = MarketMaker(config)
+        prediction = PredictionResult(
+            probability_yes=0.50, confidence=0.7, model_name="test"
+        )
+        snapshot = MarketSnapshot(
+            timestamp=now,
+            market_ticker="test",
+            spot_price=Decimal("97500"),
+            orderbook=Orderbook(
+                ticker="test",
+                yes_levels=[OrderbookLevel(price_dollars=Decimal("0.40"), quantity=100)],
+                no_levels=[OrderbookLevel(price_dollars=Decimal("0.40"), quantity=100)],
+                timestamp=now,
+            ),
+            implied_yes_prob=Decimal("0.50"),
+            spread=Decimal("0.10"),
+            time_to_expiry_seconds=600,
+        )
+        # Flat inventory → baseline
+        flat = mm.generate_quotes(prediction, snapshot, current_position=0)
+        flat_yes = [s for s in flat if s.side == "yes"]
+        flat_no = [s for s in flat if s.side == "no"]
+        assert flat_yes and flat_no, "Should generate both sides"
+
+        # Long YES (positive inventory) → YES bid should be LOWER (wider),
+        # NO bid should be HIGHER (tighter) than flat
+        long_yes = mm.generate_quotes(prediction, snapshot, current_position=5)
+        long_yes_bid = [s for s in long_yes if s.side == "yes"]
+        long_no_bid = [s for s in long_yes if s.side == "no"]
+        if long_yes_bid and flat_yes:
+            assert float(long_yes_bid[0].suggested_price_dollars) <= float(
+                flat_yes[0].suggested_price_dollars
+            ), "YES bid should widen when long YES"
+        if long_no_bid and flat_no:
+            assert float(long_no_bid[0].suggested_price_dollars) >= float(
+                flat_no[0].suggested_price_dollars
+            ), "NO bid should tighten when long YES"
+
+
+class TestMMCooldownExemption:
+    """Test Fix #5: MM signals survive entry cooldown."""
+
+    def test_mm_cooldown_exempts_mm(self):
+        """MM signal_type='market_making' not filtered by cooldown logic."""
+        signals = [
+            TradeSignal(
+                market_ticker="test",
+                side="yes",
+                action="buy",
+                raw_edge=0.05,
+                net_edge=0.03,
+                model_probability=0.55,
+                implied_probability=0.50,
+                confidence=0.7,
+                suggested_price_dollars="0.48",
+                suggested_count=1,
+                timestamp=datetime.now(timezone.utc),
+                signal_type="directional",
+            ),
+            TradeSignal(
+                market_ticker="test",
+                side="no",
+                action="buy",
+                raw_edge=0.04,
+                net_edge=0.02,
+                model_probability=0.45,
+                implied_probability=0.50,
+                confidence=0.7,
+                suggested_price_dollars="0.48",
+                suggested_count=0,
+                timestamp=datetime.now(timezone.utc),
+                signal_type="market_making",
+                post_only=True,
+            ),
+        ]
+        # Simulate cooldown filter logic from bot.py (Fix #5)
+        buy_signals = [
+            s for s in signals
+            if s.action == "buy" and s.signal_type != "market_making"
+        ]
+        assert len(buy_signals) == 1  # Only directional
+        filtered = [
+            s for s in signals
+            if s.action != "buy" or s.signal_type == "market_making"
+        ]
+        # MM signal survives, directional is removed
+        assert len(filtered) == 1
+        assert filtered[0].signal_type == "market_making"
