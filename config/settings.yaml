@@ -42,7 +42,7 @@ strategy:
   stop_loss_pct: 0.20              # Exit when loss > 20% of entry price (robustness data: +$295 vs -$16 at 0.35)
   stop_loss_min_bid: 0.05          # Don't sell if bid is below $0.05
   stop_loss_min_hold_seconds: 60.0  # Wait 60s before SL can trigger (was 30s — noise triggered early exits)
-  stop_loss_max_dollar_loss: 20.00  # 10x for paper testing (was $2)
+  stop_loss_max_dollar_loss: 2.00   # Max dollar loss per position before SL triggers
   # Trailing take-profit
   trailing_take_profit_enabled: true
   trailing_take_profit_activation_cents: 0.10  # Profit to activate trailing (was 0.08 — avg win still half avg loss, let winners run)
@@ -153,11 +153,11 @@ strategy:
   trend_continuation_rsi_extreme_threshold: 70.0   # RSI overbought/oversold boundary
 
 risk:
-  max_position_per_market: 250   # 10x for paper testing (was 25)
+  max_position_per_market: 35    # Max contracts per market (target 25-35 range)
   max_total_exposure_dollars: 50.0    # Paper balance = exposure * 2 = $100
-  max_daily_loss_dollars: 300.0       # 10x for paper testing (was 30)
+  max_daily_loss_dollars: 30.0        # Stop trading after $30 daily loss
   max_concurrent_positions: 5
-  kelly_fraction: 2.0            # 10x for paper testing (was 0.20)
+  kelly_fraction: 0.20           # Standard fractional Kelly
   min_balance_dollars: 35.0     # Stop trading when balance drops to $70 (30% drawdown from $100)
   max_trades_per_day: 1000       # Paper trading: no daily limit
   cooldown_after_streak_minutes: 30
@@ -167,7 +167,7 @@ risk:
   drawdown_limit_dollars: 200.0
   # Entry discipline
   entry_cooldown_seconds: 30     # Min seconds between fills on same market
-  max_contracts_per_cycle: 150   # 10x for paper testing (was 15)
+  max_contracts_per_cycle: 15    # Max contracts per single cycle
   # Fee-aware sizing at extreme prices
   fee_extreme_price_threshold: 0.25
   fee_extreme_kelly_multiplier: 1.5  # Enable fee boost at extremes (was 1.0)
@@ -181,9 +181,9 @@ risk:
   min_position_size: 5             # Original value (10x scaling applies to maximums, not floors)
   # Per-asset position limits: ETH gets smaller sizes with wider stops
   asset_max_position:
-    ETH: 150                         # 10x for paper testing (was 15)
+    ETH: 15                          # ETH gets smaller sizes with wider stops
   asset_max_per_cycle:
-    ETH: 100                         # 10x for paper testing (was 10)
+    ETH: 10                          # ETH max per cycle
 
 averaging:
   enabled: false                # Disabled until profitable (was true)
