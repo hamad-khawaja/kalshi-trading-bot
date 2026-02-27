@@ -154,11 +154,11 @@ strategy:
 
 risk:
   max_position_per_market: 250   # 10x for paper testing (was 25)
-  max_total_exposure_dollars: 500.0   # Paper balance = exposure * 2 = $1000
-  max_daily_loss_dollars: 3000.0      # 10x for paper testing (was 300)
+  max_total_exposure_dollars: 50.0    # Paper balance = exposure * 2 = $100
+  max_daily_loss_dollars: 300.0       # 10x for paper testing (was 30)
   max_concurrent_positions: 5
   kelly_fraction: 2.0            # 10x for paper testing (was 0.20)
-  min_balance_dollars: 350.0    # Stop trading when balance drops to $700 (30% drawdown from $1000)
+  min_balance_dollars: 35.0     # Stop trading when balance drops to $70 (30% drawdown from $100)
   max_trades_per_day: 1000       # Paper trading: no daily limit
   cooldown_after_streak_minutes: 30
   max_consecutive_losses: 5     # Paper: more room to test
