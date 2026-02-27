@@ -388,16 +388,16 @@ class SignalCombiner:
                 and features is not None
                 and not quiet_hours_active
             ):
-                # Block trend continuation in extreme vol regime
+                # Block trend continuation in high/extreme vol regime
                 if (
                     self._config.tc_extreme_vol_filter_enabled
                     and self._vol_tracker is not None
-                    and self._vol_tracker.current_regime == "extreme"
+                    and self._vol_tracker.current_regime in ("high", "extreme")
                 ):
                     logger.info(
-                        "tc_extreme_vol_blocked",
+                        "tc_high_vol_blocked",
                         ticker=snapshot.market_ticker,
-                        vol_regime="extreme",
+                        vol_regime=self._vol_tracker.current_regime,
                     )
                 else:
                     trend_signal = self._trend_detector.detect(

@@ -207,6 +207,20 @@ class TestTCExtremeVolFilter:
         )
         return vt
 
+    def _make_high_vol_tracker(self) -> VolatilityTracker:
+        """Create a VolatilityTracker in a high regime.
+
+        Percentile 70-89 => high. Place latest reading at ~80th percentile.
+        """
+        vt = VolatilityTracker()
+        for i in range(100):
+            vt.update(0.001 * (i + 1))
+        vt.update(0.080)  # ~80th percentile → "high"
+        assert vt.current_regime == "high", (
+            f"Expected high regime, got {vt.current_regime}"
+        )
+        return vt
+
     async def test_tc_blocked_in_extreme_vol(self):
         """Trend continuation signal is blocked when vol regime is extreme."""
         cfg = _base_strategy_config(tc_extreme_vol_filter_enabled=True)
@@ -224,8 +238,25 @@ class TestTCExtremeVolFilter:
         trend = [s for s in signals if s.signal_type == "trend_continuation"]
         assert len(trend) == 0, "TC should be blocked in extreme vol"
 
+    async def test_tc_blocked_in_high_vol(self):
+        """Trend continuation signal is blocked when vol regime is high."""
+        cfg = _base_strategy_config(tc_extreme_vol_filter_enabled=True)
+        vol_tracker = self._make_high_vol_tracker()
+        history = {"BTC": [{"result": "yes"}, {"result": "yes"}]}
+        combiner = SignalCombiner(cfg, vol_tracker=vol_tracker, settlement_history=history)
+
+        snapshot = make_snapshot(implied_yes_prob=0.50, ttx=800.0, time_elapsed=100.0, phase=1)
+        prediction = PredictionResult(
+            probability_yes=0.55, confidence=0.65, model_name="test"
+        )
+        features = make_features()
+
+        signals = combiner.evaluate(prediction, snapshot, current_position=0, features=features)
+        trend = [s for s in signals if s.signal_type == "trend_continuation"]
+        assert len(trend) == 0, "TC should be blocked in high vol"
+
     async def test_tc_allowed_in_normal_vol(self):
-        """Trend continuation signal fires when vol regime is NOT extreme."""
+        """Trend continuation signal fires when vol regime is normal."""
         cfg = _base_strategy_config(tc_extreme_vol_filter_enabled=True)
         vol_tracker = self._make_normal_vol_tracker()
         history = {"BTC": [{"result": "yes"}, {"result": "yes"}]}
