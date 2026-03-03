@@ -184,6 +184,8 @@ class StrategyConfig(BaseModel):
     asset_mm_min_spread: dict[str, float] = {}
     # Disable settlement ride for specific assets
     asset_settlement_ride_disabled: list[str] = []
+    # Disable trend continuation for specific assets
+    asset_trend_continuation_disabled: list[str] = []
     # Trend continuation: enter early when recent settlements show persistent trend
     trend_continuation_enabled: bool = True
     trend_continuation_min_streak: int = 3

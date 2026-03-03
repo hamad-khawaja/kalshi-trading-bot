@@ -383,8 +383,16 @@ class SignalCombiner:
         # 2. Trend continuation / certainty / settlement — only when no directional signal
         if not signals:
             # 2a. Check for trend continuation (enters early in window during streaks)
+            tc_asset_disabled = False
+            if self._config.asset_trend_continuation_disabled:
+                ticker_upper = snapshot.market_ticker.upper()
+                for asset in self._config.asset_trend_continuation_disabled:
+                    if asset.upper() in ticker_upper:
+                        tc_asset_disabled = True
+                        break
             if (
                 self._config.trend_continuation_enabled
+                and not tc_asset_disabled
                 and features is not None
                 and not quiet_hours_active
             ):

@@ -27,22 +27,22 @@ binance:
 
 strategy:
   poll_interval_seconds: 4
-  min_edge_threshold: 0.03      # 3% minimum edge (robustness baseline)
+  min_edge_threshold: 0.06      # 6% minimum edge (was 3% — thin edges getting stopped out)
   max_edge_threshold: 0.12      # Tighter cap on suspicious edges (was 0.15)
-  confidence_min: 0.55          # Lowered: 0.65 blocked 30%+ edge trades in high vol
+  confidence_min: 0.65          # Require higher confidence (0.55 let too many coin-flip trades through)
   edge_expiry_decay_enabled: true
   edge_expiry_decay_max: 1.8    # At 1 min left, require 1.8x normal edge
   directional_max_spread: 0.15  # Skip wide-spread illiquid books
   mm_max_inventory: 10          # Hybrid: halved to reduce wrong-side accumulation
   confidence_weight: 0.7
   use_market_maker: true
-  mm_min_spread: 0.05           # Minimum spread ($) for market-making
+  mm_min_spread: 0.03           # Reduced: 939 spread_too_narrow skips at 0.05
   # Stop-loss: exit when position drops beyond threshold
   stop_loss_enabled: true
   stop_loss_pct: 0.20              # Exit when loss > 20% of entry price (robustness data: +$295 vs -$16 at 0.35)
   stop_loss_min_bid: 0.05          # Don't sell if bid is below $0.05
   stop_loss_min_hold_seconds: 60.0  # Wait 60s before SL can trigger (was 30s — noise triggered early exits)
-  stop_loss_max_dollar_loss: 2.00   # Max dollar loss per position before SL triggers
+  stop_loss_max_dollar_loss: 10.00  # Max dollar loss per position before SL triggers
   # Trailing take-profit
   trailing_take_profit_enabled: true
   trailing_take_profit_activation_cents: 0.10  # Profit to activate trailing (was 0.08 — avg win still half avg loss, let winners run)
@@ -65,7 +65,7 @@ strategy:
   # Entry filters
   min_entry_price: 0.40             # Block entries below $0.40
   asset_min_entry_price: {}           # Global floor covers both BTC and ETH now
-  yes_side_edge_multiplier: 1.4     # Require 40% more edge for YES entries (robustness baseline)
+  yes_side_edge_multiplier: 1.8     # Require 80% more edge for YES entries (22% WR at 1.4x)
   no_side_edge_multiplier: 1.5      # NO side 16.7% WR — model fights market, require 50% more edge
   asset_edge_multipliers:
     ETH: 1.4                         # ETH is ~1.3-1.5x noisier than BTC, not 2x
@@ -99,7 +99,7 @@ strategy:
   cross_asset_divergence_weight: 0.06
   # Path efficiency (PPE) filter: block fakeout entries with choppy price paths
   ppe_filter_enabled: true
-  ppe_min_threshold: 0.30             # Block directional if 300s PPE < 0.30
+  ppe_min_threshold: 0.20             # Reduced: 2088 signals blocked at 0.30, Kelly scaling handles risk
   ppe_kelly_scaling_enabled: true     # Scale Kelly fraction by PPE
   # TC extreme vol filter: block trend continuation in extreme vol regime
   tc_extreme_vol_filter_enabled: true
@@ -125,7 +125,7 @@ strategy:
   # Disable market-making for specific assets
   asset_market_maker_disabled: []
   # Per-asset minimum spread for market making (wider spread = safer for noisier assets)
-  asset_mm_min_spread: {ETH: 0.08}
+  asset_mm_min_spread: {ETH: 0.05}
   # Disable settlement ride for specific assets
   asset_settlement_ride_disabled: [ETH]
   # Certainty scalp: bet large on near-certain outcomes in last 3 min
@@ -134,9 +134,9 @@ strategy:
   certainty_scalp_min_ttx: 60.0             # At least 60s to get filled
   certainty_scalp_min_implied_prob: 0.85    # Market 85%+ one direction
   certainty_scalp_min_model_prob: 0.70      # Lowered from 0.80: model never reached 0.80 even when market was 0.95+
-  certainty_scalp_min_edge: 0.02            # Low bar (fees tiny at extremes)
+  certainty_scalp_min_edge: 0.015           # Reduced: 615 edge_too_low_vol skips, fees tiny at 85%+ prices
   certainty_scalp_kelly_fraction: 0.30      # Aggressive sizing
-  certainty_scalp_min_spot_distance_pct: 0.002  # 0.2% spot past strike
+  certainty_scalp_min_spot_distance_pct: 0.001  # Reduced: 384 spot_too_close skips at 0.2%
   certainty_scalp_min_fair_value_prob: 0.90  # Lowered from 0.95: fair_value was 0.89-0.94 in clear cases, never crossing 0.95
   # Trend continuation: enter early when recent settlements show persistent trend
   trend_continuation_enabled: true
@@ -151,14 +151,15 @@ strategy:
   trend_continuation_extended_streak_threshold: 3  # Streak 3+ requires technical confirmation
   trend_continuation_min_confirming_signals: 3     # 3/4 technicals must confirm for extended streak
   trend_continuation_rsi_extreme_threshold: 70.0   # RSI overbought/oversold boundary
+  asset_trend_continuation_disabled: [ETH]         # ETH TC: 38% WR, -$3.56 — disable
 
 risk:
   max_position_per_market: 35    # Max contracts per market (target 25-35 range)
-  max_total_exposure_dollars: 50.0    # Paper balance = exposure * 2 = $100
-  max_daily_loss_dollars: 30.0        # Stop trading after $30 daily loss
+  max_total_exposure_dollars: 250.0   # Paper balance = exposure * 2 = $500
+  max_daily_loss_dollars: 150.0       # Stop trading after $150 daily loss
   max_concurrent_positions: 5
-  kelly_fraction: 0.20           # Standard fractional Kelly
-  min_balance_dollars: 35.0     # Stop trading when balance drops to $70 (30% drawdown from $100)
+  kelly_fraction: 0.75           # Aggressive fractional Kelly for 25-35 contract sizing
+  min_balance_dollars: 175.0    # Stop trading when balance drops to $350 (30% drawdown from $500)
   max_trades_per_day: 1000       # Paper trading: no daily limit
   cooldown_after_streak_minutes: 30
   max_consecutive_losses: 5     # Paper: more room to test
@@ -178,7 +179,7 @@ risk:
   time_scale_full_seconds: 480.0  # Full size above 8 min remaining
   time_scale_min_multiplier: 0.4  # 40% size at expiry
   # Minimum position size: skip tiny positions that statistically lose
-  min_position_size: 5             # Original value (10x scaling applies to maximums, not floors)
+  min_position_size: 10            # Min contracts per trade (avoid tiny positions that barely cover fees)
   # Per-asset position limits: ETH gets smaller sizes with wider stops
   asset_max_position:
     ETH: 15                          # ETH gets smaller sizes with wider stops

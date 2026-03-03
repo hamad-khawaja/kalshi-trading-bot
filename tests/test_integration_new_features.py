@@ -307,6 +307,54 @@ class TestTCExtremeVolFilter:
         trend = [s for s in signals if s.signal_type == "trend_continuation"]
         assert len(trend) == 1, "TC should fire when vol_tracker is None"
 
+    async def test_tc_disabled_per_asset(self):
+        """TC is blocked for assets in asset_trend_continuation_disabled."""
+        cfg = _base_strategy_config(asset_trend_continuation_disabled=["ETH"])
+        history = {"ETH": [{"result": "yes"}, {"result": "yes"}]}
+        combiner = SignalCombiner(cfg, vol_tracker=None, settlement_history=history)
+
+        # Create ETH snapshot
+        eth_snapshot = MarketSnapshot(
+            timestamp=NOW,
+            market_ticker="KXETH15M-25FEB26-1415",
+            spot_price=Decimal("1950.0"),
+            spot_prices_1min=[Decimal("1950.0") for _ in range(60)],
+            spot_prices_5min=[Decimal("1950.0") for _ in range(300)],
+            spot_volumes_1min=[Decimal("0.01") for _ in range(60)],
+            orderbook=make_orderbook(),
+            implied_yes_prob=Decimal("0.50"),
+            spread=Decimal("0.02"),
+            strike_price=Decimal("1940.0"),
+            time_to_expiry_seconds=800.0,
+            time_elapsed_seconds=100.0,
+            window_phase=1,
+            volume=250,
+        )
+        prediction = PredictionResult(
+            probability_yes=0.55, confidence=0.65, model_name="test"
+        )
+        features = make_features()
+
+        signals = combiner.evaluate(prediction, eth_snapshot, current_position=0, features=features)
+        trend = [s for s in signals if s.signal_type == "trend_continuation"]
+        assert len(trend) == 0, "TC should be blocked for disabled asset (ETH)"
+
+    async def test_tc_allowed_for_non_disabled_asset(self):
+        """TC still fires for assets NOT in asset_trend_continuation_disabled."""
+        cfg = _base_strategy_config(asset_trend_continuation_disabled=["ETH"])
+        history = {"BTC": [{"result": "yes"}, {"result": "yes"}]}
+        combiner = SignalCombiner(cfg, vol_tracker=None, settlement_history=history)
+
+        snapshot = make_snapshot(implied_yes_prob=0.50, ttx=800.0, time_elapsed=100.0, phase=1)
+        prediction = PredictionResult(
+            probability_yes=0.55, confidence=0.65, model_name="test"
+        )
+        features = make_features()
+
+        signals = combiner.evaluate(prediction, snapshot, current_position=0, features=features)
+        trend = [s for s in signals if s.signal_type == "trend_continuation"]
+        assert len(trend) == 1, "TC should still fire for BTC when only ETH is disabled"
+
 
 # ---------------------------------------------------------------------------
 # 2. Trading Pause Position Gate
