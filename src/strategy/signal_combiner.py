@@ -14,7 +14,6 @@ from src.data.time_profile import TimeProfiler
 from src.risk.volatility import VolatilityTracker
 from src.strategy.edge_detector import EdgeDetector
 from src.strategy.fair_value import compute_fair_value_from_prices
-from src.strategy.fomo_detector import FomoDetector
 from src.strategy.market_maker import MarketMaker
 from src.strategy.trend_continuation_detector import TrendContinuationDetector
 
@@ -27,15 +26,13 @@ class SignalCombiner:
     Priority rules:
     1. Strong directional signal -> trade directionally (MM can run alongside)
     2. Trend continuation -> early-window entry during persistent settlement streaks
-    3. FOMO signal -> buy underpriced side during retail panic
-    4. Certainty scalp -> near-certain outcome in last 3 min
-    5. Settlement ride -> late-window hold-to-settlement
-    6. Market making -> spread capture (standalone or alongside directional)
-    7. Time-to-expiry filter: no new trades within 60s of expiry
+    3. Certainty scalp -> near-certain outcome in last 3 min
+    4. Settlement ride -> late-window hold-to-settlement
+    5. Market making -> spread capture (standalone or alongside directional)
+    6. Time-to-expiry filter: no new trades within 60s of expiry
     """
 
     MIN_TIME_TO_TRADE_SECONDS = 60.0  # No new positions < 60s to expiry
-    MM_CANCEL_BEFORE_EXPIRY_SECONDS = 30.0  # Cancel MM orders 30s before expiry
 
     def __init__(
         self,
@@ -50,7 +47,6 @@ class SignalCombiner:
         self._edge_detector = EdgeDetector(
             config, vol_tracker=vol_tracker, time_profiler=time_profiler
         )
-        self._fomo_detector = FomoDetector(config)
         self._market_maker = MarketMaker(config, vol_tracker=vol_tracker)
         self._trend_detector = TrendContinuationDetector(
             config, settlement_history if settlement_history is not None else {}
@@ -83,6 +79,8 @@ class SignalCombiner:
         snapshot: MarketSnapshot,
         current_position: int = 0,
         features: FeatureVector | None = None,
+        resting_qty_yes: int = 0,
+        resting_qty_no: int = 0,
     ) -> list[TradeSignal]:
         """Evaluate all strategies and return prioritized signals.
 
@@ -90,7 +88,9 @@ class SignalCombiner:
             prediction: Model probability estimate
             snapshot: Current market data snapshot
             current_position: Net YES contracts held (positive = long YES)
-            features: Feature vector (needed for FOMO detection)
+            features: Feature vector for signal evaluation
+            resting_qty_yes: Unfilled YES contracts in resting orders
+            resting_qty_no: Unfilled NO contracts in resting orders
 
         Returns:
             List of trade signals to execute (may be empty)
@@ -380,24 +380,32 @@ class SignalCombiner:
             if ticker in self._edge_streak:
                 del self._edge_streak[ticker]
 
-        # 2. Trend continuation / FOMO / certainty / settlement — only when no directional signal
+        # 2. Trend continuation / certainty / settlement — only when no directional signal
         if not signals:
             # 2a. Check for trend continuation (enters early in window during streaks)
+            tc_asset_disabled = False
+            if self._config.asset_trend_continuation_disabled:
+                ticker_upper = snapshot.market_ticker.upper()
+                for asset in self._config.asset_trend_continuation_disabled:
+                    if asset.upper() in ticker_upper:
+                        tc_asset_disabled = True
+                        break
             if (
                 self._config.trend_continuation_enabled
+                and not tc_asset_disabled
                 and features is not None
                 and not quiet_hours_active
             ):
-                # Block trend continuation in extreme vol regime
+                # Block trend continuation in high/extreme vol regime
                 if (
                     self._config.tc_extreme_vol_filter_enabled
                     and self._vol_tracker is not None
-                    and self._vol_tracker.current_regime == "extreme"
+                    and self._vol_tracker.current_regime in ("high", "extreme")
                 ):
                     logger.info(
-                        "tc_extreme_vol_blocked",
+                        "tc_high_vol_blocked",
                         ticker=snapshot.market_ticker,
-                        vol_regime="extreme",
+                        vol_regime=self._vol_tracker.current_regime,
                     )
                 else:
                     trend_signal = self._trend_detector.detect(
@@ -413,19 +421,6 @@ class SignalCombiner:
                             net_edge=trend_signal.net_edge,
                         )
                         return signals
-
-            # 2b. Check for FOMO signal
-            if self._config.fomo_enabled and features is not None:
-                fomo_signal = self._fomo_detector.detect(prediction, features, snapshot)
-                if fomo_signal is not None:
-                    signals.append(fomo_signal)
-                    logger.debug(
-                        "signal_fomo",
-                        ticker=snapshot.market_ticker,
-                        side=fomo_signal.side,
-                        net_edge=fomo_signal.net_edge,
-                    )
-                    return signals
 
             # 2b. Certainty scalp: near-certain outcome in last 3 min, bet large
             if self._config.certainty_scalp_enabled and not quiet_hours_active:
@@ -456,10 +451,19 @@ class SignalCombiner:
                     break
 
         if self._config.use_market_maker and mm_allowed:
+            # Clear stale quote state so MM generates fresh quotes
+            if self._market_maker.is_quote_stale(
+                snapshot.market_ticker,
+                self._config.mm_max_quote_age_seconds,
+            ):
+                self._market_maker.clear_quote_state(snapshot.market_ticker)
+
             # When directional signal exists, only MM on the opposite side
             mm_signals = self._market_maker.generate_quotes(
                 prediction, snapshot, current_position,
                 directional_side=confirmed_directional_side,
+                resting_qty_yes=resting_qty_yes,
+                resting_qty_no=resting_qty_no,
             )
             if mm_signals:
                 signals.extend(mm_signals)

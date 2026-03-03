@@ -74,7 +74,6 @@ def integration_settings() -> BotSettings:
             # Strategy toggles — all enabled
             directional_enabled=True,
             use_market_maker=True,
-            fomo_enabled=True,
             certainty_scalp_enabled=True,
             settlement_ride_enabled=True,
             trend_continuation_enabled=True,
@@ -85,14 +84,6 @@ def integration_settings() -> BotSettings:
             mm_max_spread=0.30,
             mm_max_inventory=20,
             mm_vol_filter_enabled=False,
-            # FOMO parameters — relaxed
-            fomo_min_divergence=0.15,
-            fomo_edge_threshold=0.04,
-            fomo_momentum_min_magnitude=0.002,
-            fomo_min_confidence=0.65,
-            fomo_min_score=0.30,
-            fomo_max_bet_dollars=5.00,
-            fomo_min_entry_price=0.10,
             # Settlement ride — relaxed
             settlement_ride_min_elapsed_seconds=600.0,
             settlement_ride_min_edge=0.03,
@@ -432,67 +423,7 @@ class TestDirectionalFlow:
 
 
 # ---------------------------------------------------------------------------
-# 2. FOMO flow
-# ---------------------------------------------------------------------------
-
-
-class TestFomoFlow:
-    """Test FOMO contrarian signal → full pipeline."""
-
-    async def test_fomo_contrarian_entry(
-        self,
-        integration_settings,
-        order_manager,
-        position_tracker,
-        risk_manager,
-        position_sizer,
-    ):
-        """BTC momentum up, retail overbids YES → FOMO buys NO."""
-        # Disable directional so FOMO gets a chance
-        cfg = integration_settings.strategy.model_copy(
-            update={"directional_enabled": False}
-        )
-        combiner = SignalCombiner(cfg)
-
-        # Strong upward momentum → retail overbuys YES → implied pushed high
-        # Model says 0.55 but implied is 0.75 → divergence = 0.20 (> 0.15 threshold)
-        # Momentum UP → underpriced side is NO
-        ob = make_orderbook(
-            yes_prices=[0.75, 0.73, 0.70],
-            no_prices=[0.27, 0.25, 0.22],
-        )
-        snapshot = make_snapshot(
-            implied_yes_prob=0.75,
-            spread=0.02,
-            ttx=600.0,
-            orderbook=ob,
-        )
-        prediction = PredictionResult(
-            probability_yes=0.55, confidence=0.80, model_name="test"
-        )
-        features = make_features(
-            momentum_60s=0.005,
-            momentum_180s=0.004,
-            momentum_600s=0.006,
-            momentum_15s=0.003,
-            implied_probability=0.75,
-        )
-
-        signals = combiner.evaluate(prediction, snapshot, current_position=0, features=features)
-        fomo = [s for s in signals if s.signal_type == "fomo"]
-        assert len(fomo) == 1
-        assert fomo[0].side == "no"
-
-        order_id, position = await run_pipeline(
-            fomo[0], position_sizer, risk_manager, order_manager, position_tracker,
-        )
-        assert order_id is not None
-        assert position is not None
-        assert position.side == "no"
-
-
-# ---------------------------------------------------------------------------
-# 3. Trend continuation flow
+# 2. Trend continuation flow
 # ---------------------------------------------------------------------------
 
 
@@ -716,7 +647,7 @@ class TestSettlementRideFlow:
 class TestMarketMakingFlow:
     """Test market making quotes → full pipeline."""
 
-    async def test_mm_both_sides(
+    async def test_mm_single_best_side(
         self,
         integration_settings,
         order_manager,
@@ -724,7 +655,7 @@ class TestMarketMakingFlow:
         risk_manager,
         position_sizer,
     ):
-        """Wide spread → MM generates quotes on both sides."""
+        """Wide spread → MM generates single best-side quote."""
         # Use tight model probability near 0.50, wide spread → MM opportunity
         cfg = integration_settings.strategy.model_copy(
             update={"directional_enabled": False}
@@ -749,11 +680,11 @@ class TestMarketMakingFlow:
 
         signals = combiner.evaluate(prediction, snapshot, current_position=0)
         mm = [s for s in signals if s.signal_type == "market_making"]
-        assert len(mm) == 2
-        sides = {s.side for s in mm}
-        assert sides == {"yes", "no"}
+        # Kalshi doesn't support holding both sides — MM picks the single best side
+        assert len(mm) == 1
+        assert mm[0].side in ("yes", "no")
 
-        # Run just the first signal through the full pipeline
+        # Run the signal through the full pipeline
         order_id, position = await run_pipeline(
             mm[0], position_sizer, risk_manager, order_manager, position_tracker,
         )
@@ -960,3 +891,77 @@ class TestExitFlows:
         )
         assert len(results) >= 1
         assert results[0][0] == ticker
+
+
+class TestMMMOppositeSideGuard:
+    """Test Fix #2: MM NO quote survives opposite-side guard when holding YES."""
+
+    async def test_mm_opposite_side_guard_exempts_mm(
+        self,
+        integration_settings,
+        vol_tracker,
+    ):
+        """Holding YES → opposite-side guard blocks directional NO but keeps MM NO."""
+        from src.data.models import TradeSignal
+
+        signals = [
+            TradeSignal(
+                market_ticker=TICKER,
+                side="yes",
+                action="buy",
+                raw_edge=0.05,
+                net_edge=0.03,
+                model_probability=0.55,
+                implied_probability=0.50,
+                confidence=0.7,
+                suggested_price_dollars="0.48",
+                suggested_count=1,
+                timestamp=NOW,
+                signal_type="directional",
+            ),
+            TradeSignal(
+                market_ticker=TICKER,
+                side="no",
+                action="buy",
+                raw_edge=0.04,
+                net_edge=0.02,
+                model_probability=0.45,
+                implied_probability=0.50,
+                confidence=0.7,
+                suggested_price_dollars="0.48",
+                suggested_count=0,
+                timestamp=NOW,
+                signal_type="market_making",
+                post_only=True,
+            ),
+            TradeSignal(
+                market_ticker=TICKER,
+                side="no",
+                action="buy",
+                raw_edge=0.04,
+                net_edge=0.02,
+                model_probability=0.45,
+                implied_probability=0.50,
+                confidence=0.7,
+                suggested_price_dollars="0.48",
+                suggested_count=1,
+                timestamp=NOW,
+                signal_type="directional",
+            ),
+        ]
+
+        # Simulate holding YES position: filter opposite side (Fix #2 logic)
+        held_side = "yes"
+        filtered = [
+            s for s in signals
+            if not (s.action == "buy" and s.side != held_side
+                    and s.signal_type != "market_making")
+        ]
+        # Directional YES stays, MM NO stays, directional NO blocked
+        assert len(filtered) == 2
+        types = {s.signal_type for s in filtered}
+        assert "market_making" in types
+        assert "directional" in types
+        # The surviving directional should be YES (same side as held)
+        dir_signals = [s for s in filtered if s.signal_type == "directional"]
+        assert dir_signals[0].side == "yes"

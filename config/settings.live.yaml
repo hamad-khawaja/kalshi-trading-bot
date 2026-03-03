@@ -43,17 +43,6 @@ strategy:
   stop_loss_min_bid: 0.05
   stop_loss_min_hold_seconds: 60.0
   stop_loss_max_dollar_loss: 2.00        # $100 balance: $2 max loss per SL
-  # FOMO — disabled
-  fomo_enabled: false
-  fomo_min_divergence: 0.20
-  fomo_edge_threshold: 0.08
-  fomo_min_score: 0.65
-  fomo_min_confidence: 0.80
-  fomo_momentum_min_magnitude: 0.003
-  fomo_momentum_consistency_required: true
-  fomo_max_implied_prob: 0.85
-  fomo_min_implied_prob: 0.15
-  fomo_min_entry_price: 0.10
   # Trailing take-profit
   trailing_take_profit_enabled: true
   trailing_take_profit_activation_cents: 0.10

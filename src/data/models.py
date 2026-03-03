@@ -231,7 +231,7 @@ class TradeSignal(BaseModel):
     suggested_count: int = 0
     timestamp: datetime
     signal_type: Literal[
-        "directional", "market_making", "fomo",
+        "directional", "market_making",
         "averaging", "settlement_ride", "certainty_scalp",
         "trend_continuation",
     ] = "directional"

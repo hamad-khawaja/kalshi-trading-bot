@@ -36,7 +36,6 @@ class DashboardState:
         self.features: dict[str, float] = {}
         self.prediction: dict[str, Any] = {}
         self.edge: dict[str, Any] = {}
-        self.fomo: dict[str, Any] = {}
         self.signals: list[dict[str, Any]] = []
         self.sizing: dict[str, Any] = {}
         self.last_trade: dict[str, Any] = {}
@@ -84,10 +83,14 @@ class DashboardState:
         # Live config snapshot (for comparison in Settings tab)
         self.live_config: dict[str, Any] = {}
 
+        # MM metrics (fills, P&L, avg profit per fill)
+        self.mm_metrics: dict[str, Any] = {
+            "total_fills": 0, "total_pnl": 0.0, "avg_profit_per_fill": 0.0,
+        }
+
         # Per-strategy toggles (runtime control from dashboard)
         self.strategy_toggles: dict[str, bool] = {
             "directional": True,
-            "fomo": True,
             "certainty_scalp": True,
             "settlement_ride": True,
             "trend_continuation": True,
@@ -173,7 +176,6 @@ class DashboardState:
             "features": self.features,
             "prediction": self.prediction,
             "edge": self.edge,
-            "fomo": self.fomo,
             "signals": self.signals,
             "sizing": self.sizing,
             "last_trade": self.last_trade,
@@ -194,6 +196,7 @@ class DashboardState:
             "eth_disabled": self.eth_disabled,
             "btc_disabled": self.btc_disabled,
             "strategy_toggles": self.strategy_toggles,
+            "mm_metrics": self.mm_metrics,
             "startup_config": self.startup_config,
             "live_config": self.live_config,
         }
@@ -227,6 +230,7 @@ class DashboardServer:
         self._app.router.add_post("/api/toggle-strategy", self._handle_toggle_strategy)
         self._app.router.add_get("/api/trades", self._handle_trades)
         self._app.router.add_get("/api/pnl-summary", self._handle_pnl_summary)
+        self._app.router.add_get("/api/strategy-pnl", self._handle_strategy_pnl)
         self._app.router.add_post("/api/switch-mode", self._handle_switch_mode)
 
         self._runner = web.AppRunner(self._app)
@@ -363,6 +367,32 @@ class DashboardServer:
                     "total_pnl": 0, "total_fees": 0,
                     "trade_count": 0, "win_count": 0, "win_rate": 0,
                 }),
+                content_type="application/json",
+            )
+
+    async def _handle_strategy_pnl(self, request: web.Request) -> web.Response:
+        """Return P&L summary grouped by strategy_tag."""
+        if not self._db:
+            return web.Response(
+                text=json.dumps({}),
+                content_type="application/json",
+            )
+        try:
+            mode = request.query.get("mode")
+            if mode and mode not in ("paper", "live"):
+                mode = None
+            range_param = request.query.get("range", "1d")
+            days_map = {"1d": 1, "1w": 7, "1m": 30, "1y": 365}
+            days = days_map.get(range_param, 1)
+            summary = await self._db.get_strategy_pnl_summary(mode=mode, days=days)
+            return web.Response(
+                text=json.dumps(summary),
+                content_type="application/json",
+            )
+        except Exception:
+            logger.warning("strategy_pnl_api_error", exc_info=True)
+            return web.Response(
+                text=json.dumps({}),
                 content_type="application/json",
             )
 

@@ -73,20 +73,18 @@ class StrategyConfig(BaseModel):
     mm_min_spread: float = 0.05
     mm_max_spread: float = 0.30
     mm_max_inventory: int = 20  # Stop MM when holding this many contracts
+    mm_kelly_fraction: float = 0.07  # Conservative Kelly for non-directional MM
+    mm_max_quote_age_seconds: float = 60.0  # Force requote if quotes older than this
+    mm_fill_asymmetry_threshold: float = 3.0  # Max YES:NO fill ratio before skipping side
+    mm_fill_asymmetry_window: int = 10  # Number of recent fills to track
+    mm_ob_mid_blend: float = 0.3  # 30% OB mid + 70% model probability
+    mm_min_spread_offset: float = 0.01
+    mm_max_spread_offset: float = 0.06
+    mm_target_fills_per_minute: float = 2.0
+    mm_depth_imbalance_max_skew: float = 0.03
+    mm_requote_threshold: float = 0.02  # Lowered from hardcoded 0.03
     use_time_profiles: bool = True
     time_profile_lookback_days: int = 30
-    # FOMO exploitation parameters
-    fomo_enabled: bool = True
-    fomo_min_divergence: float = 0.18
-    fomo_edge_threshold: float = 0.06
-    fomo_momentum_min_magnitude: float = 0.003
-    fomo_momentum_consistency_required: bool = True
-    fomo_max_implied_prob: float = 0.85
-    fomo_min_implied_prob: float = 0.15
-    fomo_min_confidence: float = 0.70
-    fomo_min_score: float = 0.50
-    fomo_max_bet_dollars: float = 2.00  # Max dollar exposure per FOMO trade
-    fomo_min_entry_price: float = 0.10  # FOMO-specific floor (lower than global)
     # Stop-loss parameters
     stop_loss_enabled: bool = True
     stop_loss_pct: float = 0.35  # Exit when loss > 35% of entry price
@@ -186,6 +184,8 @@ class StrategyConfig(BaseModel):
     asset_mm_min_spread: dict[str, float] = {}
     # Disable settlement ride for specific assets
     asset_settlement_ride_disabled: list[str] = []
+    # Disable trend continuation for specific assets
+    asset_trend_continuation_disabled: list[str] = []
     # Trend continuation: enter early when recent settlements show persistent trend
     trend_continuation_enabled: bool = True
     trend_continuation_min_streak: int = 3

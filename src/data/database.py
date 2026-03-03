@@ -388,6 +388,49 @@ class Database:
             "win_rate": round((row[3] or 0) / row[2] * 100, 1),
         }
 
+    async def get_strategy_pnl_summary(
+        self, mode: str | None = None, days: int | None = None
+    ) -> dict[str, dict]:
+        """Get P&L summary grouped by strategy_tag.
+
+        Returns dict like {"directional": {pnl, fees, count, wins, win_rate}, ...}.
+        """
+        assert self._db is not None
+        conditions = ["action != 'buy'"]
+        params: list = []
+        if mode:
+            conditions.append("mode = ?")
+            params.append(mode)
+        if days:
+            conditions.append("entry_time >= datetime('now', ?)")
+            params.append(f"-{days} days")
+        where = " AND ".join(conditions)
+        cursor = await self._db.execute(
+            f"""SELECT
+                strategy_tag,
+                COALESCE(SUM(pnl_dollars), 0) as total_pnl,
+                COALESCE(SUM(fees_dollars), 0) as total_fees,
+                COUNT(*) as trade_count,
+                SUM(CASE WHEN pnl_dollars > 0 THEN 1 ELSE 0 END) as win_count
+            FROM trades WHERE {where}
+            GROUP BY strategy_tag""",
+            params,
+        )
+        rows = await cursor.fetchall()
+        result: dict[str, dict] = {}
+        for row in rows:
+            tag = row[0] or "unknown"
+            count = int(row[3])
+            wins = int(row[4] or 0)
+            result[tag] = {
+                "pnl": round(float(row[1]), 2),
+                "fees": round(float(row[2]), 2),
+                "count": count,
+                "wins": wins,
+                "win_rate": round(wins / count * 100, 1) if count > 0 else 0.0,
+            }
+        return result
+
     async def update_daily_summary(
         self,
         target_date: date,

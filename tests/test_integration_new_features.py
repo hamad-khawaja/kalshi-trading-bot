@@ -159,7 +159,6 @@ def _base_strategy_config(**overrides) -> StrategyConfig:
         no_side_edge_multiplier=1.0,
         directional_enabled=False,
         use_market_maker=False,
-        fomo_enabled=False,
         certainty_scalp_enabled=False,
         settlement_ride_enabled=False,
         trend_continuation_enabled=True,
@@ -208,6 +207,20 @@ class TestTCExtremeVolFilter:
         )
         return vt
 
+    def _make_high_vol_tracker(self) -> VolatilityTracker:
+        """Create a VolatilityTracker in a high regime.
+
+        Percentile 70-89 => high. Place latest reading at ~80th percentile.
+        """
+        vt = VolatilityTracker()
+        for i in range(100):
+            vt.update(0.001 * (i + 1))
+        vt.update(0.080)  # ~80th percentile → "high"
+        assert vt.current_regime == "high", (
+            f"Expected high regime, got {vt.current_regime}"
+        )
+        return vt
+
     async def test_tc_blocked_in_extreme_vol(self):
         """Trend continuation signal is blocked when vol regime is extreme."""
         cfg = _base_strategy_config(tc_extreme_vol_filter_enabled=True)
@@ -225,8 +238,25 @@ class TestTCExtremeVolFilter:
         trend = [s for s in signals if s.signal_type == "trend_continuation"]
         assert len(trend) == 0, "TC should be blocked in extreme vol"
 
+    async def test_tc_blocked_in_high_vol(self):
+        """Trend continuation signal is blocked when vol regime is high."""
+        cfg = _base_strategy_config(tc_extreme_vol_filter_enabled=True)
+        vol_tracker = self._make_high_vol_tracker()
+        history = {"BTC": [{"result": "yes"}, {"result": "yes"}]}
+        combiner = SignalCombiner(cfg, vol_tracker=vol_tracker, settlement_history=history)
+
+        snapshot = make_snapshot(implied_yes_prob=0.50, ttx=800.0, time_elapsed=100.0, phase=1)
+        prediction = PredictionResult(
+            probability_yes=0.55, confidence=0.65, model_name="test"
+        )
+        features = make_features()
+
+        signals = combiner.evaluate(prediction, snapshot, current_position=0, features=features)
+        trend = [s for s in signals if s.signal_type == "trend_continuation"]
+        assert len(trend) == 0, "TC should be blocked in high vol"
+
     async def test_tc_allowed_in_normal_vol(self):
-        """Trend continuation signal fires when vol regime is NOT extreme."""
+        """Trend continuation signal fires when vol regime is normal."""
         cfg = _base_strategy_config(tc_extreme_vol_filter_enabled=True)
         vol_tracker = self._make_normal_vol_tracker()
         history = {"BTC": [{"result": "yes"}, {"result": "yes"}]}
@@ -276,6 +306,54 @@ class TestTCExtremeVolFilter:
         signals = combiner.evaluate(prediction, snapshot, current_position=0, features=features)
         trend = [s for s in signals if s.signal_type == "trend_continuation"]
         assert len(trend) == 1, "TC should fire when vol_tracker is None"
+
+    async def test_tc_disabled_per_asset(self):
+        """TC is blocked for assets in asset_trend_continuation_disabled."""
+        cfg = _base_strategy_config(asset_trend_continuation_disabled=["ETH"])
+        history = {"ETH": [{"result": "yes"}, {"result": "yes"}]}
+        combiner = SignalCombiner(cfg, vol_tracker=None, settlement_history=history)
+
+        # Create ETH snapshot
+        eth_snapshot = MarketSnapshot(
+            timestamp=NOW,
+            market_ticker="KXETH15M-25FEB26-1415",
+            spot_price=Decimal("1950.0"),
+            spot_prices_1min=[Decimal("1950.0") for _ in range(60)],
+            spot_prices_5min=[Decimal("1950.0") for _ in range(300)],
+            spot_volumes_1min=[Decimal("0.01") for _ in range(60)],
+            orderbook=make_orderbook(),
+            implied_yes_prob=Decimal("0.50"),
+            spread=Decimal("0.02"),
+            strike_price=Decimal("1940.0"),
+            time_to_expiry_seconds=800.0,
+            time_elapsed_seconds=100.0,
+            window_phase=1,
+            volume=250,
+        )
+        prediction = PredictionResult(
+            probability_yes=0.55, confidence=0.65, model_name="test"
+        )
+        features = make_features()
+
+        signals = combiner.evaluate(prediction, eth_snapshot, current_position=0, features=features)
+        trend = [s for s in signals if s.signal_type == "trend_continuation"]
+        assert len(trend) == 0, "TC should be blocked for disabled asset (ETH)"
+
+    async def test_tc_allowed_for_non_disabled_asset(self):
+        """TC still fires for assets NOT in asset_trend_continuation_disabled."""
+        cfg = _base_strategy_config(asset_trend_continuation_disabled=["ETH"])
+        history = {"BTC": [{"result": "yes"}, {"result": "yes"}]}
+        combiner = SignalCombiner(cfg, vol_tracker=None, settlement_history=history)
+
+        snapshot = make_snapshot(implied_yes_prob=0.50, ttx=800.0, time_elapsed=100.0, phase=1)
+        prediction = PredictionResult(
+            probability_yes=0.55, confidence=0.65, model_name="test"
+        )
+        features = make_features()
+
+        signals = combiner.evaluate(prediction, snapshot, current_position=0, features=features)
+        trend = [s for s in signals if s.signal_type == "trend_continuation"]
+        assert len(trend) == 1, "TC should still fire for BTC when only ETH is disabled"
 
 
 # ---------------------------------------------------------------------------

@@ -95,6 +95,11 @@ class PositionSizer:
             and self._strategy_config.directional_kelly_fraction > 0
         ):
             effective_kelly = self._strategy_config.directional_kelly_fraction
+        elif (
+            signal.signal_type == "market_making"
+            and self._strategy_config is not None
+        ):
+            effective_kelly = self._strategy_config.mm_kelly_fraction
         else:
             effective_kelly = self._kelly_fraction
         f = kelly_f * effective_kelly
@@ -127,7 +132,9 @@ class PositionSizer:
             f *= self._config.directional_high_price_boost
 
         # Scale by confidence (linear for stronger differentiation)
-        f *= signal.confidence
+        # Skip for MM: confidence reflects fair-value quality, not win probability
+        if signal.signal_type != "market_making":
+            f *= signal.confidence
 
         # Fee-aware boost: increase position at extreme prices where fees
         # are negligible (~0.2% at 20c vs ~1.56% at 50c)
@@ -160,14 +167,6 @@ class PositionSizer:
 
         # Convert to dollar amount
         bet_dollars = f * float(balance_dollars)
-
-        # FOMO cap: limit total dollar exposure per FOMO trade
-        if (
-            signal.signal_type == "fomo"
-            and self._strategy_config is not None
-            and self._strategy_config.fomo_max_bet_dollars > 0
-        ):
-            bet_dollars = min(bet_dollars, self._strategy_config.fomo_max_bet_dollars)
 
         # Convert to contract count (each contract costs `price` dollars)
         count = int(bet_dollars / price)

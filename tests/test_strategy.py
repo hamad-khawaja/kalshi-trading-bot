@@ -7,13 +7,14 @@ from decimal import Decimal
 
 import pytest
 
-from src.config import StrategyConfig
+from src.config import RiskConfig, StrategyConfig
 from src.data.models import (
     FeatureVector,
     MarketSnapshot,
     Orderbook,
     OrderbookLevel,
     PredictionResult,
+    TradeSignal,
 )
 from src.risk.volatility import VolatilityTracker
 from src.strategy.edge_detector import EdgeDetector
@@ -262,6 +263,152 @@ class TestMarketMaker:
         assert len(quotes) == 0
 
 
+    def test_mm_quotes_have_post_only_true(
+        self, market_maker: MarketMaker, sample_prediction: PredictionResult, now: datetime
+    ):
+        """MM quotes must set post_only=True for maker fees."""
+        snapshot = MarketSnapshot(
+            timestamp=now,
+            market_ticker="test",
+            spot_price=Decimal("97500"),
+            orderbook=Orderbook(
+                ticker="test",
+                yes_levels=[OrderbookLevel(price_dollars=Decimal("0.45"), quantity=100)],
+                no_levels=[OrderbookLevel(price_dollars=Decimal("0.45"), quantity=100)],
+                timestamp=now,
+            ),
+            spread=Decimal("0.10"),
+            implied_yes_prob=Decimal("0.50"),
+            time_to_expiry_seconds=600,
+        )
+        quotes = market_maker.generate_quotes(sample_prediction, snapshot, 0)
+        assert len(quotes) >= 1
+        for q in quotes:
+            assert q.post_only is True
+
+    def test_mm_fill_asymmetry_skips_heavy_side(
+        self, sample_prediction: PredictionResult, now: datetime
+    ):
+        """When YES fills dominate, MM should skip YES side."""
+        config = StrategyConfig(mm_fill_asymmetry_threshold=2.0, mm_fill_asymmetry_window=10)
+        mm = MarketMaker(config)
+        # Record 4 YES fills and 1 NO fill → ratio 4:1 > threshold 2.0
+        for _ in range(4):
+            mm.record_fill("test", "yes")
+        mm.record_fill("test", "no")
+        snapshot = MarketSnapshot(
+            timestamp=now,
+            market_ticker="test",
+            spot_price=Decimal("97500"),
+            orderbook=Orderbook(
+                ticker="test",
+                yes_levels=[OrderbookLevel(price_dollars=Decimal("0.45"), quantity=100)],
+                no_levels=[OrderbookLevel(price_dollars=Decimal("0.45"), quantity=100)],
+                timestamp=now,
+            ),
+            spread=Decimal("0.10"),
+            implied_yes_prob=Decimal("0.50"),
+            time_to_expiry_seconds=600,
+        )
+        quotes = mm.generate_quotes(sample_prediction, snapshot, 0)
+        # YES side should be skipped; only NO quote (if any)
+        yes_quotes = [q for q in quotes if q.side == "yes"]
+        assert len(yes_quotes) == 0
+
+    def test_mm_quote_staleness_detection(self, now: datetime):
+        """is_quote_stale returns True when quotes are older than max_age."""
+        config = StrategyConfig()
+        mm = MarketMaker(config)
+        # No quotes yet — not stale
+        assert mm.is_quote_stale("test", 60.0) is False
+        # Record a quote with a timestamp 120s ago
+        from datetime import timedelta
+        old_ts = datetime.now(timezone.utc) - timedelta(seconds=120)
+        mm._last_quotes["test"] = (Decimal("0.50"), old_ts)
+        assert mm.is_quote_stale("test", 60.0) is True
+        assert mm.is_quote_stale("test", 300.0) is False
+
+    def test_mm_fill_ratio_tracking(self, now: datetime):
+        """record_fill and _fill_ratio correctly track per-ticker fills."""
+        config = StrategyConfig(mm_fill_asymmetry_window=5)
+        mm = MarketMaker(config)
+        mm.record_fill("A", "yes")
+        mm.record_fill("A", "yes")
+        mm.record_fill("A", "no")
+        mm.record_fill("B", "yes")
+        y, n = mm._fill_ratio("A")
+        assert y == 2
+        assert n == 1
+        y_b, n_b = mm._fill_ratio("B")
+        assert y_b == 1
+        assert n_b == 0
+
+
+class TestMMPositionSizing:
+    """Test MM-specific Kelly fraction and confidence scaling."""
+
+    def test_mm_uses_dedicated_kelly_fraction(self, now: datetime):
+        """MM signals should use mm_kelly_fraction, not global Kelly."""
+        from src.risk.position_sizer import PositionSizer
+        risk_config = RiskConfig(
+            kelly_fraction=0.15, min_position_size=1,
+            max_position_per_market=200,
+        )
+        strat_config = StrategyConfig(
+            mm_kelly_fraction=0.07,
+            stop_loss_max_dollar_loss=500.0,
+        )
+        sizer = PositionSizer(risk_config, strategy_config=strat_config)
+        signal = TradeSignal(
+            market_ticker="test",
+            side="yes",
+            action="buy",
+            raw_edge=0.10,
+            net_edge=0.08,
+            model_probability=0.60,
+            implied_probability=0.50,
+            confidence=0.50,
+            suggested_price_dollars="0.45",
+            suggested_count=0,
+            timestamp=now,
+            signal_type="market_making",
+        )
+        mm_count = sizer.size(signal, Decimal("1000"), Decimal("0"))
+        # Same signal but directional (uses global kelly 0.15)
+        dir_signal = signal.model_copy(update={"signal_type": "directional"})
+        dir_count = sizer.size(dir_signal, Decimal("1000"), Decimal("0"))
+        # MM should be smaller than directional due to lower Kelly
+        assert mm_count > 0
+        assert dir_count > 0
+        assert mm_count < dir_count
+
+    def test_mm_skips_confidence_scaling(self, now: datetime):
+        """MM signals should not be scaled by confidence."""
+        from src.risk.position_sizer import PositionSizer
+        risk_config = RiskConfig(
+            kelly_fraction=0.15, min_position_size=1,
+            max_position_per_market=200,
+        )
+        strat_config = StrategyConfig(
+            mm_kelly_fraction=0.07,
+            stop_loss_max_dollar_loss=500.0,
+        )
+        sizer = PositionSizer(risk_config, strategy_config=strat_config)
+        high_conf = TradeSignal(
+            market_ticker="test", side="yes", action="buy",
+            raw_edge=0.10, net_edge=0.08, model_probability=0.60,
+            implied_probability=0.50, confidence=0.90,
+            suggested_price_dollars="0.45", suggested_count=0,
+            timestamp=now, signal_type="market_making",
+        )
+        low_conf = high_conf.model_copy(update={"confidence": 0.30})
+        high_count = sizer.size(high_conf, Decimal("1000"), Decimal("0"))
+        low_count = sizer.size(low_conf, Decimal("1000"), Decimal("0"))
+        # Without confidence scaling, both should produce the same size
+        assert high_count > 0
+        assert high_count == low_count
+
+
 class TestEdgeDetectorVolAdjusted:
     """Test that EdgeDetector uses vol-adjusted thresholds when tracker is provided."""
 
@@ -451,3 +598,667 @@ class TestSignalCombiner:
         combiner.evaluate(prediction, snapshot, 0, features=high_ppe_features)
         # PPE filter should NOT block (0.65 > 0.30)
         assert not any("ppe_filter" in r for r in combiner.last_block_reasons)
+
+
+class TestMMMidPriceBlend:
+    """Tests for Fix #1: Mid-price blending with OB midpoint."""
+
+    def test_mm_fair_value_blends_ob_mid(self, now: datetime):
+        """blend=0.3, model=0.60, ob_mid=0.50 → fv ≈ 0.57."""
+        config = StrategyConfig(mm_ob_mid_blend=0.3)
+        mm = MarketMaker(config)
+        prediction = PredictionResult(
+            probability_yes=0.60, confidence=0.7, model_name="test"
+        )
+        snapshot = MarketSnapshot(
+            timestamp=now,
+            market_ticker="test",
+            spot_price=Decimal("97500"),
+            orderbook=Orderbook(
+                ticker="test",
+                yes_levels=[OrderbookLevel(price_dollars=Decimal("0.45"), quantity=100)],
+                no_levels=[OrderbookLevel(price_dollars=Decimal("0.45"), quantity=100)],
+                timestamp=now,
+            ),
+            implied_yes_prob=Decimal("0.50"),
+            time_to_expiry_seconds=600,
+        )
+        fv = mm._compute_fair_value(prediction, snapshot)
+        # 0.3 * 0.50 + 0.7 * 0.60 = 0.15 + 0.42 = 0.57
+        assert fv == Decimal("0.57")
+
+    def test_mm_fair_value_fallback_no_ob(self, now: datetime):
+        """No OB data → pure model prob."""
+        config = StrategyConfig(mm_ob_mid_blend=0.3)
+        mm = MarketMaker(config)
+        prediction = PredictionResult(
+            probability_yes=0.60, confidence=0.7, model_name="test"
+        )
+        snapshot = MarketSnapshot(
+            timestamp=now,
+            market_ticker="test",
+            spot_price=Decimal("97500"),
+            orderbook=Orderbook(ticker="test", timestamp=now),
+            time_to_expiry_seconds=600,
+        )
+        fv = mm._compute_fair_value(prediction, snapshot)
+        assert fv == Decimal("0.60")
+
+    def test_mm_fair_value_blend_zero(self, now: datetime):
+        """blend=0.0 → pure model, even with OB data."""
+        config = StrategyConfig(mm_ob_mid_blend=0.0)
+        mm = MarketMaker(config)
+        prediction = PredictionResult(
+            probability_yes=0.60, confidence=0.7, model_name="test"
+        )
+        snapshot = MarketSnapshot(
+            timestamp=now,
+            market_ticker="test",
+            spot_price=Decimal("97500"),
+            orderbook=Orderbook(
+                ticker="test",
+                yes_levels=[OrderbookLevel(price_dollars=Decimal("0.45"), quantity=100)],
+                no_levels=[OrderbookLevel(price_dollars=Decimal("0.45"), quantity=100)],
+                timestamp=now,
+            ),
+            implied_yes_prob=Decimal("0.50"),
+            time_to_expiry_seconds=600,
+        )
+        fv = mm._compute_fair_value(prediction, snapshot)
+        assert fv == Decimal("0.60")
+
+
+class TestMMDynamicSpread:
+    """Tests for Fix #2: Dynamic spread based on fill rate."""
+
+    def test_mm_dynamic_spread_tightens_no_fills(self, now: datetime):
+        """No fills → minimum spread offset (base only)."""
+        config = StrategyConfig(
+            mm_min_spread_offset=0.01,
+            mm_max_spread_offset=0.06,
+            mm_target_fills_per_minute=2.0,
+        )
+        mm = MarketMaker(config)
+        offset = mm._dynamic_spread_offset("test")
+        # No fills, no vol tracker → ratio=0 → min_offset * 1.0
+        assert offset == Decimal("0.01")
+
+    def test_mm_dynamic_spread_widens_with_fills(self, now: datetime):
+        """Recent fills → wider spread offset."""
+        from datetime import timedelta
+        config = StrategyConfig(
+            mm_min_spread_offset=0.01,
+            mm_max_spread_offset=0.06,
+            mm_target_fills_per_minute=2.0,
+            mm_fill_asymmetry_window=100,
+        )
+        mm = MarketMaker(config)
+        # Record 4 fills in the last 30 seconds (well above target 2/min)
+        recent = datetime.now(timezone.utc) - timedelta(seconds=10)
+        for _ in range(4):
+            mm._recent_fills.append(("test", "yes", recent))
+        offset = mm._dynamic_spread_offset("test")
+        # fpm=4, target=2 → ratio=min(4/2, 1.0)=1.0 → 0.01 + 1.0*(0.06-0.01) = 0.06
+        assert offset == Decimal("0.06")
+
+    def test_mm_fills_per_minute(self, now: datetime):
+        """Fill-rate calculation with timestamps."""
+        from datetime import timedelta
+        config = StrategyConfig(mm_fill_asymmetry_window=100)
+        mm = MarketMaker(config)
+        recent = datetime.now(timezone.utc) - timedelta(seconds=30)
+        old = datetime.now(timezone.utc) - timedelta(seconds=120)
+        # 2 recent fills, 1 old fill
+        mm._recent_fills.append(("test", "yes", recent))
+        mm._recent_fills.append(("test", "no", recent))
+        mm._recent_fills.append(("test", "yes", old))
+        assert mm._fills_per_minute("test") == 2
+
+
+class TestMMDepthImbalance:
+    """Tests for Fix #3: Depth imbalance skew."""
+
+    def test_mm_depth_imbalance_skews_quotes(self, now: datetime):
+        """YES depth >> NO → positive skew (tighten YES, widen NO)."""
+        config = StrategyConfig(mm_depth_imbalance_max_skew=0.03)
+        mm = MarketMaker(config)
+        snapshot = MarketSnapshot(
+            timestamp=now,
+            market_ticker="test",
+            spot_price=Decimal("97500"),
+            orderbook=Orderbook(
+                ticker="test",
+                yes_levels=[
+                    OrderbookLevel(price_dollars=Decimal("0.50"), quantity=300),
+                ],
+                no_levels=[
+                    OrderbookLevel(price_dollars=Decimal("0.50"), quantity=100),
+                ],
+                timestamp=now,
+            ),
+            time_to_expiry_seconds=600,
+        )
+        skew = mm._depth_imbalance_skew(snapshot)
+        # imbalance = (300-100)/400 = 0.5, skew = 0.5 * 0.03 = 0.015
+        assert skew == Decimal("0.015")
+        assert skew > 0  # Positive → tighten YES bid
+
+    def test_mm_depth_imbalance_capped(self, now: datetime):
+        """Extreme imbalance → capped at max_skew."""
+        config = StrategyConfig(mm_depth_imbalance_max_skew=0.03)
+        mm = MarketMaker(config)
+        snapshot = MarketSnapshot(
+            timestamp=now,
+            market_ticker="test",
+            spot_price=Decimal("97500"),
+            orderbook=Orderbook(
+                ticker="test",
+                yes_levels=[
+                    OrderbookLevel(price_dollars=Decimal("0.50"), quantity=1000),
+                ],
+                no_levels=[],  # Zero NO depth → imbalance = 1.0
+                timestamp=now,
+            ),
+            time_to_expiry_seconds=600,
+        )
+        skew = mm._depth_imbalance_skew(snapshot)
+        # imbalance = (1000-0)/1000 = 1.0, skew = 1.0 * 0.03 = 0.03 (max)
+        assert skew == Decimal("0.03")
+
+
+class TestMMRequoteThreshold:
+    """Tests for Fix #4: Configurable requote threshold."""
+
+    def test_mm_requote_threshold_configurable(self, now: datetime):
+        """Config value used instead of hardcoded 0.03."""
+        config = StrategyConfig(mm_requote_threshold=0.02)
+        mm = MarketMaker(config)
+        # Record a quote at 0.50
+        mm._last_quotes["test"] = (Decimal("0.50"), datetime.now(timezone.utc))
+        # Move fair value by 0.025 — should trigger with threshold=0.02
+        assert mm.should_requote("test", Decimal("0.525")) is True
+        # But not with explicit higher threshold
+        assert mm.should_requote("test", Decimal("0.525"), threshold=0.03) is False
+
+
+class TestMMRequoteBlendedFV:
+    """Test Fix #1: Requote uses blended fair value via compute_fair_value()."""
+
+    def test_mm_requote_uses_blended_fair_value(self, now: datetime):
+        """compute_fair_value() returns blended FV, not raw model."""
+        config = StrategyConfig(mm_ob_mid_blend=0.3, mm_requote_threshold=0.02)
+        mm = MarketMaker(config)
+        prediction = PredictionResult(
+            probability_yes=0.60, confidence=0.7, model_name="test"
+        )
+        snapshot = MarketSnapshot(
+            timestamp=now,
+            market_ticker="test",
+            spot_price=Decimal("97500"),
+            orderbook=Orderbook(
+                ticker="test",
+                yes_levels=[OrderbookLevel(price_dollars=Decimal("0.45"), quantity=100)],
+                no_levels=[OrderbookLevel(price_dollars=Decimal("0.45"), quantity=100)],
+                timestamp=now,
+            ),
+            implied_yes_prob=Decimal("0.50"),
+            time_to_expiry_seconds=600,
+        )
+        fv = mm.compute_fair_value(prediction, snapshot)
+        # 0.3 * 0.50 + 0.7 * 0.60 = 0.57 (blended), not 0.60 (raw model)
+        assert fv == Decimal("0.57")
+        # Record a quote at the blended FV
+        mm._last_quotes["test"] = (fv, datetime.now(timezone.utc))
+        # Raw model FV (0.60) would trigger requote (|0.60-0.57|=0.03 > 0.02),
+        # but blended FV (0.57) should NOT trigger (|0.57-0.57|=0)
+        assert mm.should_requote("test", fv) is False
+
+
+class TestMMImmediateFillTracking:
+    """Test Fix #3: record_fill() makes fills visible to _fills_per_minute()."""
+
+    def test_mm_immediate_fill_updates_recent_fills(self):
+        """record_fill() → _fills_per_minute() reflects the fill."""
+        config = StrategyConfig()
+        mm = MarketMaker(config)
+        assert mm._fills_per_minute("test") == 0
+        mm.record_fill("test", "yes")
+        assert mm._fills_per_minute("test") == 1
+        mm.record_fill("test", "no")
+        assert mm._fills_per_minute("test") == 2
+
+
+class TestMMInventorySkewSymmetric:
+    """Test Fix #4: Symmetric inventory skew affects both sides."""
+
+    def test_mm_inventory_skew_shifts_price(self, now: datetime):
+        """Long YES → returned quote price shifts vs flat baseline."""
+        config = StrategyConfig(
+            mm_min_spread=0.05,
+            mm_max_spread=0.30,
+            mm_max_inventory=10,
+            mm_ob_mid_blend=0.0,  # Pure model FV for clarity
+            mm_min_spread_offset=0.02,
+            mm_max_spread_offset=0.02,
+            mm_depth_imbalance_max_skew=0.0,  # Disable depth skew
+            mm_vol_filter_enabled=False,
+        )
+        mm = MarketMaker(config)
+        prediction = PredictionResult(
+            probability_yes=0.50, confidence=0.7, model_name="test"
+        )
+        snapshot = MarketSnapshot(
+            timestamp=now,
+            market_ticker="test",
+            spot_price=Decimal("97500"),
+            orderbook=Orderbook(
+                ticker="test",
+                yes_levels=[OrderbookLevel(price_dollars=Decimal("0.40"), quantity=100)],
+                no_levels=[OrderbookLevel(price_dollars=Decimal("0.40"), quantity=100)],
+                timestamp=now,
+            ),
+            implied_yes_prob=Decimal("0.50"),
+            spread=Decimal("0.10"),
+            time_to_expiry_seconds=600,
+        )
+        # Flat inventory → baseline (single best side returned)
+        flat = mm.generate_quotes(prediction, snapshot, current_position=0)
+        assert len(flat) == 1, "Should generate exactly one quote"
+        flat_price = float(flat[0].suggested_price_dollars)
+        flat_side = flat[0].side
+
+        # Long YES (positive inventory) → inventory skew pushes YES bid lower
+        # and NO bid higher, changing which side is best and/or shifting price
+        long_yes = mm.generate_quotes(prediction, snapshot, current_position=5)
+        assert len(long_yes) == 1
+        long_price = float(long_yes[0].suggested_price_dollars)
+        long_side = long_yes[0].side
+
+        # With inventory skew active, the quote should differ from flat
+        assert (long_price != flat_price) or (long_side != flat_side), (
+            "Inventory skew should shift price or change preferred side"
+        )
+
+
+class TestMMRestingInventory:
+    """Inventory skew and cap should account for resting (unfilled) orders."""
+
+    def test_resting_orders_affect_inventory_skew(self, now: datetime):
+        """Resting YES bids should skew quotes the same way as filled YES positions."""
+        config = StrategyConfig(
+            mm_min_spread=0.05,
+            mm_max_spread=0.30,
+            mm_max_inventory=10,
+            mm_ob_mid_blend=0.0,
+            mm_min_spread_offset=0.02,
+            mm_max_spread_offset=0.02,
+            mm_depth_imbalance_max_skew=0.0,
+            mm_vol_filter_enabled=False,
+        )
+        mm = MarketMaker(config)
+        prediction = PredictionResult(
+            probability_yes=0.50, confidence=0.7, model_name="test"
+        )
+        snapshot = MarketSnapshot(
+            timestamp=now,
+            market_ticker="test",
+            spot_price=Decimal("97500"),
+            orderbook=Orderbook(
+                ticker="test",
+                yes_levels=[OrderbookLevel(price_dollars=Decimal("0.40"), quantity=100)],
+                no_levels=[OrderbookLevel(price_dollars=Decimal("0.40"), quantity=100)],
+                timestamp=now,
+            ),
+            implied_yes_prob=Decimal("0.50"),
+            spread=Decimal("0.10"),
+            time_to_expiry_seconds=600,
+        )
+        # Baseline: no position, no resting
+        flat = mm.generate_quotes(prediction, snapshot, current_position=0)
+        assert len(flat) == 1, "Should generate a quote"
+
+        # 5 resting YES bids (no filled position) should produce same result
+        # as 5 filled YES contracts (same effective inventory)
+        with_resting = mm.generate_quotes(
+            prediction, snapshot, current_position=0,
+            resting_qty_yes=5,
+        )
+        with_filled = mm.generate_quotes(
+            prediction, snapshot, current_position=5,
+        )
+        assert with_resting and with_filled
+        assert with_resting[0].side == with_filled[0].side, (
+            "Resting and filled should select the same side"
+        )
+        assert with_resting[0].suggested_price_dollars == with_filled[0].suggested_price_dollars, (
+            "5 resting YES bids should produce same skew as 5 filled YES"
+        )
+
+    def test_resting_orders_count_toward_inventory_cap(self, now: datetime):
+        """Resting orders should trigger inventory_full when combined with position."""
+        config = StrategyConfig(
+            mm_min_spread=0.05,
+            mm_max_spread=0.30,
+            mm_max_inventory=10,
+            mm_ob_mid_blend=0.0,
+            mm_min_spread_offset=0.02,
+            mm_max_spread_offset=0.02,
+            mm_depth_imbalance_max_skew=0.0,
+            mm_vol_filter_enabled=False,
+        )
+        mm = MarketMaker(config)
+        prediction = PredictionResult(
+            probability_yes=0.50, confidence=0.7, model_name="test"
+        )
+        snapshot = MarketSnapshot(
+            timestamp=now,
+            market_ticker="test",
+            spot_price=Decimal("97500"),
+            orderbook=Orderbook(
+                ticker="test",
+                yes_levels=[OrderbookLevel(price_dollars=Decimal("0.40"), quantity=100)],
+                no_levels=[OrderbookLevel(price_dollars=Decimal("0.40"), quantity=100)],
+                timestamp=now,
+            ),
+            implied_yes_prob=Decimal("0.50"),
+            spread=Decimal("0.10"),
+            time_to_expiry_seconds=600,
+        )
+        # 6 filled + 5 resting = 11 effective, exceeds max_inventory=10
+        quotes = mm.generate_quotes(
+            prediction, snapshot, current_position=6,
+            resting_qty_yes=5,
+        )
+        assert len(quotes) == 0, "Should be blocked by inventory cap (6 filled + 5 resting = 11)"
+
+        # Same filled position without resting should still quote
+        quotes = mm.generate_quotes(
+            prediction, snapshot, current_position=6,
+        )
+        assert len(quotes) > 0, "6 filled alone (< 10 cap) should still generate quotes"
+
+
+class TestMMBidFloor:
+    """Bid floor should join top-of-book, not force +0.01 improvement."""
+
+    def test_mm_bid_not_forced_above_fair_value(self, now: datetime):
+        """When best bid is near fair value, MM should not bid above its edge level.
+
+        Old behavior: max(best_bid + 0.01, calculated) forced improvement,
+        pushing bid above fair_value - spread_offset (eroding edge).
+        New behavior: max(best_bid, calculated) joins top-of-book without
+        overpaying.
+        """
+        config = StrategyConfig(
+            mm_min_spread=0.05,
+            mm_max_spread=0.30,
+            mm_max_inventory=10,
+            mm_ob_mid_blend=0.0,  # Pure model FV
+            mm_min_spread_offset=0.03,
+            mm_max_spread_offset=0.03,
+            mm_depth_imbalance_max_skew=0.0,
+            mm_vol_filter_enabled=False,
+        )
+        mm = MarketMaker(config)
+        prediction = PredictionResult(
+            probability_yes=0.50, confidence=0.7, model_name="test"
+        )
+        # best_yes_bid=0.48 is above calculated bid (0.50 - 0.03 = 0.47)
+        # Old code would force bid to 0.49, new code caps at 0.48
+        snapshot = MarketSnapshot(
+            timestamp=now,
+            market_ticker="test",
+            spot_price=Decimal("97500"),
+            orderbook=Orderbook(
+                ticker="test",
+                yes_levels=[OrderbookLevel(price_dollars=Decimal("0.48"), quantity=100)],
+                no_levels=[OrderbookLevel(price_dollars=Decimal("0.42"), quantity=100)],
+                timestamp=now,
+            ),
+            implied_yes_prob=Decimal("0.50"),
+            spread=Decimal("0.10"),
+            time_to_expiry_seconds=600,
+        )
+        quotes = mm.generate_quotes(prediction, snapshot, current_position=0)
+        yes_quotes = [q for q in quotes if q.side == "yes"]
+        assert yes_quotes, "Should generate YES quote"
+        yes_price = float(yes_quotes[0].suggested_price_dollars)
+        # Bid should be at best_bid (0.48), NOT best_bid + 0.01 (0.49)
+        assert yes_price <= 0.48, (
+            f"YES bid {yes_price} should not exceed best_yes_bid 0.48"
+        )
+
+    def test_mm_bid_uses_model_when_above_best(self, now: datetime):
+        """When model-derived bid is above best bid, use the model price."""
+        config = StrategyConfig(
+            mm_min_spread=0.05,
+            mm_max_spread=0.30,
+            mm_max_inventory=10,
+            mm_ob_mid_blend=0.0,
+            mm_min_spread_offset=0.02,
+            mm_max_spread_offset=0.02,
+            mm_depth_imbalance_max_skew=0.0,
+            mm_vol_filter_enabled=False,
+        )
+        mm = MarketMaker(config)
+        prediction = PredictionResult(
+            probability_yes=0.50, confidence=0.7, model_name="test"
+        )
+        # best_yes_bid=0.40 is well below calculated bid (0.50 - 0.02 = 0.48)
+        # Bid should use the model-derived 0.48
+        snapshot = MarketSnapshot(
+            timestamp=now,
+            market_ticker="test",
+            spot_price=Decimal("97500"),
+            orderbook=Orderbook(
+                ticker="test",
+                yes_levels=[OrderbookLevel(price_dollars=Decimal("0.40"), quantity=100)],
+                no_levels=[OrderbookLevel(price_dollars=Decimal("0.40"), quantity=100)],
+                timestamp=now,
+            ),
+            implied_yes_prob=Decimal("0.50"),
+            spread=Decimal("0.10"),
+            time_to_expiry_seconds=600,
+        )
+        quotes = mm.generate_quotes(prediction, snapshot, current_position=0)
+        yes_quotes = [q for q in quotes if q.side == "yes"]
+        assert yes_quotes, "Should generate YES quote"
+        yes_price = float(yes_quotes[0].suggested_price_dollars)
+        # Model bid (0.48) is above best bid (0.40), so model price wins
+        assert yes_price >= 0.48, (
+            f"YES bid {yes_price} should use model-derived price >= 0.48"
+        )
+
+
+class TestMMSideFlipBlocked:
+    """MM should not flip sides when holding a position (Kalshi netting = double fees)."""
+
+    def test_blocks_opposite_side_when_long_yes(self, now: datetime):
+        """Long YES position → MM should not quote NO (would net out)."""
+        config = StrategyConfig(
+            mm_min_spread=0.05,
+            mm_max_spread=0.30,
+            mm_max_inventory=10,
+            mm_ob_mid_blend=0.0,
+            mm_min_spread_offset=0.02,
+            mm_max_spread_offset=0.02,
+            mm_depth_imbalance_max_skew=0.0,
+            mm_vol_filter_enabled=False,
+        )
+        mm = MarketMaker(config)
+        prediction = PredictionResult(
+            probability_yes=0.50, confidence=0.7, model_name="test"
+        )
+        snapshot = MarketSnapshot(
+            timestamp=now,
+            market_ticker="test",
+            spot_price=Decimal("97500"),
+            orderbook=Orderbook(
+                ticker="test",
+                yes_levels=[OrderbookLevel(price_dollars=Decimal("0.40"), quantity=100)],
+                no_levels=[OrderbookLevel(price_dollars=Decimal("0.40"), quantity=100)],
+                timestamp=now,
+            ),
+            implied_yes_prob=Decimal("0.50"),
+            spread=Decimal("0.10"),
+            time_to_expiry_seconds=600,
+        )
+        # With position=+5 (long YES), any NO quote should be blocked
+        quotes = mm.generate_quotes(prediction, snapshot, current_position=5)
+        for q in quotes:
+            assert q.side == "yes", f"Should not quote NO when long YES, got {q.side}"
+
+    def test_blocks_opposite_side_when_long_no(self, now: datetime):
+        """Long NO position → MM should not quote YES (would net out)."""
+        config = StrategyConfig(
+            mm_min_spread=0.05,
+            mm_max_spread=0.30,
+            mm_max_inventory=10,
+            mm_ob_mid_blend=0.0,
+            mm_min_spread_offset=0.02,
+            mm_max_spread_offset=0.02,
+            mm_depth_imbalance_max_skew=0.0,
+            mm_vol_filter_enabled=False,
+        )
+        mm = MarketMaker(config)
+        prediction = PredictionResult(
+            probability_yes=0.50, confidence=0.7, model_name="test"
+        )
+        snapshot = MarketSnapshot(
+            timestamp=now,
+            market_ticker="test",
+            spot_price=Decimal("97500"),
+            orderbook=Orderbook(
+                ticker="test",
+                yes_levels=[OrderbookLevel(price_dollars=Decimal("0.40"), quantity=100)],
+                no_levels=[OrderbookLevel(price_dollars=Decimal("0.40"), quantity=100)],
+                timestamp=now,
+            ),
+            implied_yes_prob=Decimal("0.50"),
+            spread=Decimal("0.10"),
+            time_to_expiry_seconds=600,
+        )
+        # With position=-5 (long NO), any YES quote should be blocked
+        quotes = mm.generate_quotes(prediction, snapshot, current_position=-5)
+        for q in quotes:
+            assert q.side == "no", f"Should not quote YES when long NO, got {q.side}"
+
+    def test_allows_same_side_when_holding(self, now: datetime):
+        """Should still quote the same side as existing position."""
+        config = StrategyConfig(
+            mm_min_spread=0.05,
+            mm_max_spread=0.30,
+            mm_max_inventory=10,
+            mm_ob_mid_blend=0.0,
+            mm_min_spread_offset=0.02,
+            mm_max_spread_offset=0.02,
+            mm_depth_imbalance_max_skew=0.0,
+            mm_vol_filter_enabled=False,
+        )
+        mm = MarketMaker(config)
+        # FV=0.40 → YES is cheap, YES side has best edge
+        prediction = PredictionResult(
+            probability_yes=0.40, confidence=0.7, model_name="test"
+        )
+        snapshot = MarketSnapshot(
+            timestamp=now,
+            market_ticker="test",
+            spot_price=Decimal("97500"),
+            orderbook=Orderbook(
+                ticker="test",
+                yes_levels=[OrderbookLevel(price_dollars=Decimal("0.30"), quantity=100)],
+                no_levels=[OrderbookLevel(price_dollars=Decimal("0.50"), quantity=100)],
+                timestamp=now,
+            ),
+            implied_yes_prob=Decimal("0.40"),
+            spread=Decimal("0.20"),
+            time_to_expiry_seconds=600,
+        )
+        # Position=+2 (long YES), and FV favors YES → should still quote YES
+        quotes = mm.generate_quotes(prediction, snapshot, current_position=2)
+        assert len(quotes) == 1
+        assert quotes[0].side == "yes"
+
+    def test_flat_position_allows_any_side(self, now: datetime):
+        """Zero position → no side-flip restriction."""
+        config = StrategyConfig(
+            mm_min_spread=0.05,
+            mm_max_spread=0.30,
+            mm_max_inventory=10,
+            mm_ob_mid_blend=0.0,
+            mm_min_spread_offset=0.02,
+            mm_max_spread_offset=0.02,
+            mm_depth_imbalance_max_skew=0.0,
+            mm_vol_filter_enabled=False,
+        )
+        mm = MarketMaker(config)
+        prediction = PredictionResult(
+            probability_yes=0.50, confidence=0.7, model_name="test"
+        )
+        snapshot = MarketSnapshot(
+            timestamp=now,
+            market_ticker="test",
+            spot_price=Decimal("97500"),
+            orderbook=Orderbook(
+                ticker="test",
+                yes_levels=[OrderbookLevel(price_dollars=Decimal("0.40"), quantity=100)],
+                no_levels=[OrderbookLevel(price_dollars=Decimal("0.40"), quantity=100)],
+                timestamp=now,
+            ),
+            implied_yes_prob=Decimal("0.50"),
+            spread=Decimal("0.10"),
+            time_to_expiry_seconds=600,
+        )
+        quotes = mm.generate_quotes(prediction, snapshot, current_position=0)
+        assert len(quotes) == 1, "Should generate a quote when flat"
+
+
+class TestMMCooldownExemption:
+    """Test Fix #5: MM signals survive entry cooldown."""
+
+    def test_mm_cooldown_exempts_mm(self):
+        """MM signal_type='market_making' not filtered by cooldown logic."""
+        signals = [
+            TradeSignal(
+                market_ticker="test",
+                side="yes",
+                action="buy",
+                raw_edge=0.05,
+                net_edge=0.03,
+                model_probability=0.55,
+                implied_probability=0.50,
+                confidence=0.7,
+                suggested_price_dollars="0.48",
+                suggested_count=1,
+                timestamp=datetime.now(timezone.utc),
+                signal_type="directional",
+            ),
+            TradeSignal(
+                market_ticker="test",
+                side="no",
+                action="buy",
+                raw_edge=0.04,
+                net_edge=0.02,
+                model_probability=0.45,
+                implied_probability=0.50,
+                confidence=0.7,
+                suggested_price_dollars="0.48",
+                suggested_count=0,
+                timestamp=datetime.now(timezone.utc),
+                signal_type="market_making",
+                post_only=True,
+            ),
+        ]
+        # Simulate cooldown filter logic from bot.py (Fix #5)
+        buy_signals = [
+            s for s in signals
+            if s.action == "buy" and s.signal_type != "market_making"
+        ]
+        assert len(buy_signals) == 1  # Only directional
+        filtered = [
+            s for s in signals
+            if s.action != "buy" or s.signal_type == "market_making"
+        ]
+        # MM signal survives, directional is removed
+        assert len(filtered) == 1
+        assert filtered[0].signal_type == "market_making"

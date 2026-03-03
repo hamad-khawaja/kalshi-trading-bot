@@ -77,7 +77,6 @@ a{color:#58a6ff}
 .trade-tag{font-size:10px;padding:1px 5px;border-radius:3px;font-weight:600;text-transform:uppercase;letter-spacing:0.3px}
 .trade-tag.directional{background:#1a2a3a;color:#58a6ff}
 .trade-tag.settlement-ride{background:#2a1a2a;color:#d2a8ff}
-.trade-tag.fomo{background:#2a2a1a;color:#d29922}
 .trade-tag.market-making{background:#1a2a1a;color:#3fb950}
 .trade-tag.averaging{background:#2a1a1a;color:#f0883e}
 .trade-tag.trend-continuation{background:#1a2a2a;color:#79c0ff}
@@ -192,7 +191,6 @@ body.live-mode{border-top:3px solid #f85149}
 .type-tag.directional{background:#1a2a3a;color:#58a6ff}
 .type-tag.settlement_ride{background:#2a1a2a;color:#d2a8ff}
 .type-tag.settlement-ride{background:#2a1a2a;color:#d2a8ff}
-.type-tag.fomo{background:#2a2a1a;color:#d29922}
 .type-tag.certainty_scalp{background:#1a2a2a;color:#56d4dd}
 .type-tag.market_making{background:#1a2a1a;color:#3fb950}
 .type-tag.averaging{background:#2a1a1a;color:#f0883e}
@@ -280,10 +278,6 @@ body.live-mode{border-top:3px solid #f85149}
   <span class="strat-label">Strategies:</span>
   <div class="toggle-wrap" data-strategy="directional" onclick="toggleStrategy('directional')">
     <span class="toggle-label active">DIR</span>
-    <div class="toggle-track active"><div class="toggle-knob"></div></div>
-  </div>
-  <div class="toggle-wrap" data-strategy="fomo" onclick="toggleStrategy('fomo')">
-    <span class="toggle-label active">FOMO</span>
     <div class="toggle-track active"><div class="toggle-knob"></div></div>
   </div>
   <div class="toggle-wrap" data-strategy="certainty_scalp" onclick="toggleStrategy('certainty_scalp')">
@@ -570,7 +564,6 @@ body.live-mode{border-top:3px solid #f85149}
         <button class="chart-btn active" data-strategy="all" onclick="setFilter('paper','strategy','all')">All Strategies</button>
         <button class="chart-btn" data-strategy="directional" onclick="setFilter('paper','strategy','directional')">Directional</button>
         <button class="chart-btn" data-strategy="settlement_ride" onclick="setFilter('paper','strategy','settlement_ride')">Settlement Ride</button>
-        <button class="chart-btn" data-strategy="fomo" onclick="setFilter('paper','strategy','fomo')">FOMO</button>
         <button class="chart-btn" data-strategy="market_making" onclick="setFilter('paper','strategy','market_making')">Market Making</button>
         <button class="chart-btn" data-strategy="certainty_scalp" onclick="setFilter('paper','strategy','certainty_scalp')">Certainty Scalp</button>
         <button class="chart-btn" data-strategy="trend_continuation" onclick="setFilter('paper','strategy','trend_continuation')">Trend Cont.</button>
@@ -610,7 +603,6 @@ body.live-mode{border-top:3px solid #f85149}
         <button class="chart-btn active" data-strategy="all" onclick="setFilter('live','strategy','all')">All Strategies</button>
         <button class="chart-btn" data-strategy="directional" onclick="setFilter('live','strategy','directional')">Directional</button>
         <button class="chart-btn" data-strategy="settlement_ride" onclick="setFilter('live','strategy','settlement_ride')">Settlement Ride</button>
-        <button class="chart-btn" data-strategy="fomo" onclick="setFilter('live','strategy','fomo')">FOMO</button>
         <button class="chart-btn" data-strategy="market_making" onclick="setFilter('live','strategy','market_making')">Market Making</button>
         <button class="chart-btn" data-strategy="certainty_scalp" onclick="setFilter('live','strategy','certainty_scalp')">Certainty Scalp</button>
         <button class="chart-btn" data-strategy="trend_continuation" onclick="setFilter('live','strategy','trend_continuation')">Trend Cont.</button>
@@ -1453,7 +1445,6 @@ body.live-mode{border-top:3px solid #f85149}
   const STRAT_COLORS = {
     directional: '#58a6ff',
     settlement_ride: '#d2a8ff',
-    fomo: '#d29922',
     market_making: '#3fb950',
     certainty_scalp: '#56d4dd',
     averaging: '#f0883e',
@@ -1462,7 +1453,6 @@ body.live-mode{border-top:3px solid #f85149}
   const STRAT_LABELS = {
     directional: 'Directional',
     settlement_ride: 'Settlement Ride',
-    fomo: 'FOMO',
     market_making: 'Market Making',
     certainty_scalp: 'Certainty Scalp',
     averaging: 'Averaging',

@@ -43,7 +43,7 @@ Price Feeds → DataHub → FeatureEngine (33 features) → HeuristicModel (16 s
 |------|---------|
 | `src/bot.py` | Main orchestrator, wires all components |
 | `src/config.py` | Pydantic settings (StrategyConfig, RiskConfig, etc.) |
-| `src/strategy/signal_combiner.py` | Signal prioritization: directional > FOMO > certainty > settlement > MC > MM |
+| `src/strategy/signal_combiner.py` | Signal prioritization: directional > trend cont > certainty > settlement > MM |
 | `src/strategy/edge_detector.py` | Model vs market edge calculation, fee computation |
 | `src/strategy/market_maker.py` | Spread capture with vol-aware quotes, non-linear inventory skew |
 | `src/strategy/mc_detector.py` | Monte Carlo simulation strategy |
@@ -89,11 +89,10 @@ Per-asset overrides use dicts keyed by asset symbol (e.g., `asset_edge_multiplie
 ## Strategy Priority Order
 
 1. **Directional** — model vs market edge with streak confirmation
-2. **FOMO** — contrarian retail panic (only when no directional)
+2. **Trend continuation** — early-window entry during persistent settlement streaks
 3. **Certainty scalp** — near-certain outcome in last 3 min (only when no directional)
 4. **Settlement ride** — late-window hold-to-settlement (only when no directional)
-5. **Monte Carlo** — simulation-based probability (only when no directional)
-6. **Market making** — always runs, alongside directional or standalone; filters to opposite side when directional present
+5. **Market making** — always runs, alongside directional or standalone; filters to opposite side when directional present
 
 ## Common Patterns
 

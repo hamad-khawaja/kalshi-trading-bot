@@ -147,7 +147,6 @@ class TradingBot:
             self._dashboard_state.quiet_hours_est = settings.strategy.quiet_hours_est
         self._dashboard_state.strategy_toggles = {
             "directional": settings.strategy.directional_enabled,
-            "fomo": settings.strategy.fomo_enabled,
             "certainty_scalp": settings.strategy.certainty_scalp_enabled,
             "settlement_ride": settings.strategy.settlement_ride_enabled,
             "trend_continuation": settings.strategy.trend_continuation_enabled,
@@ -366,7 +365,6 @@ class TradingBot:
         # Sync strategy toggles from dashboard to config
         st = self._dashboard_state.strategy_toggles
         self._settings.strategy.directional_enabled = st.get("directional", True)
-        self._settings.strategy.fomo_enabled = st.get("fomo", False)
         self._settings.strategy.certainty_scalp_enabled = st.get("certainty_scalp", True)
         self._settings.strategy.settlement_ride_enabled = st.get("settlement_ride", True)
         self._settings.strategy.use_market_maker = st.get("market_making", True)
@@ -522,21 +520,20 @@ class TradingBot:
         # Get current position for this market
         current_position = self._position_tracker.get_market_position_count(ticker)
 
+        # Resting order counts for MM inventory awareness
+        resting_yes = self._order_manager.get_resting_order_count(ticker, "yes")
+        resting_no = self._order_manager.get_resting_order_count(ticker, "no")
+
         # Generate signals
         signals = self._signal_combiner.evaluate(
-            prediction, snapshot, current_position, features=features
+            prediction, snapshot, current_position, features=features,
+            resting_qty_yes=resting_yes, resting_qty_no=resting_no,
         )
 
         # Update edge analysis from the internal edge detector
         edge_analysis = self._signal_combiner._edge_detector.last_analysis
         if edge_analysis:
             ds.edge = edge_analysis
-
-        # Update FOMO analysis from the internal FOMO detector
-        if self._signal_combiner._fomo_detector is not None:
-            fomo_analysis = self._signal_combiner._fomo_detector.last_analysis
-            if fomo_analysis:
-                ds.fomo = fomo_analysis
 
         # Write per-asset dashboard state for tabbed UI
         # Use local variables to avoid cross-market contamination from asyncio.gather
@@ -546,7 +543,6 @@ class TradingBot:
             "features": dict(local_features),
             "prediction": dict(local_prediction),
             "edge": dict(ds.edge) if ds.edge else {},
-            "fomo": dict(ds.fomo) if ds.fomo else {},
         }
 
         # Take-profit cooldown: block all re-entry after TP (except MM, certainty scalp, trend cont)
@@ -628,7 +624,11 @@ class TradingBot:
         if existing_pos and existing_pos.count > 0:
             held_side = existing_pos.side
             before_count = len(signals)
-            signals = [s for s in signals if not (s.action == "buy" and s.side != held_side)]
+            signals = [
+                s for s in signals
+                if not (s.action == "buy" and s.side != held_side
+                        and s.signal_type != "market_making")
+            ]
             blocked = before_count - len(signals)
             if blocked > 0:
                 logger.info(
@@ -666,7 +666,10 @@ class TradingBot:
         if position and position.count > 0 and cooldown > 0:
             elapsed = (datetime.now(timezone.utc) - position.last_fill_time).total_seconds()
             if elapsed < cooldown:
-                buy_signals = [s for s in signals if s.action == "buy"]
+                buy_signals = [
+                    s for s in signals
+                    if s.action == "buy" and s.signal_type != "market_making"
+                ]
                 if buy_signals:
                     logger.info(
                         "entry_cooldown_active",
@@ -675,8 +678,11 @@ class TradingBot:
                         cooldown=cooldown,
                         count=position.count,
                     )
-                    # Only keep sell signals (take-profit etc), skip buys
-                    signals = [s for s in signals if s.action != "buy"]
+                    # Only keep sell signals and MM quotes, skip directional buys
+                    signals = [
+                        s for s in signals
+                        if s.action != "buy" or s.signal_type == "market_making"
+                    ]
                     if not signals:
                         ds.add_decision(
                             self._cycle_count, "reject",
@@ -695,6 +701,7 @@ class TradingBot:
                     break
 
         # Process each signal
+        cycle_order_ids: set[str] = set()  # Track orders placed this cycle
         for signal_item in signals:
             # Per-cycle cap check
             if signal_item.action == "buy" and cycle_contracts_placed >= max_per_cycle:
@@ -704,9 +711,13 @@ class TradingBot:
                 )
                 break
 
-            # Cancel conflicting orders (opposite side) before placing new ones
+            # Cancel conflicting orders (opposite side) before placing new ones,
+            # but preserve orders submitted earlier in this same cycle (e.g. don't
+            # let an MM NO quote cancel a directional YES order placed moments ago).
             opposite_side = "no" if signal_item.side == "yes" else "yes"
-            await self._order_manager.cancel_market_orders(ticker, side=opposite_side)
+            await self._order_manager.cancel_market_orders(
+                ticker, side=opposite_side, exclude_order_ids=cycle_order_ids,
+            )
 
             # Include resting orders in position count for sizing
             resting = self._order_manager.get_resting_order_count(
@@ -792,6 +803,7 @@ class TradingBot:
             order_id = await self._order_manager.submit(signal_item, final_count)
 
             if order_id:
+                cycle_order_ids.add(order_id)
                 # Update position tracker if order filled immediately
                 order_state = self._order_manager.get_order(order_id)
                 if order_state and order_state.filled_count > 0:
@@ -819,6 +831,10 @@ class TradingBot:
                         self._signal_combiner._trend_detector.mark_entered(ticker)
                     # Log MM fill event for immediate market-making fills
                     if signal_item.signal_type == "market_making":
+                        self._signal_combiner._market_maker.record_fill(
+                            ticker, signal_item.side,
+                        )
+                        self._dashboard_state.mm_metrics["total_fills"] += 1
                         logger.info(
                             "mm_fill",
                             ticker=ticker,
@@ -1047,6 +1063,7 @@ class TradingBot:
                                     mode=self._settings.mode,
                                 )
                                 self._risk_manager.record_trade(pnl)
+                                self._update_mm_metrics(pos.strategy_tag, pnl)
                                 try:
                                     ds.add_trade_result(
                                         self._data_hub._ticker_to_symbol(exit_ticker),
@@ -1139,6 +1156,7 @@ class TradingBot:
                                 mode=self._settings.mode,
                             )
                             self._risk_manager.record_trade(pnl)
+                            self._update_mm_metrics(pos.strategy_tag, pnl)
                             try:
                                 ds.add_trade_result(
                                     self._data_hub._ticker_to_symbol(exit_ticker),
@@ -1177,6 +1195,7 @@ class TradingBot:
 
                     if actually_settled:
                         self._position_tracker.remove_expired_positions(actually_settled)
+                        self._clear_mm_quote_state(actually_settled)
                         self._update_dashboard_positions()
 
                 # Check for pre-expiry exits (sell before settlement)
@@ -1269,6 +1288,7 @@ class TradingBot:
                             except Exception:
                                 logger.warning("trade_logging_failed", ticker=pe_ticker)
                             self._position_tracker.remove_expired_positions([pe_ticker])
+                            self._clear_mm_quote_state([pe_ticker])
                             self._update_dashboard_positions()
 
                 # Check for take-profit opportunities
@@ -1358,6 +1378,7 @@ class TradingBot:
                             except Exception:
                                 logger.warning("trade_logging_failed", ticker=tp_ticker)
                             self._position_tracker.remove_expired_positions([tp_ticker])
+                            self._clear_mm_quote_state([tp_ticker])
                             self._take_profit_markets[tp_ticker] = (datetime.now(timezone.utc), pos.strategy_tag)
                             self._update_dashboard_positions()
 
@@ -1456,6 +1477,7 @@ class TradingBot:
                                 logger.warning("trade_logging_failed", ticker=sl_ticker)
                             self._stop_loss_markets.add(sl_ticker)
                             self._position_tracker.remove_expired_positions([sl_ticker])
+                            self._clear_mm_quote_state([sl_ticker])
                             self._update_dashboard_positions()
 
                 # Check for thesis breaks — sell positions where model flipped
@@ -1555,6 +1577,7 @@ class TradingBot:
                             except Exception:
                                 logger.warning("trade_logging_failed", ticker=tb_ticker)
                             self._position_tracker.remove_expired_positions([tb_ticker])
+                            self._clear_mm_quote_state([tb_ticker])
                             self._thesis_break_markets[tb_ticker] = pos.strategy_tag
                             self._update_dashboard_positions()
 
@@ -1581,8 +1604,13 @@ class TradingBot:
                         filled=filled_state.filled_count,
                         mode=self._settings.mode,
                     )
-                    # Log MM fill event for market-making orders
+                    # Log MM fill event and track for asymmetry detection
                     if filled_state.signal.signal_type == "market_making":
+                        self._signal_combiner._market_maker.record_fill(
+                            filled_state.signal.market_ticker,
+                            filled_state.signal.side,
+                        )
+                        self._dashboard_state.mm_metrics["total_fills"] += 1
                         logger.info(
                             "mm_fill",
                             ticker=filled_state.signal.market_ticker,
@@ -1594,6 +1622,39 @@ class TradingBot:
                             model_prob=filled_state.signal.model_probability,
                             implied_prob=filled_state.signal.implied_probability,
                             mode=self._settings.mode,
+                        )
+                    # Log resting fill to database
+                    try:
+                        from src.data.models import CompletedTrade
+                        rf_fee = EdgeDetector.compute_fee_dollars(
+                            filled_state.filled_count,
+                            float(filled_state.signal.suggested_price_dollars),
+                            is_maker=True,
+                        ) if filled_state.signal.action == "buy" else Decimal("0")
+                        rf_snap = snapshots.get(filled_state.signal.market_ticker)
+                        completed = CompletedTrade(
+                            order_id=filled_state.order_id,
+                            market_ticker=filled_state.signal.market_ticker,
+                            side=filled_state.signal.side,
+                            action="buy",
+                            count=filled_state.filled_count,
+                            price_dollars=Decimal(
+                                filled_state.signal.suggested_price_dollars
+                            ),
+                            fees_dollars=rf_fee,
+                            model_probability=filled_state.signal.model_probability,
+                            implied_probability=filled_state.signal.implied_probability,
+                            entry_time=datetime.now(timezone.utc),
+                            strategy_tag=filled_state.signal.signal_type,
+                            market_volume=rf_snap.volume if rf_snap else None,
+                            won=None,
+                            mode=self._settings.mode,
+                        )
+                        await self._db.insert_trade(completed)
+                    except Exception:
+                        logger.warning(
+                            "resting_fill_logging_failed",
+                            ticker=filled_state.signal.market_ticker,
                         )
                     # Force-refresh balance after resting fill
                     await self._get_balance(force=True)
@@ -1613,7 +1674,10 @@ class TradingBot:
                 # Quote refresh: cancel and re-quote when fair value moves >$0.03
                 for qticker, pred in self._last_predictions.items():
                     mm = self._signal_combiner._market_maker
-                    fair_value = Decimal(str(round(pred.probability_yes, 2)))
+                    snap = snapshots.get(qticker)
+                    if snap is None:
+                        continue
+                    fair_value = mm.compute_fair_value(pred, snap)
                     if mm.should_requote(qticker, fair_value):
                         await self._order_manager.cancel_market_orders(qticker)
                         mm.clear_quote_state(qticker)
@@ -1694,6 +1758,7 @@ class TradingBot:
                 mode=self._settings.mode,
             )
             self._risk_manager.record_trade(pnl)
+            self._update_mm_metrics(pos.strategy_tag, pnl)
             try:
                 ds.add_trade_result(
                     self._data_hub._ticker_to_symbol(ticker),
@@ -1990,7 +2055,6 @@ class TradingBot:
         # Sync strategy toggles to match new config
         self._dashboard_state.strategy_toggles = {
             "directional": self._settings.strategy.directional_enabled,
-            "fomo": self._settings.strategy.fomo_enabled,
             "certainty_scalp": self._settings.strategy.certainty_scalp_enabled,
             "settlement_ride": self._settings.strategy.settlement_ride_enabled,
             "trend_continuation": self._settings.strategy.trend_continuation_enabled,
@@ -2023,7 +2087,6 @@ class TradingBot:
         self._dashboard_state.features = {}
         self._dashboard_state.prediction = {}
         self._dashboard_state.edge = {}
-        self._dashboard_state.fomo = {}
         self._dashboard_state.sizing = {}
         self._dashboard_state.health = {}
 
@@ -2044,6 +2107,17 @@ class TradingBot:
 
         return {"mode": target_mode, "previous_mode": old_mode}
 
+    def _update_mm_metrics(self, strategy_tag: str, pnl: Decimal) -> None:
+        """Update MM-specific dashboard metrics after a settlement."""
+        if strategy_tag == "market_making":
+            ds = self._dashboard_state
+            ds.mm_metrics["total_pnl"] = round(ds.mm_metrics["total_pnl"] + float(pnl), 2)
+            fills = ds.mm_metrics["total_fills"]
+            if fills > 0:
+                ds.mm_metrics["avg_profit_per_fill"] = round(
+                    ds.mm_metrics["total_pnl"] / fills, 4
+                )
+
     def _update_dashboard_positions(self) -> None:
         """Push current positions and risk stats to the dashboard immediately."""
         positions = self._position_tracker.get_all_positions()
@@ -2057,6 +2131,12 @@ class TradingBot:
             for p in positions
         ]
         self._push_risk_to_dashboard()
+
+    def _clear_mm_quote_state(self, tickers: list[str]) -> None:
+        """Clear MM quote state for closed positions to prevent stale quotes."""
+        mm = self._signal_combiner._market_maker
+        for ticker in tickers:
+            mm.clear_quote_state(ticker)
 
     async def shutdown(self) -> None:
         """Graceful shutdown: cancel orders, close connections, persist state."""
